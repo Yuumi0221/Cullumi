@@ -1,0 +1,7 @@
+.field-reset {
+  float: right;
+  border: 0 !important;
+  background: transparent !important;
+  padding: 0 3px !important;
+  color: var(--green) !important;
+}

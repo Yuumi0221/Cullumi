@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+.coverage
+htmlcov/
+
+# PyInstaller and portable builds
+build/
+dist/
+*.manifest
+*.log
+
+# Local application state and databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+thumbs/
+cache/
+
+# Local analysis and exports
+*_照片筛选隔离/
+_照片筛选隔离/
+*筛选结果.csv
+photo-review.csv
+
+# Editors and Windows
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+Desktop.ini
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example

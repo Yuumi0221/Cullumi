@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>通用照片筛选器</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/overrides.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">◫</span><div><b>通用照片筛选器</b><small>离线分析 · 文件由你确认后才会移动</small></div></div>
+    <div class="top-actions">
+      <select id="profileSelect" title="分析模式"></select>
+      <button id="scanBtn">开始扫描</button>
+      <button id="settingsBtn" class="ghost">设置</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="home" class="home">
+      <div class="hero">
+        <div><p class="eyebrow">从任意照片文件夹开始</p><h1>快速留下真正值得看的照片</h1>
+          <p>递归扫描常见图片、HEIC/HEIF 与相机 RAW。所有分析均在本机完成。</p>
+          <button id="chooseBtn" class="primary">选择照片文件夹</button>
+        </div>
+        <div class="hero-art"><span>JPG</span><span>HEIC</span><span>RAW</span></div>
+      </div>
+      <div class="section-title"><h2>最近项目</h2></div>
+      <div id="recentList" class="recent-grid"></div>
+    </section>
+
+    <section id="workspace" class="workspace hidden">
+      <aside>
+        <div class="project-box"><small>当前项目</small><b id="projectName"></b><span id="projectPath"></span></div>
+        <nav id="nav">
+          <button data-view="quality" class="active">质量候选 <em id="qualityCount">0</em></button>
+          <button data-view="similar">相似连拍 <em id="pairCount">0</em></button>
+          <button data-view="all">全部照片 <em id="allCount">0</em></button>
+          <button data-view="unreadable">无法读取 <em id="unreadableCount">0</em></button>
+          <button data-view="decided">已决定 <em id="decidedCount">0</em></button>
+          <button data-view="quarantine">隔离历史</button>
+        </nav>
+        <div class="aside-actions">
+          <button id="exportBtn" class="ghost">导出 CSV</button>
+          <button id="importBtn" class="ghost">导入 CSV</button>
+          <button id="quarantineBtn" class="danger">隔离已标记移除</button>
+        </div>
+      </aside>
+      <section class="content">
+        <div id="progressPanel" class="progress-panel hidden">
+          <div><b id="progressTitle">正在扫描</b><span id="progressDetail"></span></div>
+          <div class="progress-track"><i id="progressBar"></i></div>
+          <button id="cancelBtn" class="ghost">取消</button>
+        </div>
+        <div class="toolbar">
+          <div><h2 id="viewTitle">质量候选</h2><span id="viewSubtitle"></span></div>
+          <label class="search"><span>⌕</span><input id="searchInput" placeholder="搜索文件名或路径"></label>
+        </div>
+        <div id="gallery" class="gallery"></div>
+        <div id="empty" class="empty hidden"><b>这里还没有内容</b><span>扫描完成后会显示结果。</span></div>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="viewer" class="viewer">
+    <button class="close" data-close>×</button>
+    <button class="side prev" id="viewerPrev">‹</button>
+    <figure><img id="viewerImage"><figcaption><b id="viewerName"></b><span id="viewerMeta"></span></figcaption></figure>
+    <button class="side next" id="viewerNext">›</button>
+    <footer><button id="viewerKeep" class="keep">W / ↑ 保留</button><span id="viewerIndex"></span><button id="viewerRemove" class="danger">S / ↓ 移除</button></footer>
+  </dialog>
+
+  <dialog id="settings" class="panel-dialog">
+    <div class="dialog-head"><div><h2>设置与分析模式</h2><p>存储位置和配置均只保存在本机。</p></div><button data-close>×</button></div>
+    <div class="settings-tabs"><button data-setting="general" class="active">常规与存储</button><button data-setting="profiles">自定义模式</button></div>
+    <section id="generalSettings" class="settings-page">
+      <label class="toggle"><input id="autoAdvance" type="checkbox"><span>标记后自动下一张</span></label>
+      <label>全局默认数据库与缩略图位置<div class="path-row"><input id="defaultCache" readonly><button id="defaultCacheBtn">选择</button></div></label>
+      <label>当前项目存储位置<div class="path-row"><input id="projectCache" readonly><button id="projectCacheBtn">迁移</button></div></label>
+      <div id="oldCaches"></div>
+    </section>
+    <section id="profileSettings" class="settings-page hidden">
+      <div class="profile-toolbar"><select id="profileEditorSelect"></select><button id="cloneProfile">复制为自定义</button><button id="deleteProfile" class="danger">删除</button></div>
+      <label>配置名称<input id="profileName" maxlength="40"></label>
+      <div class="form-grid">
+        <label>阈值方式<select data-p="quality.threshold_mode"><option value="absolute">绝对阈值</option><option value="percentile">照片集百分位（清晰度）</option></select></label>
+        <label>异常组合<select data-p="quality.match_mode"><option value="any">任一异常</option><option value="all">至少两项异常</option></select></label>
+        <label>清晰度复看阈值<input type="number" data-p="quality.blur_review" min="0" max="10000"></label>
+        <label>清晰度移除阈值<input type="number" data-p="quality.blur_remove" min="0" max="10000"></label>
+        <label>偏暗亮度阈值<input type="number" data-p="quality.dark_review" min="0" max="255"></label>
+        <label>严重欠曝阈值<input type="number" data-p="quality.dark_remove" min="0" max="255"></label>
+        <label>高光复看比例<input type="number" step=".01" data-p="quality.bright_clip_review" min="0" max="1"></label>
+        <label>高光移除比例<input type="number" step=".01" data-p="quality.bright_clip_remove" min="0" max="1"></label>
+        <label>对比度复看<input type="number" data-p="quality.contrast_review" min="0" max="128"></label>
+        <label>对比度移除<input type="number" data-p="quality.contrast_remove" min="0" max="128"></label>
+        <label>细节复看<input type="number" step=".1" data-p="quality.entropy_review" min="0" max="8"></label>
+        <label>细节移除<input type="number" step=".1" data-p="quality.entropy_remove" min="0" max="8"></label>
+        <label>最低复看分辨率(MP)<input type="number" step=".1" data-p="quality.min_megapixels_review"></label>
+        <label>最低移除分辨率(MP)<input type="number" step=".1" data-p="quality.min_megapixels_remove"></label>
+        <label>最低复看文件大小(KB)<input type="number" data-p="quality.min_size_kb_review"></label>
+        <label>最低移除文件大小(KB)<input type="number" data-p="quality.min_size_kb_remove"></label>
+        <label>清晰度复看百分位<input type="number" data-p="quality.blur_review_percentile" min="0" max="100"></label>
+        <label>清晰度移除百分位<input type="number" data-p="quality.blur_remove_percentile" min="0" max="100"></label>
+        <label>清晰度评分权重<input type="number" step=".01" data-p="quality.weights.sharpness" min="0" max="10"></label>
+        <label>曝光评分权重<input type="number" step=".01" data-p="quality.weights.exposure" min="0" max="10"></label>
+        <label>对比度评分权重<input type="number" step=".01" data-p="quality.weights.contrast" min="0" max="10"></label>
+        <label>细节评分权重<input type="number" step=".01" data-p="quality.weights.entropy" min="0" max="10"></label>
+        <label>分辨率评分权重<input type="number" step=".01" data-p="quality.weights.resolution" min="0" max="10"></label>
+        <label>pHash 最大距离<input type="number" data-p="similarity.phash_max" min="0" max="64"></label>
+        <label>dHash 最大距离<input type="number" data-p="similarity.dhash_max" min="0" max="64"></label>
+        <label>最低结构相似度<input type="number" step=".01" data-p="similarity.structure_min" min="-1" max="1"></label>
+        <label>宽高比容差<input type="number" step=".01" data-p="similarity.aspect_tolerance" min="0" max="1"></label>
+        <label>拍摄时间窗口(分钟)<input type="number" data-p="similarity.time_window_minutes"></label>
+        <label>文件序列间隔<input type="number" data-p="similarity.sequence_gap"></label>
+        <label>最小分组数量<input type="number" data-p="similarity.min_group_size" min="2"></label>
+      </div>
+      <div class="check-grid">
+        <label><input type="checkbox" data-p="quality.enabled.sharpness">启用清晰度</label>
+        <label><input type="checkbox" data-p="quality.enabled.luminance">启用亮度/暗部</label>
+        <label><input type="checkbox" data-p="quality.enabled.bright_clip">启用高光溢出</label>
+        <label><input type="checkbox" data-p="quality.enabled.contrast">启用对比度</label>
+        <label><input type="checkbox" data-p="quality.enabled.entropy">启用细节量</label>
+        <label><input type="checkbox" data-p="quality.enabled.resolution">启用分辨率</label>
+        <label><input type="checkbox" data-p="quality.enabled.file_size">启用文件大小</label>
+        <label><input type="checkbox" data-p="similarity.exact_duplicates">检测完全重复</label>
+        <label><input type="checkbox" data-p="similarity.allow_cross_time_high_confidence">允许跨时间高置信匹配</label>
+        <label><input type="checkbox" data-p="similarity.face_safe">人物照片保守处理</label>
+      </div>
+      <div id="estimate" class="estimate">每项参数右侧的 ↺ 可恢复到基础模式默认值。调整后可先预估影响。</div>
+      <div class="dialog-actions"><button id="estimateBtn">预估当前项目</button><button id="saveProfile" class="primary">保存自定义模式</button></div>
+    </section>
+  </dialog>
+
+  <dialog id="confirm" class="confirm"><h2 id="confirmTitle"></h2><div id="confirmBody"></div><footer><button data-close>取消</button><button id="confirmOk" class="danger">确认</button></footer></dialog>
+  <div id="toast"></div>
+  <script>window.APP_TOKEN="__APP_TOKEN__"</script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
