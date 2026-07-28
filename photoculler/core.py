@@ -39,6 +39,9 @@ IMAGE_EXTENSIONS = {
     ".raf", ".orf", ".rw2", ".pef",
 }
 RAW_EXTENSIONS = {".dng", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".orf", ".rw2", ".pef"}
+VIDEO_EXTENSIONS = {
+    ".mov", ".mp4", ".m4v", ".avi", ".mkv", ".wmv", ".mts", ".m2ts", ".3gp", ".webm",
+}
 QUARANTINE_DIR = "_照片筛选隔离"
 
 
@@ -620,12 +623,27 @@ class Scanner:
             project = self.manager.from_id(project_id)
             profile = self.config.get_profile(project.profile_id)
             self._set(project_id, stage="discovering")
-            files = [
+            discovered = [
                 path for path in project.root.rglob("*")
-                if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
-                and QUARANTINE_DIR not in path.parts
+                if path.is_file() and QUARANTINE_DIR not in path.parts
             ]
-            self._set(project_id, stage="analyzing", total=len(files), current=0)
+            files = [path for path in discovered if path.suffix.lower() in IMAGE_EXTENSIONS]
+            unsupported = [path for path in discovered if path.suffix.lower() not in IMAGE_EXTENSIONS]
+            unsupported_extensions: dict[str, int] = {}
+            for path in unsupported:
+                key = path.suffix.lower() or "无扩展名"
+                unsupported_extensions[key] = unsupported_extensions.get(key, 0) + 1
+            video_count = sum(1 for path in unsupported if path.suffix.lower() in VIDEO_EXTENSIONS)
+            self._set(
+                project_id,
+                stage="analyzing",
+                total=len(files),
+                current=0,
+                discovered_total=len(discovered),
+                unsupported_count=len(unsupported),
+                video_count=video_count,
+                unsupported_extensions=unsupported_extensions,
+            )
             conn = connect_db(project.db_path)
             existing = {row["relative_path"]: row for row in conn.execute("SELECT * FROM photos")}
             seen: set[str] = set()

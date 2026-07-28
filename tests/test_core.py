@@ -61,6 +61,17 @@ class PhotoCullerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_profile(broken)
 
+    def test_video_only_folder_reports_unsupported_files(self):
+        (self.photos / "clip.mov").write_bytes(b"not-a-real-video")
+        scanner = Scanner(self.config, self.manager)
+        scanner.start(self.project.project_id)
+        scanner.threads[self.project.project_id].join(20)
+        progress = scanner.progress[self.project.project_id]
+        self.assertEqual(progress["stage"], "complete")
+        self.assertEqual(progress["total"], 0)
+        self.assertEqual(progress["video_count"], 1)
+        self.assertEqual(progress["unsupported_extensions"], {".mov": 1})
+
     def test_scan_incremental_and_exact_duplicate(self):
         self.make_photo("IMG_0001.jpg")
         (self.photos / "IMG_0002.jpg").write_bytes((self.photos / "IMG_0001.jpg").read_bytes())

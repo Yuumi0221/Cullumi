@@ -1,5 +1,5 @@
 const TOKEN=window.APP_TOKEN;
-const state={project:null,view:"quality",items:[],profiles:[],settings:{},viewerIndex:0,editor:null,poll:null};
+const state={project:null,view:"quality",qualityFilter:"",items:[],profiles:[],settings:{},viewerIndex:0,editor:null,poll:null,lastScan:null};
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const api=async(path,body)=>{
   const opts=body===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json","X-App-Token":TOKEN},body:JSON.stringify(body)};
@@ -42,16 +42,17 @@ function pollProgress(){
   state.poll=setInterval(async()=>{const p=await json(`/api/progress?project_id=${state.project.id}`);
     $("#progressTitle").textContent=stageName[p.stage]||p.stage;$("#progressDetail").textContent=p.file||`${p.current||0} / ${p.total||0}`;
     $("#progressBar").style.width=p.total?`${Math.round(100*(p.current||0)/p.total)}%`:(p.done?"100%":"5%");
-    if(p.done){clearInterval(state.poll);if(p.error)toast(p.error);else toast(stageName[p.stage]||"扫描结束");await refreshProject();await loadView();setTimeout(()=>$("#progressPanel").classList.add("hidden"),2500)}
+    if(p.done){clearInterval(state.poll);state.lastScan=p;if(p.error)toast(p.error);else if(!p.total&&p.video_count)toast(`未发现照片；发现 ${p.video_count} 个视频，当前版本不支持视频`);else if(!p.total)toast("未发现支持的照片文件");else toast(stageName[p.stage]||"扫描结束");await refreshProject();await loadView();setTimeout(()=>$("#progressPanel").classList.add("hidden"),2500)}
   },700);
 }
 async function loadView(){
   if(!state.project)return;const search=encodeURIComponent($("#searchInput").value.trim());
   $("#viewTitle").textContent={quality:"质量候选",similar:"相似连拍",all:"全部照片",unreadable:"无法读取",decided:"已决定",quarantine:"隔离历史"}[state.view];
+  $("#qualityFilters").classList.toggle("hidden",state.view!=="quality");
   try{
     if(state.view==="similar"){const d=await json(`/api/pairs?project_id=${state.project.id}&search=${search}`);state.items=d.items;renderPairs(d.items)}
     else if(state.view==="quarantine"){const d=await json(`/api/quarantine/batches?project_id=${state.project.id}`);renderBatches(d.items)}
-    else{const d=await json(`/api/photos?project_id=${state.project.id}&category=${state.view}&search=${search}&limit=500`);state.items=d.items;renderPhotos(d.items,d.total)}
+    else{const suggestion=state.view==="quality"&&state.qualityFilter?`&suggestion=${state.qualityFilter}`:"";const d=await json(`/api/photos?project_id=${state.project.id}&category=${state.view}&search=${search}&limit=500${suggestion}`);state.items=d.items;renderPhotos(d.items,d.total)}
   }catch(e){toast(e.message)}
 }
 const decisionLabel=d=>d==="keep"?"已保留":d==="remove"?"待移除":"";
@@ -59,7 +60,7 @@ function photoCard(p,index){
   const badge=p.suggestion==="remove"?"建议移除":p.suggestion==="review"?"人工复看":p.suggestion==="unreadable"?"无法读取":"";
   return `<article class="photo-card"><div class="thumb" data-open="${index}"><img loading="lazy" src="${p.thumb_url}" alt=""><span class="badge">${esc(badge)}</span>${p.decision?`<span class="badge decision">${decisionLabel(p.decision)}</span>`:""}</div><div class="card-info"><b title="${esc(p.relative_path)}">${esc(p.relative_path.split("/").pop())}</b><small>${esc(p.reason||`${p.width||0}×${p.height||0} · ${formatSize(p.size||0)}`)}</small></div><div class="card-actions"><button class="keep" data-decision="keep" data-id="${p.id}">保留</button><button class="danger" data-decision="remove" data-id="${p.id}">移除</button></div></article>`;
 }
-function renderPhotos(items,total){$("#viewSubtitle").textContent=`显示 ${items.length} / ${total}`;$("#gallery").innerHTML=items.map(photoCard).join("");$("#empty").classList.toggle("hidden",!!items.length);bindGallery()}
+function renderPhotos(items,total){$("#viewSubtitle").textContent=`显示 ${items.length} / ${total}`;$("#gallery").innerHTML=items.map(photoCard).join("");const empty=!items.length;$("#empty").classList.toggle("hidden",!empty);if(empty&&state.lastScan?.total===0){$("#emptyTitle").textContent="没有发现支持的照片";const p=state.lastScan;const ext=Object.entries(p.unsupported_extensions||{}).sort((a,b)=>b[1]-a[1]).map(([x,n])=>`${x} ${n} 个`).join("、");$("#emptyText").textContent=p.video_count?`此文件夹有 ${p.video_count} 个视频，但照片筛选器暂不支持视频。${ext?" 文件统计："+ext:""}`:`发现 ${p.unsupported_count||0} 个不支持的文件。${ext}`;}else if(empty){$("#emptyTitle").textContent="这里还没有内容";$("#emptyText").textContent="扫描完成后会显示结果。"}bindGallery()}
 function renderPairs(items){
   $("#viewSubtitle").textContent=`${items.length} 组比较`;$("#gallery").innerHTML=items.map((x,i)=>`<article class="pair-card"><div class="pair-images">${["a","b"].map(k=>{const p=x[k];return `<div class="pair-side ${p.id===x.recommended_id?"recommended":""}">${photoCard(p,i*2+(k==="b"?1:0)).replace('class="photo-card"','class="pair-photo"')}</div>`}).join("")}</div><div class="pair-label">${x.kind==="exact"?"完全重复":"相似度 "+Math.round(x.score*100)+"%"} · 绿色边框为推荐保留${x.face_safe?" · 人物照片请检查表情":""}</div></article>`).join("");
   state.items=items.flatMap(x=>[x.a,x.b]);$("#empty").classList.toggle("hidden",!!items.length);bindGallery()
@@ -94,9 +95,11 @@ async function estimate(){try{const d=await json("/api/profile/estimate",{projec
 function closeDialogs(e){const d=e.target.closest("dialog");if(d)d.close()}
 
 $("#chooseBtn").onclick=chooseProject;$("#scanBtn").onclick=startScan;$("#cancelBtn").onclick=()=>json("/api/scan/cancel",{project_id:state.project.id});
+$("#homeBtn").onclick=()=>{$("#workspace").classList.add("hidden");$("#home").classList.remove("hidden");$("#searchInput").value="";clearInterval(state.poll);boot().catch(e=>toast(e.message))};
 $("#settingsBtn").onclick=()=>{$("#settings").showModal();if(state.project)$("#projectCache").value=state.project.cache_root;$("#profileEditorSelect").value=state.project?.profile_id||state.profiles[0]?.id;editorLoad($("#profileEditorSelect").value)};
 $$("[data-close]").forEach(x=>x.onclick=closeDialogs);
 $("#nav").onclick=e=>{const b=e.target.closest("[data-view]");if(!b)return;$$("[data-view]").forEach(x=>x.classList.remove("active"));b.classList.add("active");state.view=b.dataset.view;loadView()};
+$$("[data-quality-filter]").forEach(b=>b.onclick=()=>{const value=b.dataset.qualityFilter;state.qualityFilter=state.qualityFilter===value?"":value;$$("[data-quality-filter]").forEach(x=>x.classList.toggle("active",x.dataset.qualityFilter===state.qualityFilter));loadView()});
 let searchTimer;$("#searchInput").oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(loadView,250)};
 $("#profileSelect").onchange=e=>applyProfile(e.target.value);$("#viewerPrev").onclick=()=>moveViewer(-1);$("#viewerNext").onclick=()=>moveViewer(1);
 $("#viewerKeep").onclick=()=>setDecision(state.items[state.viewerIndex].id,"keep");$("#viewerRemove").onclick=()=>setDecision(state.items[state.viewerIndex].id,"remove");

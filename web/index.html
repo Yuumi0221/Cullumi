@@ -9,7 +9,7 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="logo">◫</span><div><b>通用照片筛选器</b><small>离线分析 · 文件由你确认后才会移动</small></div></div>
+    <div class="brand"><button id="homeBtn" class="logo" title="返回首页" aria-label="返回首页">⌂</button><div><b>通用照片筛选器</b><small>离线分析 · 文件由你确认后才会移动</small></div></div>
     <div class="top-actions">
       <select id="profileSelect" title="分析模式"></select>
       <button id="scanBtn">开始扫描</button>
@@ -55,10 +55,14 @@
         </div>
         <div class="toolbar">
           <div><h2 id="viewTitle">质量候选</h2><span id="viewSubtitle"></span></div>
+          <div id="qualityFilters" class="quality-filters">
+            <button data-quality-filter="remove">建议移除</button>
+            <button data-quality-filter="review">人工复查</button>
+          </div>
           <label class="search"><span>⌕</span><input id="searchInput" placeholder="搜索文件名或路径"></label>
         </div>
         <div id="gallery" class="gallery"></div>
-        <div id="empty" class="empty hidden"><b>这里还没有内容</b><span>扫描完成后会显示结果。</span></div>
+        <div id="empty" class="empty hidden"><b id="emptyTitle">这里还没有内容</b><span id="emptyText">扫描完成后会显示结果。</span></div>
       </section>
     </section>
   </main>

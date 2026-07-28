@@ -297,6 +297,10 @@ class Handler(BaseHTTPRequestHandler):
         params: list[Any] = []
         if category == "quality":
             clauses.append("suggestion IN ('remove','review')")
+            suggestion = query.get("suggestion", [""])[0]
+            if suggestion in {"remove", "review"}:
+                clauses.append("suggestion=?")
+                params.append(suggestion)
         elif category == "unreadable":
             clauses.append("suggestion='unreadable'")
         elif category == "decided":

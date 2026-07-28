@@ -5,3 +5,23 @@
   padding: 0 3px !important;
   color: var(--green) !important;
 }
+
+.logo {
+  border: 0;
+  font-size: 23px;
+  line-height: 1;
+}
+
+.quality-filters {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+  margin-right: 12px;
+}
+
+.quality-filters button.active {
+  border-color: var(--green);
+  background: var(--green2);
+  color: var(--green);
+  font-weight: 700;
+}
