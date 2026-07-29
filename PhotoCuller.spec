@@ -1,11 +1,23 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+
+msvcp140 = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "msvcp140.dll")
+fallback_internal = os.environ.get("PHOTO_CULLER_BUILD_INTERNAL", "")
+runtime_datas = []
+if fallback_internal:
+    for runtime_dir in ("clr_loader", "pythonnet", "webview", "rawpy"):
+        source = os.path.join(fallback_internal, runtime_dir)
+        if os.path.isdir(source):
+            runtime_datas.append((source, runtime_dir))
+
 a = Analysis(
     ["app.py"],
     pathex=[],
-    binaries=[],
-    datas=[("web", "web")],
+    binaries=[(msvcp140, ".")],
+    datas=[("web", "web"), *runtime_datas],
     hiddenimports=[
+        "clr",
         "webview",
         "webview.platforms.edgechromium",
         "webview.platforms.winforms",

@@ -4,29 +4,37 @@ import json
 import mimetypes
 import os
 import secrets
+import sqlite3
 import subprocess
 import sys
 import threading
+import traceback
 import urllib.parse
 import webbrowser
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from photoculler import __version__
 from photoculler.core import (
     BUILTIN_PROFILES,
     ConfigStore,
     ProjectManager,
     Scanner,
     apply_quarantine,
+    build_similarity_groups,
     classify,
+    classification_percentiles,
+    clear_decisions,
     connect_db,
     export_decisions,
     import_decisions,
     quarantine_preview,
     restore_batch,
     validate_profile,
+    app_data_dir,
 )
 
 
@@ -94,6 +102,41 @@ def choose_csv(title: str) -> str:
     return result.stdout.decode("utf-8", errors="replace").strip()
 
 
+def choose_save_csv(title: str, default_dir: Path, default_name: str) -> str:
+    try:
+        import webview
+
+        if webview.windows:
+            selected = webview.windows[0].create_file_dialog(
+                webview.SAVE_DIALOG,
+                directory=str(default_dir),
+                save_filename=default_name,
+                file_types=("CSV 文件 (*.csv)",),
+            )
+            if isinstance(selected, (list, tuple)):
+                return str(selected[0]) if selected else ""
+            return str(selected or "")
+    except Exception:
+        pass
+    safe_title = title.replace("'", "''")
+    safe_dir = str(default_dir).replace("'", "''")
+    safe_name = default_name.replace("'", "''")
+    script = (
+        "Add-Type -AssemblyName System.Windows.Forms;"
+        "$d=New-Object System.Windows.Forms.SaveFileDialog;"
+        f"$d.Title='{safe_title}';$d.InitialDirectory='{safe_dir}';$d.FileName='{safe_name}';"
+        "$d.Filter='CSV 文件 (*.csv)|*.csv';$d.DefaultExt='csv';$d.AddExtension=$true;"
+        "if($d.ShowDialog() -eq 'OK'){[Console]::OutputEncoding=[Text.UTF8Encoding]::new();"
+        "[Console]::Write($d.FileName)}"
+    )
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-STA", "-Command", script],
+        capture_output=True, creationflags=flags, check=False,
+    )
+    return result.stdout.decode("utf-8", errors="replace").strip()
+
+
 def json_safe_row(row: Any) -> dict[str, Any]:
     return {key: row[key] for key in row.keys()}
 
@@ -123,6 +166,8 @@ def project_summary(project_id: str) -> dict[str, Any]:
     }
     total = conn.execute("SELECT COUNT(*) FROM photos WHERE status='active'").fetchone()[0]
     pairs = conn.execute("SELECT COUNT(*) FROM similar_pairs").fetchone()[0]
+    profile = CONFIG.profiles().get(project.profile_id, BUILTIN_PROFILES["balanced"])
+    similar_groups = len(build_similarity_groups(conn, profile))
     conn.close()
     return {
         "id": project_id,
@@ -133,11 +178,12 @@ def project_summary(project_id: str) -> dict[str, Any]:
         "counts": counts,
         "decisions": decisions,
         "pairs": pairs,
+        "similar_groups": similar_groups,
     }
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "PhotoCuller/1.0"
+    server_version = "PhotoCuller/1.1"
 
     def log_message(self, format: str, *args: Any) -> None:
         if os.environ.get("PHOTOCULLER_DEBUG"):
@@ -212,6 +258,8 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/progress": self.api_progress,
                 "/api/photos": self.api_photos,
                 "/api/pairs": self.api_pairs,
+                "/api/similar-groups": self.api_similar_groups,
+                "/api/similar-group": self.api_similar_group,
                 "/api/thumb": self.api_thumb,
                 "/api/photo": self.api_photo,
                 "/api/profiles": self.api_profiles,
@@ -239,14 +287,19 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/project/open": self.api_open_project,
                 "/api/project/cache": self.api_project_cache,
                 "/api/project/cache/cleanup": self.api_cache_cleanup,
+                "/api/project/open-folder": self.api_project_open_folder,
+                "/api/project/remove-recent": self.api_project_remove_recent,
+                "/api/open-github": self.api_open_github,
                 "/api/scan": self.api_scan,
                 "/api/scan/cancel": self.api_scan_cancel,
                 "/api/decision": self.api_decision,
+                "/api/decision/clear": self.api_decision_clear,
                 "/api/settings": self.api_settings,
                 "/api/profile/save": self.api_profile_save,
                 "/api/profile/delete": self.api_profile_delete,
                 "/api/profile/apply": self.api_profile_apply,
                 "/api/profile/estimate": self.api_profile_estimate,
+                "/api/export/save": self.api_export_save,
                 "/api/import": self.api_import,
                 "/api/quarantine/apply": self.api_quarantine_apply,
                 "/api/quarantine/restore": self.api_restore,
@@ -268,10 +321,11 @@ class Handler(BaseHTTPRequestHandler):
             if project:
                 recent.append({"id": pid, **project, "available": Path(project["root"]).is_dir()})
         self._send_json({
-            "version": "1.0.0",
+            "version": __version__,
             "settings": {
                 "default_cache_root": CONFIG.data["default_cache_root"],
                 "auto_advance": CONFIG.data.get("auto_advance", True),
+                "theme": CONFIG.data.get("theme", "day"),
             },
             "recent_projects": recent,
             "profiles": list(CONFIG.profiles().values()),
@@ -346,6 +400,67 @@ class Handler(BaseHTTPRequestHandler):
         conn.close()
         self._send_json({"total": len(items), "items": items})
 
+    def api_similar_groups(self) -> None:
+        query = self._query()
+        pid = query.get("project_id", [""])[0]
+        search = query.get("search", [""])[0].casefold()
+        project = MANAGER.from_id(pid)
+        profile = CONFIG.profiles().get(project.profile_id, BUILTIN_PROFILES["balanced"])
+        conn = connect_db(project.db_path)
+        groups = build_similarity_groups(conn, profile)
+        items = []
+        for group in groups:
+            if search and not any(
+                search in str(row["relative_path"]).casefold() for row in group["members"]
+            ):
+                continue
+            items.append(
+                {
+                    "id": group["id"],
+                    "count": len(group["members"]),
+                    "kind": group["kind"],
+                    "recommended_id": group["recommended_id"],
+                    "recommended": photo_payload(pid, group["recommended"]),
+                    "covers": [photo_payload(pid, row) for row in group["covers"]],
+                    "face_safe": group["face_safe"],
+                }
+            )
+        conn.close()
+        self._send_json({"total": len(items), "items": items})
+
+    def api_similar_group(self) -> None:
+        query = self._query()
+        pid = query.get("project_id", [""])[0]
+        group_id = query.get("group_id", [""])[0]
+        search = query.get("search", [""])[0].casefold()
+        project = MANAGER.from_id(pid)
+        profile = CONFIG.profiles().get(project.profile_id, BUILTIN_PROFILES["balanced"])
+        conn = connect_db(project.db_path)
+        group = next(
+            (item for item in build_similarity_groups(conn, profile) if item["id"] == group_id),
+            None,
+        )
+        if not group:
+            conn.close()
+            raise ValueError("相似照片组不存在或已发生变化")
+        members = []
+        for row in group["members"]:
+            if search and search not in str(row["relative_path"]).casefold():
+                continue
+            item = photo_payload(pid, row)
+            item["group_similarity"] = group["confidence"].get(int(row["id"]), 0.0)
+            members.append(item)
+        result = {
+            "id": group["id"],
+            "count": len(group["members"]),
+            "kind": group["kind"],
+            "recommended_id": group["recommended_id"],
+            "face_safe": group["face_safe"],
+            "members": members,
+        }
+        conn.close()
+        self._send_json(result)
+
     def _photo_row(self):
         query = self._query()
         pid = query.get("project_id", [""])[0]
@@ -415,6 +530,21 @@ class Handler(BaseHTTPRequestHandler):
     def api_cache_cleanup(self, body: dict[str, Any]) -> None:
         self._send_json(MANAGER.cleanup_old_cache(body["project_id"], body["path"]))
 
+    def api_project_open_folder(self, body: dict[str, Any]) -> None:
+        root = MANAGER.project_root(body["project_id"])
+        if not hasattr(os, "startfile"):
+            raise ValueError("当前系统不支持文件管理器操作")
+        os.startfile(str(root))
+        self._send_json({"opened": True})
+
+    def api_project_remove_recent(self, body: dict[str, Any]) -> None:
+        MANAGER.remove_from_recent(body["project_id"])
+        self._send_json({"removed": True})
+
+    def api_open_github(self, body: dict[str, Any]) -> None:
+        webbrowser.open("https://github.com/Yuumi0221/photo-culler")
+        self._send_json({"opened": True})
+
     def api_scan(self, body: dict[str, Any]) -> None:
         SCANNER.start(body["project_id"])
         self._send_json({"started": True})
@@ -434,6 +564,10 @@ class Handler(BaseHTTPRequestHandler):
         conn.close()
         self._send_json({"saved": True})
 
+    def api_decision_clear(self, body: dict[str, Any]) -> None:
+        project = MANAGER.from_id(body["project_id"])
+        self._send_json({"cleared": clear_decisions(project)})
+
     def api_settings(self, body: dict[str, Any]) -> None:
         if "default_cache_root" in body:
             path = Path(body["default_cache_root"]).resolve()
@@ -441,6 +575,11 @@ class Handler(BaseHTTPRequestHandler):
             CONFIG.data["default_cache_root"] = str(path)
         if "auto_advance" in body:
             CONFIG.data["auto_advance"] = bool(body["auto_advance"])
+        if "theme" in body:
+            theme = str(body["theme"])
+            if theme not in {"day", "night"}:
+                raise ValueError("主题必须为 day 或 night")
+            CONFIG.data["theme"] = theme
         CONFIG.save()
         self._send_json({"saved": True, "settings": CONFIG.data})
 
@@ -469,13 +608,38 @@ class Handler(BaseHTTPRequestHandler):
         validate_profile(profile)
         project = MANAGER.from_id(body["project_id"])
         conn = connect_db(project.db_path)
+        rows = conn.execute("SELECT * FROM photos WHERE status='active'").fetchall()
+        percentiles = classification_percentiles(rows, profile)
         counts = {"remove": 0, "review": 0, "keep": 0, "unreadable": 0}
-        for row in conn.execute("SELECT * FROM photos WHERE status='active'"):
-            suggestion, _ = classify(row, profile)
+        for row in rows:
+            suggestion, _ = classify(row, profile, percentiles)
             counts[suggestion] = counts.get(suggestion, 0) + 1
-        current_pairs = conn.execute("SELECT COUNT(*) FROM similar_pairs").fetchone()[0]
+        estimate_conn = sqlite3.connect(":memory:")
+        estimate_conn.row_factory = sqlite3.Row
+        conn.backup(estimate_conn)
         conn.close()
-        self._send_json({"counts": counts, "current_pairs": current_pairs, "similarity_requires_rebuild": True})
+        SCANNER.rebuild_similarity(project, estimate_conn, profile)
+        estimated_pairs = estimate_conn.execute("SELECT COUNT(*) FROM similar_pairs").fetchone()[0]
+        estimated_groups = len(build_similarity_groups(estimate_conn, profile))
+        estimate_conn.close()
+        self._send_json({
+            "counts": counts,
+            "estimated_pairs": estimated_pairs,
+            "estimated_groups": estimated_groups,
+        })
+
+    def api_export_save(self, body: dict[str, Any]) -> None:
+        project = MANAGER.from_id(body["project_id"])
+        selected = choose_save_csv("保存筛选结果 CSV", project.root, "照片筛选结果.csv")
+        if not selected:
+            self._send_json({"saved": False, "cancelled": True})
+            return
+        path = Path(selected)
+        if path.suffix.lower() != ".csv":
+            path = path.with_suffix(".csv")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(export_decisions(project), encoding="utf-8")
+        self._send_json({"saved": True, "path": str(path)})
 
     def api_import(self, body: dict[str, Any]) -> None:
         project = MANAGER.from_id(body["project_id"])
@@ -502,7 +666,15 @@ def run() -> None:
 
         webview.create_window("通用照片筛选器", url, width=1460, height=940, min_size=(980, 680))
         webview.start()
-    except Exception:
+    except Exception as error:
+        try:
+            log_path = app_data_dir() / "webview-error.log"
+            log_path.write_text(
+                f"{datetime.now().isoformat(timespec='seconds')}\n{traceback.format_exc()}",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
         webbrowser.open(url)
         try:
             while True:

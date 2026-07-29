@@ -9,12 +9,16 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+from photoculler import __version__
 from photoculler.core import (
     BUILTIN_PROFILES,
     ConfigStore,
     ProjectManager,
     Scanner,
     apply_quarantine,
+    build_similarity_groups,
+    classification_percentiles,
+    clear_decisions,
     connect_db,
     import_decisions,
     quarantine_preview,
@@ -55,11 +59,97 @@ class PhotoCullerTests(unittest.TestCase):
         self.assertEqual(progress["stage"], "complete", progress)
 
     def test_profile_validation(self):
+        self.assertEqual(__version__, "1.1.0")
+        self.assertEqual(self.config.data["theme"], "day")
         validate_profile(BUILTIN_PROFILES["balanced"])
+        self.assertTrue(
+            all(
+                profile["similarity"]["allow_cross_time_high_confidence"]
+                for profile in BUILTIN_PROFILES.values()
+            )
+        )
         broken = json.loads(json.dumps(BUILTIN_PROFILES["balanced"]))
         broken["name"] = ""
         with self.assertRaises(ValueError):
             validate_profile(broken)
+
+    def test_builtin_modes_have_more_aggressive_ordered_thresholds(self):
+        conservative = BUILTIN_PROFILES["conservative"]
+        balanced = BUILTIN_PROFILES["balanced"]
+        aggressive = BUILTIN_PROFILES["aggressive"]
+        self.assertEqual(
+            [
+                conservative["quality"]["blur_remove_percentile"],
+                balanced["quality"]["blur_remove_percentile"],
+                aggressive["quality"]["blur_remove_percentile"],
+            ],
+            [3, 6, 10],
+        )
+        self.assertLess(
+            conservative["quality"]["blur_review"],
+            balanced["quality"]["blur_review"],
+        )
+        self.assertLess(
+            balanced["quality"]["blur_review"],
+            aggressive["quality"]["blur_review"],
+        )
+        self.assertGreater(
+            conservative["similarity"]["structure_min"],
+            balanced["similarity"]["structure_min"],
+        )
+        self.assertGreater(
+            balanced["similarity"]["structure_min"],
+            aggressive["similarity"]["structure_min"],
+        )
+
+    def test_percentile_estimate_uses_same_thresholds_as_apply(self):
+        profile = json.loads(json.dumps(BUILTIN_PROFILES["balanced"]))
+        profile["quality"]["threshold_mode"] = "percentile"
+        rows = [
+            {"sharpness": value}
+            for value in (10.0, 20.0, 30.0, 40.0, 1000.0)
+        ]
+        percentiles = classification_percentiles(rows, profile)
+        self.assertIsNotNone(percentiles)
+        self.assertLessEqual(
+            percentiles["sharpness_remove"],
+            percentiles["sharpness_review"],
+        )
+
+    def test_remove_from_recent_preserves_project_and_cache(self):
+        marker = self.project.thumb_dir / "keep-me.txt"
+        marker.write_text("cache", encoding="utf-8")
+        self.assertIn(self.project.project_id, self.config.data["recent_projects"])
+        self.manager.remove_from_recent(self.project.project_id)
+        self.assertNotIn(self.project.project_id, self.config.data["recent_projects"])
+        self.assertIn(self.project.project_id, self.config.data["projects"])
+        self.assertTrue(self.photos.is_dir())
+        self.assertTrue(self.project.db_path.is_file())
+        self.assertTrue(marker.is_file())
+
+    def test_clear_decisions_only_resets_active_photos(self):
+        self.make_photo("keep.jpg")
+        self.make_photo("remove.jpg", (120, 80, 60))
+        self.scan()
+        conn = connect_db(self.project.db_path)
+        rows = conn.execute(
+            "SELECT id FROM photos WHERE status='active' ORDER BY relative_path"
+        ).fetchall()
+        conn.execute("UPDATE photos SET decision='keep' WHERE id=?", (rows[0]["id"],))
+        conn.execute("UPDATE photos SET decision='remove' WHERE id=?", (rows[1]["id"],))
+        conn.commit()
+        conn.close()
+
+        self.assertEqual(clear_decisions(self.project), 2)
+        conn = connect_db(self.project.db_path)
+        decisions = [
+            row["decision"]
+            for row in conn.execute(
+                "SELECT decision FROM photos WHERE status='active' ORDER BY relative_path"
+            )
+        ]
+        conn.close()
+        self.assertEqual(decisions, ["", ""])
 
     def test_video_only_folder_reports_unsupported_files(self):
         (self.photos / "clip.mov").write_bytes(b"not-a-real-video")
@@ -80,12 +170,73 @@ class PhotoCullerTests(unittest.TestCase):
         conn = connect_db(self.project.db_path)
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM photos WHERE status='active'").fetchone()[0], 3)
         self.assertGreaterEqual(conn.execute("SELECT COUNT(*) FROM similar_pairs WHERE kind='exact'").fetchone()[0], 1)
+        groups = build_similarity_groups(conn, BUILTIN_PROFILES["balanced"])
+        exact = next(group for group in groups if group["kind"] == "exact")
+        self.assertEqual(len(exact["members"]), 2)
         analyzed = conn.execute("SELECT analyzed_at FROM photos WHERE relative_path='IMG_0001.jpg'").fetchone()[0]
         conn.close()
         time.sleep(0.02)
         self.scan()
         conn = connect_db(self.project.db_path)
         self.assertEqual(conn.execute("SELECT analyzed_at FROM photos WHERE relative_path='IMG_0001.jpg'").fetchone()[0], analyzed)
+        conn.close()
+
+    def test_similarity_pairs_collapse_into_connected_groups(self):
+        for index, color in enumerate(
+            ((50, 80, 120), (80, 110, 140), (110, 140, 170), (140, 90, 70), (170, 120, 90)),
+            1,
+        ):
+            self.make_photo(f"IMG_{index:04d}.jpg", color)
+        self.scan()
+        conn = connect_db(self.project.db_path)
+        rows = conn.execute(
+            "SELECT id,relative_path FROM photos ORDER BY relative_path"
+        ).fetchall()
+        ids = [row["id"] for row in rows]
+        conn.execute("DELETE FROM similar_pairs")
+        conn.executemany(
+            """INSERT INTO similar_pairs(a_id,b_id,score,kind,recommended_id,face_safe)
+               VALUES(?,?,?,?,?,?)""",
+            [
+                (ids[0], ids[1], 0.90, "similar", ids[1], 0),
+                (ids[1], ids[2], 0.80, "similar", ids[2], 1),
+                (ids[3], ids[4], 0.95, "similar", ids[3], 0),
+            ],
+        )
+        for index, photo_id in enumerate(ids[:3]):
+            conn.execute(
+                "UPDATE photos SET taken=?,sharpness=? WHERE id=?",
+                (f"2026:01:01 10:00:0{index}", (index + 1) * 1000, photo_id),
+            )
+        conn.commit()
+        profile = json.loads(json.dumps(BUILTIN_PROFILES["balanced"]))
+        profile["quality"]["weights"] = {
+            "sharpness": 1.0,
+            "exposure": 0.0,
+            "contrast": 0.0,
+            "entropy": 0.0,
+            "resolution": 0.0,
+        }
+        groups = build_similarity_groups(conn, profile)
+        self.assertEqual(sorted(len(group["members"]) for group in groups), [2, 3])
+        connected = next(group for group in groups if len(group["members"]) == 3)
+        self.assertEqual(
+            [row["id"] for row in connected["members"]],
+            ids[:3],
+        )
+        self.assertEqual(connected["recommended_id"], ids[2])
+        self.assertEqual(connected["covers"][0]["id"], ids[2])
+        self.assertAlmostEqual(connected["confidence"][ids[0]], 0.80)
+        self.assertTrue(connected["face_safe"])
+        self.assertEqual(
+            connected["id"],
+            next(group for group in build_similarity_groups(conn, profile) if len(group["members"]) == 3)["id"],
+        )
+
+        profile["similarity"]["min_group_size"] = 3
+        filtered = build_similarity_groups(conn, profile)
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(len(filtered[0]["members"]), 3)
         conn.close()
 
     def test_csv_quarantine_restore_collision(self):

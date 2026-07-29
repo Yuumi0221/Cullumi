@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import heapq
 import io
 import json
 import math
@@ -61,6 +62,9 @@ def _profile(
     structure: float,
     time_window: int,
     sequence_gap: int,
+    blur_review_percentile: float,
+    blur_remove_percentile: float,
+    aspect_tolerance: float,
 ) -> dict[str, Any]:
     return {
         "version": 1,
@@ -80,8 +84,8 @@ def _profile(
             },
             "threshold_mode": "absolute",
             "match_mode": "any",
-            "blur_review_percentile": 5,
-            "blur_remove_percentile": 1,
+            "blur_review_percentile": blur_review_percentile,
+            "blur_remove_percentile": blur_remove_percentile,
             "blur_review": blur_review,
             "blur_remove": blur_remove,
             "dark_review": dark_review,
@@ -111,11 +115,14 @@ def _profile(
             "phash_max": phash,
             "dhash_max": dhash,
             "structure_min": structure,
-            "aspect_tolerance": 0.06,
+            "aspect_tolerance": aspect_tolerance,
             "time_window_minutes": time_window,
             "sequence_gap": sequence_gap,
             "min_group_size": 2,
-            "allow_cross_time_high_confidence": False,
+            # Visual similarity is the primary signal. Capture time and filename
+            # sequence remain useful hints, but must not exclude an otherwise
+            # high-confidence match in the built-in modes.
+            "allow_cross_time_high_confidence": True,
             "face_safe": True,
         },
     }
@@ -123,22 +130,25 @@ def _profile(
 
 BUILTIN_PROFILES = {
     "conservative": _profile(
-        "conservative", "保守优先", blur_review=100, blur_remove=45,
-        dark_review=22, dark_remove=10, bright_clip_review=0.35,
-        bright_clip_remove=0.72, contrast_review=18, phash=4, dhash=4,
-        structure=0.92, time_window=10, sequence_gap=15,
+        "conservative", "保守优先", blur_review=150, blur_remove=70,
+        dark_review=28, dark_remove=14, bright_clip_review=0.28,
+        bright_clip_remove=0.60, contrast_review=22, phash=6, dhash=6,
+        structure=0.90, time_window=20, sequence_gap=25,
+        blur_review_percentile=8, blur_remove_percentile=3, aspect_tolerance=0.08,
     ),
     "balanced": _profile(
-        "balanced", "平衡模式", blur_review=180, blur_remove=75,
-        dark_review=30, dark_remove=15, bright_clip_review=0.25,
-        bright_clip_remove=0.55, contrast_review=22, phash=8, dhash=7,
-        structure=0.84, time_window=20, sequence_gap=25,
+        "balanced", "平衡模式", blur_review=260, blur_remove=120,
+        dark_review=38, dark_remove=22, bright_clip_review=0.18,
+        bright_clip_remove=0.42, contrast_review=28, phash=11, dhash=10,
+        structure=0.80, time_window=45, sequence_gap=50,
+        blur_review_percentile=15, blur_remove_percentile=6, aspect_tolerance=0.11,
     ),
     "aggressive": _profile(
-        "aggressive", "积极精简", blur_review=300, blur_remove=120,
-        dark_review=40, dark_remove=22, bright_clip_review=0.18,
-        bright_clip_remove=0.40, contrast_review=28, phash=12, dhash=10,
-        structure=0.75, time_window=45, sequence_gap=40,
+        "aggressive", "积极精简", blur_review=420, blur_remove=190,
+        dark_review=50, dark_remove=30, bright_clip_review=0.10,
+        bright_clip_remove=0.28, contrast_review=36, phash=16, dhash=14,
+        structure=0.68, time_window=90, sequence_gap=90,
+        blur_review_percentile=25, blur_remove_percentile=10, aspect_tolerance=0.15,
     ),
 }
 
@@ -162,6 +172,7 @@ class ConfigStore:
             "version": 1,
             "default_cache_root": str(default_cache),
             "auto_advance": True,
+            "theme": "day",
             "projects": {},
             "recent_projects": [],
             "custom_profiles": {},
@@ -370,6 +381,23 @@ class ProjectManager:
             raise ValueError("项目不存在")
         return self.open(data["root"], data.get("cache_root"))
 
+    def project_root(self, project_id: str) -> Path:
+        data = self.config.data.get("projects", {}).get(project_id)
+        if not data:
+            raise ValueError("项目不存在")
+        root = Path(data["root"]).resolve()
+        if not root.is_dir():
+            raise ValueError("照片文件夹当前不可用")
+        return root
+
+    def remove_from_recent(self, project_id: str) -> None:
+        if project_id not in self.config.data.get("projects", {}):
+            raise ValueError("项目不存在")
+        self.config.data["recent_projects"] = [
+            item for item in self.config.data.get("recent_projects", []) if item != project_id
+        ]
+        self.config.save()
+
     def migrate_cache(self, project_id: str, new_root: str) -> dict[str, Any]:
         project = self.from_id(project_id)
         new_cache = Path(new_root).resolve()
@@ -563,6 +591,24 @@ def classify(row: sqlite3.Row | dict[str, Any], profile: dict[str, Any], percent
     return "keep", ""
 
 
+def classification_percentiles(
+    rows: Iterable[sqlite3.Row | dict[str, Any]], profile: dict[str, Any]
+) -> dict[str, float] | None:
+    if profile["quality"].get("threshold_mode") != "percentile":
+        return None
+    sharp = np.asarray([row["sharpness"] for row in rows if row["sharpness"] is not None])
+    if not len(sharp):
+        return None
+    return {
+        "sharpness_remove": float(
+            np.percentile(sharp, profile["quality"].get("blur_remove_percentile", 1))
+        ),
+        "sharpness_review": float(
+            np.percentile(sharp, profile["quality"].get("blur_review_percentile", 5))
+        ),
+    }
+
+
 def quality_score(row: sqlite3.Row | dict[str, Any], profile: dict[str, Any]) -> float:
     q = profile["quality"]
     w = q["weights"]
@@ -591,6 +637,114 @@ def parse_taken(value: str) -> float | None:
         except ValueError:
             pass
     return None
+
+
+def photo_shooting_key(row: sqlite3.Row | dict[str, Any]) -> tuple[Any, ...]:
+    taken = parse_taken(str(row["taken"] or ""))
+    path = str(row["relative_path"])
+    sequence = filename_sequence(Path(path).name)
+    if taken is not None:
+        return (0, taken, sequence if sequence >= 0 else math.inf, path.casefold())
+    return (1, sequence if sequence >= 0 else math.inf, path.casefold())
+
+
+def build_similarity_groups(
+    conn: sqlite3.Connection, profile: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Collapse active pair relations into deterministic connected photo groups."""
+    rows = conn.execute(
+        "SELECT * FROM photos WHERE status='active' AND error=''"
+    ).fetchall()
+    photos = {int(row["id"]): row for row in rows}
+    edges = conn.execute(
+        """SELECT sp.a_id,sp.b_id,sp.score,sp.kind,sp.face_safe
+           FROM similar_pairs sp
+           JOIN photos a ON a.id=sp.a_id
+           JOIN photos b ON b.id=sp.b_id
+           WHERE a.status='active' AND b.status='active'"""
+    ).fetchall()
+
+    parent: dict[int, int] = {}
+
+    def find(value: int) -> int:
+        parent.setdefault(value, value)
+        while parent[value] != value:
+            parent[value] = parent[parent[value]]
+            value = parent[value]
+        return value
+
+    def union(left: int, right: int) -> None:
+        left_root, right_root = find(left), find(right)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    adjacency: dict[int, list[tuple[int, float]]] = {}
+    face_safe_ids: set[int] = set()
+    for edge in edges:
+        left, right = int(edge["a_id"]), int(edge["b_id"])
+        if left not in photos or right not in photos:
+            continue
+        union(left, right)
+        score = float(edge["score"] or 0)
+        adjacency.setdefault(left, []).append((right, score))
+        adjacency.setdefault(right, []).append((left, score))
+        if edge["face_safe"]:
+            face_safe_ids.update((left, right))
+
+    components: dict[int, list[int]] = {}
+    for photo_id in parent:
+        components.setdefault(find(photo_id), []).append(photo_id)
+
+    minimum = max(2, int(profile.get("similarity", {}).get("min_group_size", 2)))
+    groups: list[dict[str, Any]] = []
+    for member_ids in components.values():
+        if len(member_ids) < minimum:
+            continue
+        members = [photos[photo_id] for photo_id in member_ids]
+        ranked = sorted(
+            members,
+            key=lambda row: (-quality_score(row, profile), str(row["relative_path"]).casefold()),
+        )
+        recommended = ranked[0]
+        recommended_id = int(recommended["id"])
+
+        # Maximum-bottleneck path gives every transitive member a meaningful
+        # confidence relative to the recommended photo.
+        confidence = {photo_id: 0.0 for photo_id in member_ids}
+        confidence[recommended_id] = 1.0
+        pending: list[tuple[float, int]] = [(-1.0, recommended_id)]
+        while pending:
+            negative_score, current = heapq.heappop(pending)
+            current_score = -negative_score
+            if current_score < confidence[current]:
+                continue
+            for neighbor, edge_score in adjacency.get(current, []):
+                candidate = min(current_score, edge_score)
+                if candidate > confidence.get(neighbor, 0.0):
+                    confidence[neighbor] = candidate
+                    heapq.heappush(pending, (-candidate, neighbor))
+
+        hashes = {str(row["sha256"]) for row in members if row["sha256"]}
+        exact = len(hashes) == 1 and len(hashes) and all(row["sha256"] for row in members)
+        ordered = sorted(members, key=photo_shooting_key)
+        stable_ids = ",".join(str(photo_id) for photo_id in sorted(member_ids))
+        group_id = "sg-" + hashlib.sha1(stable_ids.encode("ascii")).hexdigest()[:16]
+        groups.append(
+            {
+                "id": group_id,
+                "member_ids": sorted(member_ids),
+                "members": ordered,
+                "recommended_id": recommended_id,
+                "recommended": recommended,
+                "covers": [recommended, *[row for row in ranked if row["id"] != recommended_id]][:4],
+                "confidence": confidence,
+                "kind": "exact" if exact else "similar",
+                "face_safe": any(photo_id in face_safe_ids for photo_id in member_ids),
+                "sort_key": min(photo_shooting_key(row) for row in members),
+            }
+        )
+    groups.sort(key=lambda group: (group["sort_key"], group["id"]))
+    return groups
 
 
 class Scanner:
@@ -709,14 +863,7 @@ class Scanner:
 
     def reclassify(self, project: Project, conn: sqlite3.Connection, profile: dict[str, Any]) -> None:
         rows = conn.execute("SELECT * FROM photos WHERE status='active'").fetchall()
-        percentiles = None
-        if profile["quality"].get("threshold_mode") == "percentile":
-            sharp = np.asarray([row["sharpness"] for row in rows if row["sharpness"] is not None])
-            if len(sharp):
-                percentiles = {
-                    "sharpness_remove": float(np.percentile(sharp, profile["quality"].get("blur_remove_percentile", 1))),
-                    "sharpness_review": float(np.percentile(sharp, profile["quality"].get("blur_review_percentile", 5))),
-                }
+        percentiles = classification_percentiles(rows, profile)
         for row in rows:
             suggestion, reason = classify(row, profile, percentiles)
             conn.execute("UPDATE photos SET suggestion=?,reason=? WHERE id=?", (suggestion, reason, row["id"]))
@@ -839,6 +986,17 @@ def export_decisions(project: Project) -> str:
         writer.writerow([row["decision"], row["relative_path"], row["suggestion"], row["reason"]])
     conn.close()
     return "\ufeff" + output.getvalue()
+
+
+def clear_decisions(project: Project) -> int:
+    conn = connect_db(project.db_path)
+    cursor = conn.execute(
+        "UPDATE photos SET decision='' WHERE status='active' AND decision<>''"
+    )
+    conn.commit()
+    cleared = cursor.rowcount
+    conn.close()
+    return cleared
 
 
 def quarantine_preview(project: Project) -> dict[str, Any]:
