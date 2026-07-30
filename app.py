@@ -31,6 +31,11 @@ from photoculler.core import (
     connect_db,
     export_decisions,
     import_decisions,
+    parse_photo_filter,
+    photo_filter_where,
+    photo_library_counts,
+    PHOTO_AI_FILTERS,
+    PHOTO_DECISION_FILTERS,
     quarantine_preview,
     restore_batch,
     validate_profile,
@@ -165,6 +170,7 @@ def project_summary(project_id: str) -> dict[str, Any]:
         )
     }
     total = conn.execute("SELECT COUNT(*) FROM photos WHERE status='active'").fetchone()[0]
+    library_counts = photo_library_counts(conn)
     pairs = conn.execute("SELECT COUNT(*) FROM similar_pairs").fetchone()[0]
     profile = CONFIG.profiles().get(project.profile_id, BUILTIN_PROFILES["balanced"])
     similar_groups = len(build_similarity_groups(conn, profile))
@@ -175,6 +181,7 @@ def project_summary(project_id: str) -> dict[str, Any]:
         "cache_root": str(project.cache_root),
         "profile_id": project.profile_id,
         "total": total,
+        "library_counts": library_counts,
         "counts": counts,
         "decisions": decisions,
         "pairs": pairs,
@@ -183,7 +190,7 @@ def project_summary(project_id: str) -> dict[str, Any]:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "PhotoCuller/1.1"
+    server_version = f"PhotoCuller/{__version__}"
 
     def log_message(self, format: str, *args: Any) -> None:
         if os.environ.get("PHOTOCULLER_DEBUG"):
@@ -193,7 +200,7 @@ class Handler(BaseHTTPRequestHandler):
         return urllib.parse.urlparse(self.path)
 
     def _query(self) -> dict[str, list[str]]:
-        return urllib.parse.parse_qs(self._parsed().query)
+        return urllib.parse.parse_qs(self._parsed().query, keep_blank_values=True)
 
     def _authorized(self) -> bool:
         if not self._parsed().path.startswith("/api/"):
@@ -272,6 +279,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(404)
             else:
                 handler()
+        except ValueError as error:
+            self._send_json({"error": str(error)}, 400)
         except Exception as error:
             self._send_json({"error": str(error)}, 500)
 
@@ -342,27 +351,34 @@ class Handler(BaseHTTPRequestHandler):
     def api_photos(self) -> None:
         query = self._query()
         pid = query.get("project_id", [""])[0]
-        category = query.get("category", ["quality"])[0]
         search = query.get("search", [""])[0]
         limit = min(500, max(1, int(query.get("limit", ["200"])[0])))
         offset = max(0, int(query.get("offset", ["0"])[0]))
         project = MANAGER.from_id(pid)
-        clauses = ["status='active'"]
-        params: list[Any] = []
-        if category == "quality":
-            clauses.append("suggestion IN ('remove','review')")
-            suggestion = query.get("suggestion", [""])[0]
-            if suggestion in {"remove", "review"}:
-                clauses.append("suggestion=?")
-                params.append(suggestion)
-        elif category == "unreadable":
-            clauses.append("suggestion='unreadable'")
-        elif category == "decided":
-            clauses.append("decision<>''")
+
+        file_state = query.get("file", ["readable"])[0]
+        raw_decisions = query.get("decisions", [None])[0]
+        raw_ai = query.get("ai_states", [None])[0]
+        category = query.get("category", [None])[0]
+        if category and raw_decisions is None and raw_ai is None and "file" not in query:
+            if category == "quality":
+                suggestion = query.get("suggestion", [""])[0]
+                raw_ai = suggestion if suggestion in {"remove", "review"} else "remove,review"
+            elif category == "unreadable":
+                file_state = "unreadable"
+            elif category == "decided":
+                raw_decisions = "keep,remove"
+            elif category != "all":
+                raise ValueError(f"category 包含无效值：{category}")
+
+        decisions = parse_photo_filter(
+            raw_decisions, PHOTO_DECISION_FILTERS, "decisions"
+        )
+        ai_states = parse_photo_filter(raw_ai, PHOTO_AI_FILTERS, "ai_states")
+        where, params = photo_filter_where(file_state, decisions, ai_states)
         if search:
-            clauses.append("relative_path LIKE ?")
+            where += " AND relative_path LIKE ?"
             params.append(f"%{search}%")
-        where = " AND ".join(clauses)
         conn = connect_db(project.db_path)
         total = conn.execute(f"SELECT COUNT(*) FROM photos WHERE {where}", params).fetchone()[0]
         rows = conn.execute(

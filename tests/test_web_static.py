@@ -3,6 +3,54 @@ import unittest
 
 
 class WebStaticTests(unittest.TestCase):
+    def test_sidebar_uses_library_presets_instead_of_duplicate_pages(self):
+        markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('data-nav="library" data-preset="library"', markup)
+        self.assertIn('data-nav="ai" data-preset="ai"', markup)
+        self.assertIn('data-nav="undecided" data-preset="undecided"', markup)
+        self.assertIn('data-nav="keep" data-preset="keep"', markup)
+        self.assertIn('data-nav="remove" data-preset="remove"', markup)
+        self.assertNotIn('data-view="quality"', markup)
+        self.assertNotIn('data-view="all"', markup)
+        self.assertNotIn('data-view="decided"', markup)
+        self.assertNotIn("qualityFilter", script)
+        self.assertIn("function applyLibraryPreset(", script)
+
+    def test_library_multiselects_support_all_none_and_accessible_panels(self):
+        markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        self.assertIn('aria-controls="decisionFilterPanel"', markup)
+        self.assertIn('aria-controls="aiFilterPanel"', markup)
+        self.assertEqual(markup.count('data-filter-group="decisions"'), 3)
+        self.assertEqual(markup.count('data-filter-group="ai"'), 3)
+        self.assertIn('data-select-all="decisions"', markup)
+        self.assertIn('data-select-all="ai"', markup)
+        self.assertIn('if(!state.filters.decisions.size)', script)
+        self.assertIn('if(!state.filters.ai.size)', script)
+        self.assertIn('return "none"', script)
+        self.assertIn("function closeFilterMenus()", script)
+        self.assertIn(".multi-filter-panel", styles)
+        self.assertIn(".multi-filter-trigger.empty-selection", styles)
+
+    def test_library_uses_incremental_loading_and_stale_request_generation(self):
+        markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('id="librarySentinel"', markup)
+        self.assertIn("LIBRARY_PAGE_SIZE=120", script)
+        self.assertIn("new IntersectionObserver", script)
+        self.assertIn("generation!==state.library.generation", script)
+        self.assertIn("offset:String(state.library.offset)", script)
+        self.assertIn('insertAdjacentHTML("beforeend"', script)
+
+    def test_library_decisions_reconcile_without_full_page_reload(self):
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("function photoMatchesLibrary(", script)
+        self.assertIn("function reconcileLibraryDecision(", script)
+        self.assertIn("state.library.offset=Math.max(0,state.library.offset-1)", script)
+        self.assertIn("state.viewerDirtyIds.add(id)", script)
+
     def test_photo_card_is_not_passed_directly_to_array_map(self):
         script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
         self.assertNotIn(".map(photoCard)", script)

@@ -41,16 +41,22 @@
       <aside>
         <div class="project-box"><small>当前项目</small><b id="projectName"></b><span id="projectPath"></span></div>
         <nav id="nav">
-          <button data-view="quality" class="active">质量候选 <em id="qualityCount">0</em></button>
-          <button data-view="similar">相似连拍 <em id="pairCount">0</em></button>
-          <button data-view="all">全部照片 <em id="allCount">0</em></button>
-          <button data-view="unreadable">无法读取 <em id="unreadableCount">0</em></button>
-          <button data-view="decided">已决定 <em id="decidedCount">0</em></button>
-          <button data-view="quarantine">隔离历史</button>
+          <button data-nav="library" data-preset="library" class="active">照片库 <em id="libraryCount">0</em></button>
+          <span class="nav-section-label">智能整理</span>
+          <button data-nav="ai" data-preset="ai">AI建议 <em id="aiCount">0</em></button>
+          <button data-nav="similar" data-view="similar">相似连拍 <em id="pairCount">0</em></button>
+          <span class="nav-section-label">我的处理</span>
+          <button data-nav="undecided" data-preset="undecided">待决定 <em id="undecidedCount">0</em></button>
+          <button data-nav="keep" data-preset="keep">已保留 <em id="keepCount">0</em></button>
+          <button data-nav="remove" data-preset="remove">已移除 <em id="removeCount">0</em></button>
+          <span class="nav-section-label">问题</span>
+          <button data-nav="unreadable" data-view="unreadable">无法读取 <em id="unreadableCount">0</em></button>
+          <button data-nav="quarantine" data-view="quarantine">隔离历史</button>
         </nav>
         <div class="aside-actions">
           <button id="exportBtn" class="ghost">导出 CSV</button>
           <button id="importBtn" class="ghost">导入 CSV</button>
+          <button id="clearDecisionsBtn" class="ghost">清空所有选择</button>
           <button id="quarantineBtn" class="danger">隔离已标记移除</button>
         </div>
       </aside>
@@ -61,13 +67,30 @@
           <button id="cancelBtn" class="ghost">取消</button>
         </div>
         <div class="toolbar">
-          <div><h2 id="viewTitle">质量候选</h2><span id="viewSubtitle"></span></div>
-          <div id="qualityFilters" class="quality-filters">
-            <button data-quality-filter="remove">建议移除</button>
-            <button data-quality-filter="review">人工复查</button>
-          </div>
-          <div id="decidedActions" class="decided-actions hidden">
-            <button id="clearDecisionsBtn">清空选择</button>
+          <div><h2 id="viewTitle">照片库</h2><span id="viewSubtitle"></span></div>
+          <div id="libraryFilters" class="library-filters">
+            <div class="multi-filter" data-filter-menu="decisions">
+              <button class="multi-filter-trigger" type="button" aria-expanded="false" aria-controls="decisionFilterPanel">
+                <span>决定状态</span><b id="decisionFilterSummary">全部</b><i>⌄</i>
+              </button>
+              <div id="decisionFilterPanel" class="multi-filter-panel hidden">
+                <div class="multi-filter-head"><b>决定状态</b><button type="button" data-select-all="decisions">全选</button></div>
+                <label><input type="checkbox" data-filter-group="decisions" value="undecided" checked>未决定</label>
+                <label><input type="checkbox" data-filter-group="decisions" value="keep" checked>已保留</label>
+                <label><input type="checkbox" data-filter-group="decisions" value="remove" checked>已移除</label>
+              </div>
+            </div>
+            <div class="multi-filter" data-filter-menu="ai">
+              <button class="multi-filter-trigger" type="button" aria-expanded="false" aria-controls="aiFilterPanel">
+                <span>AI 分析</span><b id="aiFilterSummary">全部</b><i>⌄</i>
+              </button>
+              <div id="aiFilterPanel" class="multi-filter-panel hidden">
+                <div class="multi-filter-head"><b>AI 分析</b><button type="button" data-select-all="ai">全选</button></div>
+                <label><input type="checkbox" data-filter-group="ai" value="remove" checked>建议移除</label>
+                <label><input type="checkbox" data-filter-group="ai" value="review" checked>人工复查</label>
+                <label><input type="checkbox" data-filter-group="ai" value="no_suggestion" checked>无建议</label>
+              </div>
+            </div>
           </div>
           <div id="similarViewActions" class="similar-toolbar-actions hidden">
             <button id="similarCollapseBtn" class="ghost">‹ 收回</button>
@@ -77,6 +100,7 @@
           <label class="search"><span>⌕</span><input id="searchInput" placeholder="搜索文件名或路径"></label>
         </div>
         <div id="gallery" class="gallery"></div>
+        <div id="librarySentinel" class="library-sentinel hidden" aria-live="polite"></div>
         <section id="similarBrowser" class="similar-browser hidden">
           <div id="similarFolderPane" class="similar-folder-pane">
             <div id="similarFolders" class="similar-folders"></div>

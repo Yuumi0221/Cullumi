@@ -21,6 +21,11 @@ from photoculler.core import (
     clear_decisions,
     connect_db,
     import_decisions,
+    parse_photo_filter,
+    photo_filter_where,
+    photo_library_counts,
+    PHOTO_AI_FILTERS,
+    PHOTO_DECISION_FILTERS,
     quarantine_preview,
     restore_batch,
     validate_profile,
@@ -59,7 +64,7 @@ class PhotoCullerTests(unittest.TestCase):
         self.assertEqual(progress["stage"], "complete", progress)
 
     def test_profile_validation(self):
-        self.assertEqual(__version__, "1.1.0")
+        self.assertEqual(__version__, "1.2.0")
         self.assertEqual(self.config.data["theme"], "day")
         validate_profile(BUILTIN_PROFILES["balanced"])
         self.assertTrue(
@@ -150,6 +155,76 @@ class PhotoCullerTests(unittest.TestCase):
         ]
         conn.close()
         self.assertEqual(decisions, ["", ""])
+
+    def test_photo_library_filters_and_counts_share_state_definitions(self):
+        for index in range(5):
+            self.make_photo(f"filter-{index}.jpg", (60 + index * 20, 90, 120))
+        self.scan()
+        conn = connect_db(self.project.db_path)
+        rows = conn.execute("SELECT id FROM photos ORDER BY relative_path").fetchall()
+        conn.execute(
+            "UPDATE photos SET decision='',suggestion='remove',error='',status='active' WHERE id=?",
+            (rows[0]["id"],),
+        )
+        conn.execute(
+            "UPDATE photos SET decision='keep',suggestion='review',error='',status='active' WHERE id=?",
+            (rows[1]["id"],),
+        )
+        conn.execute(
+            "UPDATE photos SET decision='remove',suggestion='keep',error='',status='active' WHERE id=?",
+            (rows[2]["id"],),
+        )
+        conn.execute(
+            "UPDATE photos SET decision='',suggestion='unreadable',error='broken',status='active' WHERE id=?",
+            (rows[3]["id"],),
+        )
+        conn.execute(
+            "UPDATE photos SET decision='',suggestion='remove',error='',status='missing' WHERE id=?",
+            (rows[4]["id"],),
+        )
+        conn.commit()
+
+        self.assertEqual(
+            photo_library_counts(conn),
+            {
+                "readable": 3,
+                "undecided": 1,
+                "keep": 1,
+                "remove": 1,
+                "ai_pending": 1,
+                "unreadable": 1,
+            },
+        )
+        where, params = photo_filter_where(
+            "readable", {"undecided", "keep"}, {"remove", "review"}
+        )
+        self.assertEqual(
+            conn.execute(f"SELECT COUNT(*) FROM photos WHERE {where}", params).fetchone()[0],
+            2,
+        )
+        where, params = photo_filter_where("readable", set(), set(PHOTO_AI_FILTERS))
+        self.assertEqual(
+            conn.execute(f"SELECT COUNT(*) FROM photos WHERE {where}", params).fetchone()[0],
+            0,
+        )
+        conn.close()
+
+        self.assertEqual(
+            parse_photo_filter("all", PHOTO_DECISION_FILTERS, "decisions"),
+            set(PHOTO_DECISION_FILTERS),
+        )
+        self.assertEqual(
+            parse_photo_filter("none", PHOTO_AI_FILTERS, "ai_states"),
+            set(),
+        )
+        self.assertEqual(
+            parse_photo_filter("remove,review,remove", PHOTO_AI_FILTERS, "ai_states"),
+            {"remove", "review"},
+        )
+        with self.assertRaisesRegex(ValueError, "无效值"):
+            parse_photo_filter("remove,unknown", PHOTO_AI_FILTERS, "ai_states")
+        with self.assertRaisesRegex(ValueError, "不能为空"):
+            parse_photo_filter("", PHOTO_DECISION_FILTERS, "decisions")
 
     def test_video_only_folder_reports_unsupported_files(self):
         (self.photos / "clip.mov").write_bytes(b"not-a-real-video")

@@ -43,6 +43,77 @@ RAW_EXTENSIONS = {".dng", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".orf", ".rw2"
 VIDEO_EXTENSIONS = {
     ".mov", ".mp4", ".m4v", ".avi", ".mkv", ".wmv", ".mts", ".m2ts", ".3gp", ".webm",
 }
+PHOTO_DECISION_FILTERS = frozenset({"undecided", "keep", "remove"})
+PHOTO_AI_FILTERS = frozenset({"remove", "review", "no_suggestion"})
+
+
+def parse_photo_filter(raw: str | None, allowed: frozenset[str], label: str) -> set[str]:
+    """Parse an all/none/comma-separated photo filter without changing stored values."""
+    if raw is None or raw == "all":
+        return set(allowed)
+    if raw == "":
+        raise ValueError(f"{label}不能为空；请使用 all 或 none")
+    if raw == "none":
+        return set()
+    values = {value.strip() for value in raw.split(",") if value.strip()}
+    invalid = values - allowed
+    if invalid:
+        raise ValueError(f"{label}包含无效值：{', '.join(sorted(invalid))}")
+    if not values:
+        raise ValueError(f"{label}不能为空；请使用 all 或 none")
+    return values
+
+
+def photo_filter_where(
+    file_state: str,
+    decisions: set[str],
+    ai_states: set[str],
+) -> tuple[str, list[Any]]:
+    """Return the canonical SQL predicate shared by photo queries and UI counts."""
+    if file_state not in {"readable", "unreadable"}:
+        raise ValueError("file 必须是 readable 或 unreadable")
+    clauses = ["status='active'"]
+    params: list[Any] = []
+    if file_state == "readable":
+        clauses.append("COALESCE(error,'')=''")
+        clauses.append("suggestion<>'unreadable'")
+    else:
+        clauses.append("(COALESCE(error,'')<>'' OR suggestion='unreadable')")
+
+    if not decisions or not ai_states:
+        clauses.append("0")
+        return " AND ".join(clauses), params
+
+    if decisions != PHOTO_DECISION_FILTERS:
+        stored_decisions = ["" if value == "undecided" else value for value in sorted(decisions)]
+        placeholders = ",".join("?" for _ in stored_decisions)
+        clauses.append(f"decision IN ({placeholders})")
+        params.extend(stored_decisions)
+
+    if ai_states != PHOTO_AI_FILTERS:
+        stored_ai = ["keep" if value == "no_suggestion" else value for value in sorted(ai_states)]
+        placeholders = ",".join("?" for _ in stored_ai)
+        clauses.append(f"suggestion IN ({placeholders})")
+        params.extend(stored_ai)
+    return " AND ".join(clauses), params
+
+
+def photo_library_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Counts for every sidebar preset, using the same readable-photo definition."""
+    readable = "status='active' AND COALESCE(error,'')='' AND suggestion<>'unreadable'"
+    unreadable = "status='active' AND (COALESCE(error,'')<>'' OR suggestion='unreadable')"
+    row = conn.execute(
+        f"""SELECT
+              SUM(CASE WHEN {readable} THEN 1 ELSE 0 END) readable,
+              SUM(CASE WHEN {readable} AND decision='' THEN 1 ELSE 0 END) undecided,
+              SUM(CASE WHEN {readable} AND decision='keep' THEN 1 ELSE 0 END) keep,
+              SUM(CASE WHEN {readable} AND decision='remove' THEN 1 ELSE 0 END) remove,
+              SUM(CASE WHEN {readable} AND decision=''
+                        AND suggestion IN ('remove','review') THEN 1 ELSE 0 END) ai_pending,
+              SUM(CASE WHEN {unreadable} THEN 1 ELSE 0 END) unreadable
+           FROM photos"""
+    ).fetchone()
+    return {key: int(row[key] or 0) for key in row.keys()}
 QUARANTINE_DIR = "_照片筛选隔离"
 
 

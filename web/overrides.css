@@ -20,18 +20,125 @@
   justify-content: center;
 }
 
-.quality-filters {
+.workspace aside nav {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+
+.nav-section-label {
+  display: block;
+  padding: 14px 11px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.library-filters {
   display: flex;
   gap: 8px;
   margin-left: auto;
   margin-right: 12px;
 }
 
-.quality-filters button.active {
-  border-color: var(--green);
-  background: var(--green2);
+.multi-filter {
+  position: relative;
+}
+
+.multi-filter-trigger {
+  min-width: 148px;
+  height: 42px;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.multi-filter-trigger span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.multi-filter-trigger b {
+  color: var(--ink);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.multi-filter-trigger i {
+  color: var(--muted);
+  font-style: normal;
+  transition: transform 0.15s ease;
+}
+
+.multi-filter-trigger[aria-expanded="true"] i {
+  transform: rotate(180deg);
+}
+
+.multi-filter-trigger.empty-selection {
+  border-color: #d88a82;
+  background: #fff3f1;
+}
+
+.multi-filter-trigger.empty-selection b {
+  color: var(--red);
+}
+
+.multi-filter-panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 7px);
+  right: 0;
+  width: 230px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.multi-filter-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 4px 7px 9px;
+}
+
+.multi-filter-head button {
+  padding: 5px 9px;
   color: var(--green);
-  font-weight: 700;
+  background: transparent;
+}
+
+.multi-filter-panel label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.multi-filter-panel label:hover {
+  background: #eceee8;
+}
+
+.multi-filter-panel input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--green);
+}
+
+.library-sentinel {
+  min-height: 46px;
+  padding: 14px 0 4px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .settings-tabs {
@@ -612,14 +719,15 @@ body.similar-side-open .similar-browser {
   transition: none;
 }
 
-.decided-actions {
-  margin-left: auto;
-  margin-right: 12px;
-}
-
-.decided-actions button {
+#clearDecisionsBtn {
   color: var(--red);
   border-color: color-mix(in srgb, var(--red) 55%, var(--line));
+}
+
+#clearDecisionsBtn:disabled {
+  color: var(--muted);
+  border-color: var(--line);
+  opacity: 0.55;
 }
 
 .viewer .close,
@@ -928,6 +1036,29 @@ body.similar-side-open .similar-browser {
   color: var(--ink);
 }
 
+[data-theme="night"] .multi-filter-trigger,
+[data-theme="night"] .multi-filter-panel {
+  background: var(--card);
+  color: var(--ink);
+}
+
+[data-theme="night"] .multi-filter-trigger:hover:not(:disabled) {
+  background: #303631;
+}
+
+[data-theme="night"] .multi-filter-trigger.empty-selection {
+  border-color: #8f4f49;
+  background: #382523;
+}
+
+[data-theme="night"] .multi-filter-panel label:hover {
+  background: #303631;
+}
+
+[data-theme="night"] .multi-filter-head button {
+  background: transparent;
+}
+
 [data-theme="night"] .settings-tabs,
 [data-theme="night"] .settings-footer,
 [data-theme="night"] .dialog-head {
@@ -959,6 +1090,30 @@ body.similar-side-open .similar-browser {
   border-color: #7d3b36;
 }
 
+@media (max-width: 1180px) {
+  .toolbar {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .toolbar > div:first-child {
+    width: 100%;
+  }
+
+  .library-filters {
+    margin-left: 0;
+    margin-right: auto;
+  }
+
+  .search {
+    margin-left: auto;
+  }
+
+  .search input {
+    width: 210px;
+  }
+}
+
 @media (max-width: 850px) {
   .pair-row {
     grid-column: span 2;
@@ -975,5 +1130,26 @@ body.similar-side-open .similar-browser {
 
   .similar-browser.detail-open .similar-folder-pane {
     display: none;
+  }
+
+  .library-filters {
+    width: 100%;
+  }
+
+  .multi-filter {
+    flex: 1;
+  }
+
+  .multi-filter-trigger {
+    width: 100%;
+  }
+
+  .search {
+    width: 100%;
+  }
+
+  .search input {
+    width: auto;
+    flex: 1;
   }
 }
