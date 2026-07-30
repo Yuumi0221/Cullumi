@@ -196,6 +196,15 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('[data-theme="night"] .confirm-list {', styles)
         self.assertIn("background: #171b18;", styles)
 
+    def test_settings_tabs_use_full_outline_and_subtle_night_hover(self):
+        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        self.assertIn(".settings-tabs button.active {", styles)
+        self.assertIn("border: 1px solid var(--green);", styles)
+        self.assertIn('[data-theme="night"] .settings-tabs button:not(.active) {', styles)
+        self.assertIn('[data-theme="night"] .settings-tabs button:not(.active):hover {', styles)
+        self.assertIn('[data-theme="night"] .settings-tabs button.active:hover {', styles)
+        self.assertIn("background: #303631;", styles)
+
     def test_viewer_close_refreshes_card_decisions(self):
         script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
         self.assertIn("viewerNeedsRefresh", script)

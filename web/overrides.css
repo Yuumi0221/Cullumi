@@ -34,6 +34,24 @@
   font-weight: 700;
 }
 
+.settings-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.settings-tabs button {
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+}
+
+.settings-tabs button.active {
+  border: 1px solid var(--green);
+  background: transparent;
+  color: var(--green);
+  font-weight: 700;
+}
+
 html,
 body {
   width: 100%;
@@ -785,6 +803,28 @@ body.similar-side-open .similar-browser {
 
 [data-theme="night"] nav button.active:hover {
   background: #314837;
+}
+
+[data-theme="night"] .settings-tabs button:not(.active) {
+  border-color: transparent;
+  background: transparent;
+}
+
+[data-theme="night"] .settings-tabs button:not(.active):hover {
+  border-color: var(--line);
+  background: #303631;
+}
+
+[data-theme="night"] .settings-tabs button.active {
+  border-color: var(--green);
+  background: transparent;
+  color: var(--green);
+}
+
+[data-theme="night"] .settings-tabs button.active:hover {
+  border-color: var(--green);
+  background: #303631;
+  color: var(--green);
 }
 
 [data-theme="night"] .logo {
