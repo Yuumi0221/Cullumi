@@ -153,8 +153,11 @@ class WebStaticTests(unittest.TestCase):
     def test_similar_detail_matches_library_card_size_and_keeps_toolbar_on_one_line(self):
         script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
         styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        self.assertIn('classList.toggle("similar-view-open",state.view==="similar")', script)
         self.assertIn('classList.toggle("similar-detail-open"', script)
-        self.assertIn("body.similar-detail-open .toolbar {", styles)
+        self.assertIn("body.similar-view-open .toolbar {", styles)
+        self.assertIn("body.similar-view-open .toolbar > div:first-child {", styles)
+        self.assertIn("body.similar-view-open .search {", styles)
         self.assertIn("flex-wrap: nowrap;", styles)
         self.assertIn(".similar-detail-gallery {", styles)
         self.assertIn("repeat(auto-fill, minmax(210px, 225px))", styles)

@@ -66,7 +66,7 @@ class PhotoCullerTests(unittest.TestCase):
         self.assertEqual(progress["stage"], "complete", progress)
 
     def test_profile_validation(self):
-        self.assertEqual(__version__, "1.2.1")
+        self.assertEqual(__version__, "1.2.2")
         self.assertEqual(self.config.data["theme"], "day")
         validate_profile(BUILTIN_PROFILES["balanced"])
         self.assertTrue(

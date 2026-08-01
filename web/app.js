@@ -128,6 +128,7 @@ async function loadLibraryPage(reset=false){
 }
 async function loadView(){
   if(!state.project)return;const search=encodeURIComponent($("#searchInput").value.trim());
+  document.body.classList.toggle("similar-view-open",state.view==="similar");
   $("#viewTitle").textContent={library:"照片库",similar:"相似连拍",unreadable:"无法读取",quarantine:"隔离历史"}[state.view];
   $("#libraryFilters").classList.toggle("hidden",state.view!=="library");
   $("#gallery").classList.toggle("hidden",state.view==="similar");
@@ -337,7 +338,7 @@ function confirmDeleteProfile(){const profile=state.editor;if(!profile||profile.
 function confirmClearDecisions(){const count=Object.values(state.project?.decisions||{}).reduce((a,b)=>a+b,0);if(!count){toast("没有需要清空的选择");return}$("#confirmTitle").textContent="清空所有选择？";$("#confirmBody").textContent=`将清除当前项目中 ${count} 张照片的“保留/移除”选择，照片文件不会被移动或删除。`;$("#confirmOk").textContent="确认清空";$("#confirmOk").onclick=async()=>{try{const r=await json("/api/decision/clear",{project_id:state.project.id});$("#confirm").close();toast(`已清空 ${r.cleared} 张照片的选择`);await refreshProject();loadView()}catch(e){toast(e.message)}};$("#confirm").showModal()}
 
 $("#chooseBtn").onclick=chooseProject;$("#scanBtn").onclick=startScan;$("#cancelBtn").onclick=()=>json("/api/scan/cancel",{project_id:state.project.id});
-$("#homeBtn").onclick=()=>{document.body.classList.remove("project-open","similar-detail-open","similar-side-open");$("#workspace").classList.add("hidden");$("#home").classList.remove("hidden");$("#searchInput").value="";clearInterval(state.poll);boot().catch(e=>toast(e.message))};
+$("#homeBtn").onclick=()=>{document.body.classList.remove("project-open","similar-view-open","similar-detail-open","similar-side-open");$("#workspace").classList.add("hidden");$("#home").classList.remove("hidden");$("#searchInput").value="";clearInterval(state.poll);boot().catch(e=>toast(e.message))};
 $("#settingsBtn").onclick=()=>{$("#settings").showModal();if(state.project)$("#projectCache").value=state.project.cache_root;$("#profileEditorSelect").value=state.project?.profile_id||state.profiles[0]?.id;editorLoad($("#profileEditorSelect").value)};
 $("#githubBtn").onclick=async()=>{try{await json("/api/open-github",{})}catch(e){toast(e.message)}};
 $("#themeBtn").onclick=()=>applyTheme(state.theme==="night"?"day":"night",true);

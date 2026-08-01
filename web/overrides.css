@@ -1130,12 +1130,12 @@ body.similar-side-open .similar-browser {
     width: 210px;
   }
 
-  body.similar-detail-open .toolbar {
+  body.similar-view-open .toolbar {
     flex-wrap: nowrap;
     gap: 8px;
   }
 
-  body.similar-detail-open .toolbar > div:first-child {
+  body.similar-view-open .toolbar > div:first-child {
     flex: 0 1 auto;
     width: auto;
     min-width: 0;
@@ -1150,14 +1150,14 @@ body.similar-side-open .similar-browser {
     white-space: nowrap;
   }
 
-  body.similar-detail-open .search {
+  body.similar-view-open .search {
     flex: 1 1 180px;
     width: auto;
     min-width: 120px;
     margin-left: 0;
   }
 
-  body.similar-detail-open .search input {
+  body.similar-view-open .search input {
     width: 100%;
     min-width: 0;
   }
