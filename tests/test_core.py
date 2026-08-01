@@ -20,6 +20,7 @@ from photoculler.core import (
     classification_percentiles,
     clear_decisions,
     connect_db,
+    HEIF_EXTENSIONS,
     import_decisions,
     parse_photo_filter,
     photo_filter_where,
@@ -28,6 +29,7 @@ from photoculler.core import (
     PHOTO_DECISION_FILTERS,
     quarantine_preview,
     restore_batch,
+    open_image,
     validate_profile,
 )
 
@@ -64,7 +66,7 @@ class PhotoCullerTests(unittest.TestCase):
         self.assertEqual(progress["stage"], "complete", progress)
 
     def test_profile_validation(self):
-        self.assertEqual(__version__, "1.2.0")
+        self.assertEqual(__version__, "1.2.1")
         self.assertEqual(self.config.data["theme"], "day")
         validate_profile(BUILTIN_PROFILES["balanced"])
         self.assertTrue(
@@ -77,6 +79,34 @@ class PhotoCullerTests(unittest.TestCase):
         broken["name"] = ""
         with self.assertRaises(ValueError):
             validate_profile(broken)
+
+    def test_heif_phone_variants_use_tolerant_decoder(self):
+        import pillow_heif.options
+
+        self.assertTrue(pillow_heif.options.ALLOW_INCORRECT_HEADERS)
+        self.assertTrue({".heic", ".heics", ".heif", ".heifs", ".hif"} <= HEIF_EXTENSIONS)
+        path = self.photos / "phone.heic"
+        Image.new("RGB", (64, 48), (30, 80, 120)).save(path, "HEIF", quality=80)
+        image, taken = open_image(path)
+        self.assertEqual(image.mode, "RGB")
+        self.assertEqual(image.size, (64, 48))
+        self.assertEqual(taken, "")
+        image.close()
+
+    def test_incremental_scan_retries_previous_decode_errors(self):
+        self.make_photo("retry.jpg")
+        self.scan()
+        conn = connect_db(self.project.db_path)
+        conn.execute("UPDATE photos SET error='old decoder failed' WHERE relative_path='retry.jpg'")
+        conn.commit()
+        conn.close()
+
+        self.scan()
+        conn = connect_db(self.project.db_path)
+        row = conn.execute("SELECT error,width,height FROM photos WHERE relative_path='retry.jpg'").fetchone()
+        conn.close()
+        self.assertEqual(row["error"], "")
+        self.assertEqual((row["width"], row["height"]), (640, 480))
 
     def test_builtin_modes_have_more_aggressive_ordered_thresholds(self):
         conservative = BUILTIN_PROFILES["conservative"]

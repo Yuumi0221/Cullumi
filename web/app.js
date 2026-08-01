@@ -174,6 +174,7 @@ function applySimilarMode(){
   $("#similarExpandBtn").classList.toggle("hidden",expanded);
   $("#similarBackBtn").classList.toggle("hidden",!expanded);
   $("#similarFolderPane").classList.toggle("hidden",selected&&expanded);
+  document.body.classList.toggle("similar-detail-open",state.view==="similar"&&selected);
   document.body.classList.toggle("similar-side-open",state.view==="similar"&&selected&&!expanded);
 }
 async function loadSimilarView(){
@@ -259,8 +260,9 @@ function photoMatchesLibrary(photo){
   return state.filters.decisions.has(decision)&&state.filters.ai.has(ai);
 }
 function updateCardDecision(id,decision){
-  const card=$(`[data-photo-id="${id}"]`);if(!card)return;
-  card.classList.toggle("decision-keep",decision==="keep");card.classList.toggle("decision-remove",decision==="remove");
+  $$(`[data-photo-id="${id}"]`).forEach(card=>{
+    card.classList.toggle("decision-keep",decision==="keep");card.classList.toggle("decision-remove",decision==="remove");
+  });
 }
 function reconcileLibraryDecision(id){
   const photo=state.items.find(item=>item.id===id);if(!photo)return;
@@ -335,7 +337,7 @@ function confirmDeleteProfile(){const profile=state.editor;if(!profile||profile.
 function confirmClearDecisions(){const count=Object.values(state.project?.decisions||{}).reduce((a,b)=>a+b,0);if(!count){toast("没有需要清空的选择");return}$("#confirmTitle").textContent="清空所有选择？";$("#confirmBody").textContent=`将清除当前项目中 ${count} 张照片的“保留/移除”选择，照片文件不会被移动或删除。`;$("#confirmOk").textContent="确认清空";$("#confirmOk").onclick=async()=>{try{const r=await json("/api/decision/clear",{project_id:state.project.id});$("#confirm").close();toast(`已清空 ${r.cleared} 张照片的选择`);await refreshProject();loadView()}catch(e){toast(e.message)}};$("#confirm").showModal()}
 
 $("#chooseBtn").onclick=chooseProject;$("#scanBtn").onclick=startScan;$("#cancelBtn").onclick=()=>json("/api/scan/cancel",{project_id:state.project.id});
-$("#homeBtn").onclick=()=>{document.body.classList.remove("project-open","similar-side-open");$("#workspace").classList.add("hidden");$("#home").classList.remove("hidden");$("#searchInput").value="";clearInterval(state.poll);boot().catch(e=>toast(e.message))};
+$("#homeBtn").onclick=()=>{document.body.classList.remove("project-open","similar-detail-open","similar-side-open");$("#workspace").classList.add("hidden");$("#home").classList.remove("hidden");$("#searchInput").value="";clearInterval(state.poll);boot().catch(e=>toast(e.message))};
 $("#settingsBtn").onclick=()=>{$("#settings").showModal();if(state.project)$("#projectCache").value=state.project.cache_root;$("#profileEditorSelect").value=state.project?.profile_id||state.profiles[0]?.id;editorLoad($("#profileEditorSelect").value)};
 $("#githubBtn").onclick=async()=>{try{await json("/api/open-github",{})}catch(e){toast(e.message)}};
 $("#themeBtn").onclick=()=>applyTheme(state.theme==="night"?"day":"night",true);

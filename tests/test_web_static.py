@@ -51,6 +51,11 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("state.library.offset=Math.max(0,state.library.offset-1)", script)
         self.assertIn("state.viewerDirtyIds.add(id)", script)
 
+    def test_similar_decisions_update_every_visible_copy_of_a_photo(self):
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('$$(`[data-photo-id="${id}"]`).forEach(card=>{', script)
+        self.assertNotIn('const card=$(`[data-photo-id="${id}"]`);if(!card)return;', script)
+
     def test_photo_card_is_not_passed_directly_to_array_map(self):
         script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
         self.assertNotIn(".map(photoCard)", script)
@@ -145,6 +150,16 @@ class WebStaticTests(unittest.TestCase):
         self.assertGreaterEqual(styles.count("overflow-y: auto;"), 3)
         self.assertIn('detail.face_safe?" · 人物照片请检查表情":""', script)
 
+    def test_similar_detail_matches_library_card_size_and_keeps_toolbar_on_one_line(self):
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        self.assertIn('classList.toggle("similar-detail-open"', script)
+        self.assertIn("body.similar-detail-open .toolbar {", styles)
+        self.assertIn("flex-wrap: nowrap;", styles)
+        self.assertIn(".similar-detail-gallery {", styles)
+        self.assertIn("repeat(auto-fill, minmax(210px, 225px))", styles)
+        self.assertIn("repeat(auto-fill, minmax(170px, 225px))", styles)
+
     def test_similar_selection_outlines_have_safe_insets_and_transparent_scrollbars(self):
         styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
         self.assertIn("margin-right: 12px;", styles)
@@ -236,6 +251,10 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('[data-theme="day"] button.similar-folder.active:hover:not(:disabled) {', styles)
         self.assertIn('[data-theme="day"] .similar-toolbar-actions button {', styles)
         self.assertIn('[data-theme="day"] .similar-toolbar-actions button:hover:not(:disabled) {', styles)
+        self.assertIn(".viewer .side:hover:not(:disabled)", styles)
+        self.assertIn(".viewer .viewer-decision:hover:not(:disabled)", styles)
+        self.assertIn(".viewer .viewer-keep.active:hover:not(:disabled)", styles)
+        self.assertIn(".viewer .viewer-remove.active:hover:not(:disabled)", styles)
 
     def test_confirmation_hover_and_night_quarantine_list_are_theme_correct(self):
         styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")

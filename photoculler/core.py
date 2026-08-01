@@ -21,11 +21,14 @@ import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 try:
-    from pillow_heif import register_heif_opener
+    from pillow_heif import open_heif, register_heif_opener
 
-    register_heif_opener()
+    # A few phone cameras write dimensions that differ from the decoded HEVC
+    # image.  libheif can recover those files when it is allowed to trust the
+    # decoded size instead of rejecting the container header.
+    register_heif_opener(allow_incorrect_headers=True)
 except Exception:
-    pass
+    open_heif = None
 
 try:
     import rawpy
@@ -34,9 +37,10 @@ except Exception:
 
 
 APP_NAME = "PhotoCuller"
+HEIF_EXTENSIONS = {".heic", ".heics", ".heif", ".heifs", ".hif"}
 IMAGE_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp",
-    ".heic", ".heif", ".dng", ".cr2", ".cr3", ".nef", ".arw",
+    *HEIF_EXTENSIONS, ".dng", ".cr2", ".cr3", ".nef", ".arw",
     ".raf", ".orf", ".rw2", ".pef",
 }
 RAW_EXTENSIONS = {".dng", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".orf", ".rw2", ".pef"}
@@ -557,9 +561,35 @@ def _open_raw(path: Path) -> Image.Image:
             return Image.fromarray(rgb).convert("RGB")
 
 
+def _open_heif(path: Path) -> Image.Image:
+    if open_heif is None:
+        raise RuntimeError("HEIC/HEIF 解码组件未安装")
+    container = open_heif(path, convert_hdr_to_8bit=True, reload_size=True)
+    if not len(container):
+        raise UnidentifiedImageError("HEIC/HEIF 文件中没有可读取的照片")
+
+    # Prefer the declared primary image, but tolerate phone containers whose
+    # primary item is damaged while another full-size image remains readable.
+    indices = [container.primary_index] + [
+        index for index in range(len(container)) if index != container.primary_index
+    ]
+    errors: list[Exception] = []
+    for index in indices:
+        try:
+            return container[index].to_pillow()
+        except Exception as error:
+            errors.append(error)
+    raise UnidentifiedImageError(f"HEIC/HEIF 解码失败：{errors[0]}") from errors[0]
+
+
 def open_image(path: Path) -> tuple[Image.Image, str]:
     if path.suffix.lower() in RAW_EXTENSIONS:
         return _open_raw(path), ""
+    if path.suffix.lower() in HEIF_EXTENSIONS:
+        source = _open_heif(path)
+        exif = source.getexif()
+        taken = str(exif.get(36867, "") or exif.get(306, ""))
+        return ImageOps.exif_transpose(source).convert("RGB"), taken
     with Image.open(path) as source:
         source.load()
         exif = source.getexif()
@@ -881,7 +911,15 @@ class Scanner:
                 seen.add(rel)
                 stat = path.stat()
                 old = existing.get(rel)
-                if old and old["size"] == stat.st_size and abs(old["mtime"] - stat.st_mtime) < 0.001 and old["thumbnail"]:
+                thumbnail = Path(old["thumbnail"]) if old and old["thumbnail"] else None
+                if (
+                    old
+                    and old["size"] == stat.st_size
+                    and abs(old["mtime"] - stat.st_mtime) < 0.001
+                    and not old["error"]
+                    and thumbnail is not None
+                    and thumbnail.is_file()
+                ):
                     self._set(project_id, current=index)
                     continue
                 thumb_name = hashlib.sha1(rel.encode("utf-8")).hexdigest() + ".jpg"

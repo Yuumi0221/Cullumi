@@ -30,6 +30,7 @@ from photoculler.core import (
     clear_decisions,
     connect_db,
     export_decisions,
+    HEIF_EXTENSIONS,
     import_decisions,
     parse_photo_filter,
     photo_filter_where,
@@ -496,7 +497,7 @@ class Handler(BaseHTTPRequestHandler):
     def api_photo(self) -> None:
         project, row = self._photo_row()
         path = project.root / row["relative_path"]
-        if path.suffix.lower() in {".heic", ".heif", ".dng", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".orf", ".rw2", ".pef"}:
+        if path.suffix.lower() in HEIF_EXTENSIONS | {".dng", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".orf", ".rw2", ".pef"}:
             self._send_file(Path(row["thumbnail"]), "image/jpeg")
         else:
             self._send_file(path)
