@@ -545,6 +545,12 @@ nav em {
   font-size:22px
 }
 
+.dialog-head button svg line {
+  stroke:currentColor;
+  stroke-width:2;
+  stroke-linecap:round
+}
+
 .settings-tabs {
   padding:12px 25px 0
 }
@@ -1841,13 +1847,10 @@ body.similar-side-open .similar-browser {
 
 [data-theme="night"] .settings-tabs,
 [data-theme="night"] .settings-footer,
+[data-theme="night"] .settings-page,
 [data-theme="night"] .dialog-head {
   background: var(--card);
   border-color: var(--line);
-}
-
-[data-theme="night"] .settings-page {
-  background: #1a1e1b;
 }
 
 [data-theme="night"] .estimate {

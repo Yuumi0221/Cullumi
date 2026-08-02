@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>通用照片筛选器</title>
+  <title>照片筛选器</title>
   <link rel="stylesheet" href="/static/app.css?v=1.0.0">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><button id="homeBtn" class="logo" title="返回首页" aria-label="返回首页">⌂</button><div><b>通用照片筛选器</b></div></div>
+    <div class="brand"><button id="homeBtn" class="logo" title="返回首页" aria-label="返回首页">⌂</button><div><b>照片筛选器</b></div></div>
     <div class="top-actions">
       <select id="profileSelect" class="project-only-action" title="分析模式"></select>
       <button id="scanBtn" class="project-only-action">开始扫描</button>
@@ -26,7 +26,7 @@
   <main>
     <section id="home" class="home">
       <div class="hero">
-        <div><p class="eyebrow">从任意照片文件夹开始</p><h1>快速留下真正值得看的照片</h1>
+        <div><p class="eyebrow">从任意照片文件夹开始</p><h1>快速留下想要保存的照片</h1>
           <p>递归扫描常见图片、HEIC/HEIF 与相机 RAW。所有分析均在本机完成。</p>
           <button id="chooseBtn" class="primary">选择照片文件夹</button>
         </div>
@@ -124,7 +124,12 @@
   </dialog>
 
   <dialog id="settings" class="panel-dialog">
-    <div class="dialog-head"><h2>设置与分析模式</h2><button data-close>×</button></div>
+    <div class="dialog-head"><h2>设置与分析模式</h2>
+      <button data-close>
+        <svg width="16" height="16">
+          <line x1="3" y1="3" x2="13" y2="13"/>
+          <line x1="13" y1="3" x2="3" y2="13"/>
+        </svg></button></div>
     <div class="settings-tabs"><button data-setting="general" class="active">常规与存储</button><button data-setting="profiles">自定义模式</button></div>
     <section id="generalSettings" class="settings-page">
       <label class="toggle"><input id="autoAdvance" type="checkbox"><span>标记后自动下一张</span></label>
@@ -136,7 +141,7 @@
     </section>
     <section id="profileSettings" class="settings-page hidden">
       <div class="profile-toolbar"><select id="profileEditorSelect"></select><button id="cloneProfile">复制为自定义</button><button id="deleteProfile" class="danger">删除</button></div>
-      <label>配置名称<input id="profileName" maxlength="40"></label>
+      <label>配置名称：<input id="profileName" maxlength="40"></label>
       <div class="form-grid">
         <label>阈值方式<select data-p="quality.threshold_mode"><option value="absolute">绝对阈值</option><option value="percentile">照片集百分位（清晰度）</option></select></label>
         <label>异常组合<select data-p="quality.match_mode"><option value="any">任一异常</option><option value="all">至少两项异常</option></select></label>

@@ -673,7 +673,7 @@ def run() -> None:
     try:
         import webview
 
-        webview.create_window("通用照片筛选器", url, width=1460, height=940, min_size=(980, 680))
+        webview.create_window("照片筛选器", url, width=1460, height=940, min_size=(980, 680))
         webview.start()
     except Exception as error:
         try:
