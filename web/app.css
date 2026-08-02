@@ -133,23 +133,27 @@ select:focus-visible {
 .home {
   width:100%;
   max-width:1280px;
-  min-height:100%;
+  height:calc(100vh - 70px);
+  min-height:0;
   margin:0 auto;
   padding:clamp(24px,4vh,56px) clamp(28px,4vw,80px);
   display:grid;
   grid-template-columns:minmax(330px,.618fr) minmax(0,1fr);
   align-items:stretch;
   gap:clamp(20px,2.4vw,42px);
+  overflow:hidden;
   box-sizing:border-box;
 } 
 
 .hero {
+  --hero-pad-y:clamp(34px,3.4vw,58px);
+  --hero-pad-x:clamp(30px,3vw,52px);
   position:relative;
   height:100%;
   min-height:0;
   border-radius:24px;
   background:#e4ebe400;
-  padding:clamp(34px,3.4vw,58px) clamp(30px,3vw,52px);
+  padding:var(--hero-pad-y) var(--hero-pad-x);
   display:flex;
   flex-direction:column;
   align-items:stretch;
@@ -158,10 +162,13 @@ select:focus-visible {
   box-shadow:none
 }
 
-.hero::before {
+.hero > div:first-child::before {
   content:"";
   position:absolute;
-  inset:18px;
+  top:calc(18px - var(--hero-pad-y));
+  right:calc(18px - var(--hero-pad-x));
+  bottom:-50px;
+  left:calc(18px - var(--hero-pad-x));
   pointer-events:none;
   background:
     linear-gradient(var(--green),var(--green)) left top/28px 2px no-repeat,
@@ -306,6 +313,7 @@ select:focus-visible {
   padding:clamp(28px,3vw,48px);
   display:flex;
   flex-direction:column;
+  overflow:hidden;
   border:0;
   border-radius:0;
   background:transparent
@@ -375,10 +383,17 @@ select:focus-visible {
 }
 
 .recent-grid {
+  flex:1;
+  min-height:0;
   display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));
   align-content:start;
-  gap:12px
+  gap:12px;
+  padding:4px 4px 0 0;
+  overflow-y:auto;
+  overflow-x:hidden;
+  overscroll-behavior:contain;
+  scrollbar-gutter:stable
 }
 
 .recent-empty {
@@ -386,19 +401,23 @@ select:focus-visible {
 }
 
 .recent {
+  position:relative;
   background:var(--card);
   border:1px solid var(--line);
   border-radius:13px;
   padding:17px 18px 16px;
   text-align:left;
-  box-shadow:0 5px 18px rgba(35,48,40,.035)
+  box-shadow:0 5px 18px rgba(35,48,40,.035);
+  transition:transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+  z-index:0
 }
 
 .recent:hover:not(:disabled) {
   border-color:#a9b7ac;
   background:var(--card);
   transform:translateY(-2px);
-  box-shadow:0 12px 28px rgba(35,48,40,.09)
+  box-shadow:0 12px 28px rgba(35,48,40,.09);
+  z-index:1
 }
 
 .recent b,.recent span {
@@ -2455,6 +2474,8 @@ body.similar-side-open .similar-browser {
 @media (max-width: 900px) {
   .home {
     height:auto;
+    min-height:100%;
+    overflow:visible;
     grid-template-columns:1fr
   }
 
