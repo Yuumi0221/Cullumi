@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>照片筛选器</title>
-  <link rel="stylesheet" href="/static/app.css?v=1.0.0-ui3">
+  <title>Photo Culler</title>
+  <link rel="stylesheet" href="/static/app.css?v=1.0.0-ui7">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><button id="homeBtn" class="logo" title="返回首页" aria-label="返回首页">⌂</button><div><b>照片筛选器</b></div></div>
+    <div class="brand"><button id="homeBtn" class="logo" title="返回首页" aria-label="返回首页">⌂</button></div>
     <div class="top-actions">
       <select id="profileSelect" class="project-only-action" title="分析模式"></select>
       <button id="scanBtn" class="project-only-action">开始扫描</button>
@@ -26,21 +26,27 @@
   <main>
     <section id="home" class="home">
       <div class="hero">
-        <div><p class="eyebrow">从任意照片文件夹开始</p><h1>快速留下美好瞬间</h1>
+        <div><p class="eyebrow">从任意照片文件夹开始</p><h1><span>快速留下</span><span>美好瞬间</span></h1>
           <p>递归扫描常见图片、HEIC/HEIF 与相机 RAW。所有分析均在本机完成。</p>
-          <button id="chooseBtn" class="primary">选择照片文件夹</button>
+          <button id="chooseBtn" class="primary hero-choose">选择照片文件夹</button>
         </div>
-        <div class="hero-art" aria-hidden="true"><span><b>JPG</b><small>STANDARD</small></span><span><b>HEIC</b><small>MOBILE</small></span><span><b>RAW</b><small>CAMERA</small></span></div>
+        <!-- <div class="hero-art" aria-hidden="true"><span><b>JPG</b><small>STANDARD</small></span><span><b>HEIC</b><small>MOBILE</small></span><span><b>RAW</b><small>CAMERA</small></span></div> -->
       </div>
       <section class="recent-panel" aria-labelledby="recentTitle">
-        <div class="section-title"><h2 id="recentTitle">最近项目</h2></div>
+        <div class="section-title recent-title-row">
+          <h2 id="recentTitle">最近项目</h2>
+          <label class="recent-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+            <input id="recentSearch" type="search" placeholder="搜索项目名称" aria-label="搜索最近项目名称">
+          </label>
+        </div>
         <div id="recentList" class="recent-grid"></div>
       </section>
     </section>
 
     <section id="workspace" class="workspace hidden">
       <aside>
-        <div class="project-box"><small>当前项目</small><b id="projectName"></b><span id="projectPath"></span></div>
+        <div id="projectBox" class="project-box" role="button" tabindex="0" title="双击在文件管理器中打开" aria-label="当前项目，双击在文件管理器中打开"><small>当前项目</small><b id="projectName"></b><span id="projectPath"></span></div>
         <nav id="nav">
           <button data-nav="library" data-preset="library" class="active">照片库 <em id="libraryCount">0</em></button>
           <span class="nav-section-label">智能整理</span>

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 import unittest
 
@@ -98,7 +99,8 @@ class WebStaticTests(unittest.TestCase):
 
     def test_suggestion_badges_share_dark_translucent_background(self):
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
-        self.assertGreaterEqual(styles.count("background: rgba(13, 16, 14, 0.76);"), 3)
+        matches = re.findall(r"background:\s*(?:rgba\(13,\s*16,\s*14,\s*0\.76\)|#[0-9A-Fa-f]{8})\s*;?", styles)
+        self.assertGreaterEqual(len(matches), 3)
         self.assertIn(".badge-candidate-remove", styles)
         self.assertIn(".badge-review", styles)
         self.assertIn(".badge-recommended", styles)
@@ -339,11 +341,26 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("transform:none;", styles)
         self.assertIn("box-shadow:none;", styles)
 
-    def test_home_uses_golden_split_unified_fonts_and_svg_filter_chevrons(self):
+    def test_home_uses_adaptive_golden_split_and_searchable_two_column_recents(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn('class="recent-panel"', markup)
-        self.assertIn("grid-template-columns:minmax(0,1fr) minmax(330px,.618fr);", styles)
+        self.assertIn('class="primary hero-choose"', markup)
+        self.assertIn('<div class="section-title recent-title-row">', markup)
+        self.assertLess(markup.index('id="recentTitle"'), markup.index('id="recentSearch"'))
+        self.assertIn('id="recentSearch"', markup)
+        self.assertIn('<h1><span>快速留下</span><span>美好瞬间</span></h1>', markup)
+        self.assertIn("function renderRecentProjects()", script)
+        self.assertIn('$("#recentSearch").oninput=', script)
+        self.assertIn("grid-template-columns:minmax(330px,.618fr) minmax(0,1fr);", styles)
+        self.assertIn("grid-template-columns:repeat(2,minmax(0,1fr));", styles)
+        self.assertIn("padding:clamp(24px,4vh,56px) clamp(28px,4vw,80px);", styles)
+        self.assertRegex(styles, r"background\s*:\s*#e4ebe4(?:00)?\s*;")
+        self.assertIn(".hero-choose {\n  width:auto;", styles)
+        self.assertIn(".recent-panel {\n  min-width:0;\n  min-height:0;", styles)
+        self.assertIn("background:transparent", styles)
+        self.assertIn("box-shadow:none", styles)
         self.assertEqual(styles.count('"Segoe UI","Microsoft YaHei",sans-serif;'), 3)
         self.assertEqual(markup.count('class="filter-chevron"'), 2)
         self.assertNotIn("<i>⌄</i>", markup)
@@ -351,6 +368,15 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("background:linear-gradient(145deg,#467257", styles)
         self.assertIn("button:focus-visible", styles)
         self.assertIn("@media (prefers-reduced-motion: reduce)", styles)
+
+    def test_current_project_card_opens_its_folder_on_double_click(self):
+        markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('id="projectBox"', markup)
+        self.assertIn('title="双击在文件管理器中打开"', markup)
+        self.assertIn("async function openCurrentProjectFolder()", script)
+        self.assertIn('$("#projectBox").ondblclick=openCurrentProjectFolder', script)
+        self.assertIn('json("/api/project/open-folder",{project_id:state.project.id})', script)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 const TOKEN=window.APP_TOKEN;
 const DECISION_VALUES=["undecided","keep","remove"],AI_VALUES=["remove","review","no_suggestion"],LIBRARY_PAGE_SIZE=120;
-const state={project:null,view:"library",activeNav:"library",items:[],profiles:[],settings:{},recentProjects:[],recentMenuId:"",viewerIndex:0,viewerNeedsRefresh:false,viewerDirtyIds:new Set(),editor:null,poll:null,lastScan:null,theme:localStorage.getItem("photo-culler-theme")||"day",filters:{decisions:new Set(DECISION_VALUES),ai:new Set(AI_VALUES)},library:{offset:0,total:0,done:false,loading:false,generation:0},similar:{groups:[],selectedId:"",mode:"closed",listSearch:"",memberSearch:""},viewerTransform:{scale:1,x:0,y:0,dragging:false,moved:false,suppressClick:false},viewerClickTimer:null,updateChecked:false,updateChecking:false};
+const state={project:null,view:"library",activeNav:"library",items:[],profiles:[],settings:{},recentProjects:[],recentQuery:"",recentMenuId:"",viewerIndex:0,viewerNeedsRefresh:false,viewerDirtyIds:new Set(),editor:null,poll:null,lastScan:null,theme:localStorage.getItem("photo-culler-theme")||"day",filters:{decisions:new Set(DECISION_VALUES),ai:new Set(AI_VALUES)},library:{offset:0,total:0,done:false,loading:false,generation:0},similar:{groups:[],selectedId:"",mode:"closed",listSearch:"",memberSearch:""},viewerTransform:{scale:1,x:0,y:0,dragging:false,moved:false,suppressClick:false},viewerClickTimer:null,updateChecked:false,updateChecking:false};
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const api=async(path,body)=>{
   const opts=body===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json","X-App-Token":TOKEN},body:JSON.stringify(body)};
@@ -15,13 +15,20 @@ const stageName={starting:"准备扫描",discovering:"正在发现照片",analyz
 function applyTheme(theme,persist=false){state.theme=theme;document.documentElement.dataset.theme=theme;localStorage.setItem("photo-culler-theme",theme);const night=theme==="night",button=$("#themeBtn");button.title=night?"切换日间模式":"切换夜间模式";button.setAttribute("aria-label",button.title);if(persist)json("/api/settings",{theme}).catch(e=>toast(`主题保存失败：${e.message}`))}
 applyTheme(state.theme);
 
+const recentProjectName=project=>project.root.split(/[\\/]/).pop()||project.root;
+function renderRecentProjects(){
+  const query=state.recentQuery.trim().toLocaleLowerCase();
+  const projects=state.recentProjects.filter(project=>recentProjectName(project).toLocaleLowerCase().includes(query));
+  $("#recentList").innerHTML=projects.length?projects.map(project=>`<button class="recent" data-pid="${project.id}"><b>${esc(recentProjectName(project))}</b><span>${esc(project.root)}</span><small>${project.available?"可打开":"存储目录当前不可用"}</small></button>`).join(""):`<div class="empty recent-empty"><b>${state.recentProjects.length?"没有匹配的项目":"暂无最近项目"}</b><span>${state.recentProjects.length?"请尝试其他项目名称。":"选择一个照片文件夹即可开始。"}</span></div>`;
+  $$(".recent").forEach(item=>{item.onclick=()=>openProject(item.dataset.pid);item.oncontextmenu=event=>openRecentMenu(event,item.dataset.pid)});
+}
+
 async function boot(){
   const b=await json("/api/bootstrap");state.profiles=b.profiles;state.settings=b.settings;state.recentProjects=b.recent_projects;
   applyTheme(b.settings.theme||state.theme);
   $("#appVersion").textContent=`v${b.version}`;
   renderProfiles();$("#autoAdvance").checked=!!b.settings.auto_advance;$("#autoCheckUpdates").checked=!!b.settings.auto_check_updates;$("#defaultCache").value=b.settings.default_cache_root;
-  $("#recentList").innerHTML=b.recent_projects.length?b.recent_projects.map(p=>`<button class="recent" data-pid="${p.id}"><b>${esc(p.root.split(/[\\/]/).pop())}</b><span>${esc(p.root)}</span><small>${p.available?"可打开":"存储目录当前不可用"}</small></button>`).join(""):`<div class="empty"><b>暂无最近项目</b><span>选择一个照片文件夹即可开始。</span></div>`;
-  $$(".recent").forEach(x=>{x.onclick=()=>openProject(x.dataset.pid);x.oncontextmenu=e=>openRecentMenu(e,x.dataset.pid)});
+  renderRecentProjects();
   if(b.settings.auto_check_updates&&!state.updateChecked){state.updateChecked=true;setTimeout(()=>checkForUpdates(false),450)}
 }
 function renderProfiles(){
@@ -325,6 +332,7 @@ function openRecentMenu(event,projectId){
   menu.style.left=`${Math.max(8,left)}px`;menu.style.top=`${Math.max(8,top)}px`;
 }
 async function openRecentFolder(){const id=state.recentMenuId;closeRecentMenu();if(!id)return;try{await json("/api/project/open-folder",{project_id:id})}catch(e){toast(e.message)}}
+async function openCurrentProjectFolder(){if(!state.project)return;try{await json("/api/project/open-folder",{project_id:state.project.id})}catch(e){toast(e.message)}}
 async function checkForUpdates(manual=true){
   if(state.updateChecking)return;state.updateChecking=true;const button=$("#checkUpdateBtn"),status=$("#updateStatus");button.disabled=true;if(manual)status.textContent="正在连接 GitHub…";
   try{
@@ -366,11 +374,12 @@ function confirmAiRemoveSuggestions(){
   $("#confirm").showModal();
 }
 
-$("#chooseBtn").onclick=chooseProject;$("#scanBtn").onclick=startScan;$("#cancelBtn").onclick=()=>json("/api/scan/cancel",{project_id:state.project.id});
+$("#chooseBtn").onclick=chooseProject;$("#recentSearch").oninput=event=>{state.recentQuery=event.target.value;renderRecentProjects()};$("#scanBtn").onclick=startScan;$("#cancelBtn").onclick=()=>json("/api/scan/cancel",{project_id:state.project.id});
 $("#homeBtn").onclick=()=>{document.body.classList.remove("project-open","similar-view-open","similar-detail-open","similar-side-open");$("#workspace").classList.add("hidden");$("#home").classList.remove("hidden");$("#searchInput").value="";clearInterval(state.poll);boot().catch(e=>toast(e.message))};
 $("#settingsBtn").onclick=()=>{$("#settings").showModal();if(state.project)$("#projectCache").value=state.project.cache_root;$("#profileEditorSelect").value=state.project?.profile_id||state.profiles[0]?.id;editorLoad($("#profileEditorSelect").value)};
 $("#githubBtn").onclick=async()=>{try{await json("/api/open-github",{})}catch(e){toast(e.message)}};
 $("#themeBtn").onclick=()=>applyTheme(state.theme==="night"?"day":"night",true);
+$("#projectBox").ondblclick=openCurrentProjectFolder;$("#projectBox").onkeydown=event=>{if(event.key!=="Enter")return;event.preventDefault();openCurrentProjectFolder()};
 $("#recentOpenFolder").onclick=openRecentFolder;$("#recentRemove").onclick=confirmRemoveRecent;
 $$("[data-close]").forEach(x=>x.onclick=closeDialogs);
 $("#nav").onclick=e=>{
