@@ -81,13 +81,8 @@ button:hover {
   font-size:18px
 }
 
-.brand small,.brand div {
+.brand div {
   display:block
-}
-
-.brand small {
-  color:var(--muted);
-  font-size:11px
 }
 
 .logo {
@@ -533,21 +528,20 @@ nav em {
 
 .dialog-head {
   display:flex;
+  align-items:center;
   justify-content:space-between;
   padding:22px 26px;
   border-bottom:1px solid var(--line)
 }
 
-.dialog-head h2,.dialog-head p {
-  margin:0
-}
-
-.dialog-head p {
-  color:var(--muted)
+.dialog-head h2 {
+  margin:0;
+  line-height:1;
 }
 
 .dialog-head button {
   border:0;
+  line-height:1.2;
   font-size:22px
 }
 

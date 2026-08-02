@@ -8,7 +8,7 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><button id="homeBtn" class="logo" title="返回首页" aria-label="返回首页">⌂</button><div><b>通用照片筛选器</b><small>离线分析 · 文件由你确认后才会移动</small></div></div>
+    <div class="brand"><button id="homeBtn" class="logo" title="返回首页" aria-label="返回首页">⌂</button><div><b>通用照片筛选器</b></div></div>
     <div class="top-actions">
       <select id="profileSelect" class="project-only-action" title="分析模式"></select>
       <button id="scanBtn" class="project-only-action">开始扫描</button>
@@ -124,7 +124,7 @@
   </dialog>
 
   <dialog id="settings" class="panel-dialog">
-    <div class="dialog-head"><div><h2>设置与分析模式</h2><p>存储位置和配置均只保存在本机。</p></div><button data-close>×</button></div>
+    <div class="dialog-head"><h2>设置与分析模式</h2><button data-close>×</button></div>
     <div class="settings-tabs"><button data-setting="general" class="active">常规与存储</button><button data-setting="profiles">自定义模式</button></div>
     <section id="generalSettings" class="settings-page">
       <label class="toggle"><input id="autoAdvance" type="checkbox"><span>标记后自动下一张</span></label>
