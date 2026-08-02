@@ -24,6 +24,7 @@ from photoculler.core import (
     connect_db,
     HEIF_EXTENSIONS,
     import_decisions,
+    mark_ai_remove_suggestions,
     parse_photo_filter,
     photo_filter_where,
     photo_library_counts,
@@ -206,6 +207,36 @@ class PhotoCullerTests(unittest.TestCase):
         conn.close()
         self.assertEqual(decisions, ["", ""])
 
+    def test_mark_ai_remove_suggestions_only_marks_safe_pending_rows(self):
+        for index in range(5):
+            self.make_photo(f"ai-remove-{index}.jpg", (70 + index * 20, 90, 120))
+        self.scan()
+        conn = connect_db(self.project.db_path)
+        rows = conn.execute("SELECT id FROM photos ORDER BY relative_path").fetchall()
+        states = [
+            ("", "remove", "", "active"),
+            ("keep", "remove", "", "active"),
+            ("", "review", "", "active"),
+            ("", "remove", "broken", "active"),
+            ("", "remove", "", "missing"),
+        ]
+        for row, (decision, suggestion, error, status) in zip(rows, states):
+            conn.execute(
+                "UPDATE photos SET decision=?,suggestion=?,error=?,status=? WHERE id=?",
+                (decision, suggestion, error, status, row["id"]),
+            )
+        conn.commit()
+        conn.close()
+
+        self.assertEqual(mark_ai_remove_suggestions(self.project), 1)
+        conn = connect_db(self.project.db_path)
+        actual = [
+            row["decision"]
+            for row in conn.execute("SELECT decision FROM photos ORDER BY relative_path")
+        ]
+        conn.close()
+        self.assertEqual(actual, ["remove", "keep", "", "", ""])
+
     def test_photo_library_filters_and_counts_share_state_definitions(self):
         for index in range(5):
             self.make_photo(f"filter-{index}.jpg", (60 + index * 20, 90, 120))
@@ -242,6 +273,7 @@ class PhotoCullerTests(unittest.TestCase):
                 "keep": 1,
                 "remove": 1,
                 "ai_pending": 1,
+                "ai_remove_pending": 1,
                 "unreadable": 1,
             },
         )

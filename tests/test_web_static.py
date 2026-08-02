@@ -191,14 +191,16 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("repeat(auto-fill, minmax(210px, 210px))", styles)
         self.assertIn("repeat(auto-fill, minmax(170px, 210px))", styles)
 
-    def test_similar_selection_outlines_have_safe_insets_and_transparent_scrollbars(self):
+    def test_similar_selection_outlines_have_safe_insets_and_subtle_scrollbars(self):
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn("margin-right: 12px;", styles)
         self.assertIn("overflow-x: hidden;", styles)
         self.assertIn("padding: 3px 4px 40px;", styles)
         self.assertIn("padding: 2px 2px 24px;", styles)
         self.assertIn("*::-webkit-scrollbar-track", styles)
-        self.assertIn("scrollbar-color: rgba(99, 105, 100, 0.62) transparent;", styles)
+        self.assertIn("scrollbar-color: rgba(99,105,100,.24) transparent;", styles)
+        self.assertIn('[data-theme="night"] * {', styles)
+        self.assertIn("scrollbar-color:rgba(160,172,162,.26) transparent", styles)
         self.assertIn("*::-webkit-scrollbar-button", styles)
 
     def test_viewer_supports_click_wheel_reset_and_drag(self):
@@ -295,9 +297,18 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("background: #171b18;", styles)
 
     def test_settings_tabs_use_full_outline_and_subtle_night_hover(self):
+        markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn(".settings-tabs button.active {", styles)
         self.assertIn("border: 1px solid var(--green);", styles)
+        self.assertIn("border-bottom:0", styles)
+        self.assertIn("border:1px solid var(--line);", styles)
+        self.assertNotIn("border-bottom-color:var(--card)", styles)
+        self.assertIn("#generalSettings > .toggle {", styles)
+        self.assertIn("margin-bottom:8px", styles)
+        self.assertIn("background:transparent", styles)
+        self.assertIn('class="update-row">\n        <label class="toggle"', markup)
+        self.assertIn('<button id="checkUpdateBtn">检查更新</button>', markup)
         self.assertIn('[data-theme="night"] .settings-tabs button:not(.active) {', styles)
         self.assertIn('[data-theme="night"] .settings-tabs button:not(.active):hover {', styles)
         self.assertIn('[data-theme="night"] .settings-tabs button.active:hover {', styles)
@@ -308,6 +319,38 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("viewerNeedsRefresh", script)
         self.assertIn("async function syncViewerDecisions()", script)
         self.assertIn('$("#viewer").addEventListener("close"', script)
+
+    def test_ai_suggestions_can_be_marked_for_removal_in_one_confirmed_action(self):
+        markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        server = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
+        self.assertIn('id="markAiRemoveBtn"', markup)
+        self.assertIn('id="aiRemovePendingCount"', markup)
+        self.assertIn("function confirmAiRemoveSuggestions()", script)
+        self.assertIn('json("/api/decision/ai-remove"', script)
+        self.assertIn('state.activeNav!=="ai"', script)
+        self.assertIn('"/api/decision/ai-remove": self.api_decision_ai_remove', server)
+        self.assertIn(".ai-sweep-button {", styles)
+        self.assertNotIn("batch-confirm-summary", script)
+        self.assertNotIn("batch-confirm-summary", styles)
+        self.assertIn(".toolbar button.ai-sweep-button:hover:not(:disabled) {", styles)
+        self.assertIn('[data-theme="night"] .toolbar button.ai-sweep-button:hover:not(:disabled) {', styles)
+        self.assertIn("transform:none;", styles)
+        self.assertIn("box-shadow:none;", styles)
+
+    def test_home_uses_golden_split_unified_fonts_and_svg_filter_chevrons(self):
+        markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        self.assertIn('class="recent-panel"', markup)
+        self.assertIn("grid-template-columns:minmax(0,1fr) minmax(330px,.618fr);", styles)
+        self.assertEqual(styles.count('"Segoe UI","Microsoft YaHei",sans-serif;'), 3)
+        self.assertEqual(markup.count('class="filter-chevron"'), 2)
+        self.assertNotIn("<i>⌄</i>", markup)
+        self.assertIn("align-items:center;", styles)
+        self.assertIn("background:linear-gradient(145deg,#467257", styles)
+        self.assertIn("button:focus-visible", styles)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", styles)
 
 
 if __name__ == "__main__":

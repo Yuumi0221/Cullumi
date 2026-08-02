@@ -114,6 +114,8 @@ def photo_library_counts(conn: sqlite3.Connection) -> dict[str, int]:
               SUM(CASE WHEN {readable} AND decision='remove' THEN 1 ELSE 0 END) remove,
               SUM(CASE WHEN {readable} AND decision=''
                         AND suggestion IN ('remove','review') THEN 1 ELSE 0 END) ai_pending,
+              SUM(CASE WHEN {readable} AND decision=''
+                        AND suggestion='remove' THEN 1 ELSE 0 END) ai_remove_pending,
               SUM(CASE WHEN {unreadable} THEN 1 ELSE 0 END) unreadable
            FROM photos"""
     ).fetchone()
@@ -1237,6 +1239,20 @@ def clear_decisions(project: Project) -> int:
     cleared = cursor.rowcount
     conn.close()
     return cleared
+
+
+def mark_ai_remove_suggestions(project: Project) -> int:
+    """Mark only active, readable, undecided AI-remove suggestions for removal."""
+    conn = connect_db(project.db_path)
+    cursor = conn.execute(
+        """UPDATE photos SET decision='remove'
+           WHERE status='active' AND COALESCE(error,'')=''
+             AND suggestion='remove' AND decision=''"""
+    )
+    conn.commit()
+    marked = cursor.rowcount
+    conn.close()
+    return marked
 
 
 def quarantine_preview(project: Project) -> dict[str, Any]:

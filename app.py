@@ -33,6 +33,7 @@ from photoculler.core import (
     export_decisions,
     HEIF_EXTENSIONS,
     import_decisions,
+    mark_ai_remove_suggestions,
     parse_photo_filter,
     photo_filter_where,
     photo_library_counts,
@@ -310,6 +311,7 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/scan": self.api_scan,
                 "/api/scan/cancel": self.api_scan_cancel,
                 "/api/decision": self.api_decision,
+                "/api/decision/ai-remove": self.api_decision_ai_remove,
                 "/api/decision/clear": self.api_decision_clear,
                 "/api/settings": self.api_settings,
                 "/api/profile/save": self.api_profile_save,
@@ -567,6 +569,10 @@ class Handler(BaseHTTPRequestHandler):
     def api_decision_clear(self, body: dict[str, Any]) -> None:
         project = MANAGER.from_id(body["project_id"])
         self._send_json({"cleared": clear_decisions(project)})
+
+    def api_decision_ai_remove(self, body: dict[str, Any]) -> None:
+        project = MANAGER.from_id(body["project_id"])
+        self._send_json({"marked": mark_ai_remove_suggestions(project)})
 
     def api_settings(self, body: dict[str, Any]) -> None:
         if "default_cache_root" in body:

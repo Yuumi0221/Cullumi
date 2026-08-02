@@ -41,6 +41,7 @@ function updateCounts(p){
   $("#libraryCount").textContent=c.readable??p.total??0;$("#aiCount").textContent=c.ai_pending??0;
   $("#undecidedCount").textContent=c.undecided??0;$("#keepCount").textContent=c.keep??p.decisions?.keep??0;
   $("#removeCount").textContent=c.remove??p.decisions?.remove??0;$("#unreadableCount").textContent=c.unreadable??p.counts?.unreadable??0;
+  const aiRemovePending=c.ai_remove_pending??0;$("#aiRemovePendingCount").textContent=aiRemovePending;$("#markAiRemoveBtn").disabled=!aiRemovePending;
   $("#pairCount").textContent=p.similar_groups??p.pairs;
   $("#clearDecisionsBtn").disabled=!Object.values(p.decisions||{}).reduce((sum,count)=>sum+count,0);
 }
@@ -130,8 +131,10 @@ async function loadLibraryPage(reset=false){
 async function loadView(){
   if(!state.project)return;const search=encodeURIComponent($("#searchInput").value.trim());
   document.body.classList.toggle("similar-view-open",state.view==="similar");
-  $("#viewTitle").textContent={library:"照片库",similar:"相似连拍",unreadable:"无法读取",quarantine:"隔离历史"}[state.view];
+  const libraryTitle={library:"照片库",ai:"AI 建议",undecided:"待决定",keep:"已保留",remove:"已移除"}[state.activeNav]||"照片库";
+  $("#viewTitle").textContent=state.view==="library"?libraryTitle:{similar:"相似连拍",unreadable:"无法读取",quarantine:"隔离历史"}[state.view];
   $("#libraryFilters").classList.toggle("hidden",state.view!=="library");
+  $("#aiBatchAction").classList.toggle("hidden",state.view!=="library"||state.activeNav!=="ai");
   $("#gallery").classList.toggle("hidden",state.view==="similar");
   $("#similarBrowser").classList.toggle("hidden",state.view!=="similar");
   $("#librarySentinel").classList.toggle("hidden",state.view!=="library");
@@ -355,6 +358,13 @@ function confirmRemoveRecent(){
 }
 function confirmDeleteProfile(){const profile=state.editor;if(!profile||profile.builtin)return;$("#confirmTitle").textContent="删除自定义模式？";$("#confirmBody").textContent=`“${profile.name}”将从本机配置中删除，此操作无法撤销。`;$("#confirmOk").textContent="确认删除";$("#confirmOk").onclick=async()=>{try{await json("/api/profile/delete",{profile_id:profile.id});$("#confirm").close();state.profiles=state.profiles.filter(x=>x.id!==profile.id);renderProfiles();editorLoad(state.profiles[0].id);toast("自定义模式已删除")}catch(e){toast(e.message)}};$("#confirm").showModal()}
 function confirmClearDecisions(){const count=Object.values(state.project?.decisions||{}).reduce((a,b)=>a+b,0);if(!count){toast("没有需要清空的选择");return}$("#confirmTitle").textContent="清空所有选择？";$("#confirmBody").textContent=`将清除当前项目中 ${count} 张照片的“保留/移除”选择，照片文件不会被移动或删除。`;$("#confirmOk").textContent="确认清空";$("#confirmOk").onclick=async()=>{try{const r=await json("/api/decision/clear",{project_id:state.project.id});$("#confirm").close();toast(`已清空 ${r.cleared} 张照片的选择`);await refreshProject();loadView()}catch(e){toast(e.message)}};$("#confirm").showModal()}
+function confirmAiRemoveSuggestions(){
+  const count=state.project?.library_counts?.ai_remove_pending??0;if(!count){toast("没有未决定的 AI 建议移除照片");return}
+  $("#confirmTitle").textContent=`标记 ${count} 张建议移除照片？`;
+  $("#confirmBody").textContent="这些照片会统一标记为“移除”。照片文件不会立即移动，之后仍需点击“隔离已标记移除”确认处理。";
+  const button=$("#confirmOk");button.textContent="全部标记移除";button.onclick=async()=>{button.disabled=true;try{const r=await json("/api/decision/ai-remove",{project_id:state.project.id});$("#confirm").close();toast(`已将 ${r.marked} 张照片标记为移除`);await refreshProject();await loadView()}catch(e){toast(e.message)}finally{button.disabled=false}};
+  $("#confirm").showModal();
+}
 
 $("#chooseBtn").onclick=chooseProject;$("#scanBtn").onclick=startScan;$("#cancelBtn").onclick=()=>json("/api/scan/cancel",{project_id:state.project.id});
 $("#homeBtn").onclick=()=>{document.body.classList.remove("project-open","similar-view-open","similar-detail-open","similar-side-open");$("#workspace").classList.add("hidden");$("#home").classList.remove("hidden");$("#searchInput").value="";clearInterval(state.poll);boot().catch(e=>toast(e.message))};
@@ -412,6 +422,7 @@ $("#exportBtn").onclick=async()=>{try{const r=await json("/api/export/save",{pro
 $("#importBtn").onclick=async()=>{const f=await json("/api/choose-csv",{});if(!f.path)return;const r=await json("/api/import",{project_id:state.project.id,path:f.path});toast(`导入 ${r.imported} 条，缺失 ${r.missing} 条`);await refreshProject();loadView()};
 $("#quarantineBtn").onclick=quarantine;
 $("#clearDecisionsBtn").onclick=confirmClearDecisions;
+$("#markAiRemoveBtn").onclick=confirmAiRemoveSuggestions;
 $$("[data-setting]").forEach(b=>b.onclick=()=>{$$("[data-setting]").forEach(x=>x.classList.remove("active"));b.classList.add("active");$("#generalSettings").classList.toggle("hidden",b.dataset.setting!=="general");$("#profileSettings").classList.toggle("hidden",b.dataset.setting!=="profiles")});
 $("#autoAdvance").onchange=async e=>{state.settings.auto_advance=e.target.checked;await json("/api/settings",{auto_advance:e.target.checked})};
 $("#autoCheckUpdates").onchange=async e=>{state.settings.auto_check_updates=e.target.checked;await json("/api/settings",{auto_check_updates:e.target.checked})};
