@@ -1,6 +1,6 @@
 const TOKEN=window.APP_TOKEN;
 const DECISION_VALUES=["undecided","keep","remove"],AI_VALUES=["remove","review","no_suggestion"],LIBRARY_PAGE_SIZE=120;
-const state={project:null,view:"library",activeNav:"library",items:[],profiles:[],settings:{},recentProjects:[],recentMenuId:"",viewerIndex:0,viewerNeedsRefresh:false,viewerDirtyIds:new Set(),editor:null,poll:null,lastScan:null,theme:localStorage.getItem("photo-culler-theme")||"day",filters:{decisions:new Set(DECISION_VALUES),ai:new Set(AI_VALUES)},library:{offset:0,total:0,done:false,loading:false,generation:0},similar:{groups:[],selectedId:"",mode:"closed",listSearch:"",memberSearch:""},viewerTransform:{scale:1,x:0,y:0,dragging:false,moved:false,suppressClick:false},viewerClickTimer:null,updateChecked:false,updateChecking:false,availableUpdate:null};
+const state={project:null,view:"library",activeNav:"library",items:[],profiles:[],settings:{},recentProjects:[],recentMenuId:"",viewerIndex:0,viewerNeedsRefresh:false,viewerDirtyIds:new Set(),editor:null,poll:null,lastScan:null,theme:localStorage.getItem("photo-culler-theme")||"day",filters:{decisions:new Set(DECISION_VALUES),ai:new Set(AI_VALUES)},library:{offset:0,total:0,done:false,loading:false,generation:0},similar:{groups:[],selectedId:"",mode:"closed",listSearch:"",memberSearch:""},viewerTransform:{scale:1,x:0,y:0,dragging:false,moved:false,suppressClick:false},viewerClickTimer:null,updateChecked:false,updateChecking:false};
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const api=async(path,body)=>{
   const opts=body===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json","X-App-Token":TOKEN},body:JSON.stringify(body)};
@@ -149,11 +149,6 @@ function photoCard(p,index,customBadge="",customKind="",extraInfo=""){
   return `<article class="photo-card ${decisionClass}" data-photo-id="${p.id}"><div class="thumb" data-open-id="${p.id}"><img loading="lazy" src="${p.thumb_url}" alt="">${badge?`<span class="badge badge-${badgeKind}">${esc(badge)}</span>`:""}</div><div class="card-info"><b title="${esc(p.relative_path)}">${esc(p.relative_path.split("/").pop())}</b><small>${esc(p.reason||`${p.width||0}×${p.height||0} · ${formatSize(p.size||0)}`)}</small>${extraInfo?`<span class="similarity-score">${esc(extraInfo)}</span>`:""}</div><div class="card-actions"><button class="keep" data-decision="keep" data-id="${p.id}">保留</button><button class="danger" data-decision="remove" data-id="${p.id}">移除</button></div></article>`;
 }
 function renderPhotos(items,total){$("#viewSubtitle").textContent=`显示 ${items.length} / ${total}`;$("#gallery").innerHTML=items.map((photo,index)=>photoCard(photo,index)).join("");const empty=!items.length;$("#empty").classList.toggle("hidden",!empty);if(empty&&state.lastScan?.total===0){$("#emptyTitle").textContent="没有发现支持的照片";const p=state.lastScan;const ext=Object.entries(p.unsupported_extensions||{}).sort((a,b)=>b[1]-a[1]).map(([x,n])=>`${x} ${n} 个`).join("、");$("#emptyText").textContent=p.video_count?`此文件夹有 ${p.video_count} 个视频，但照片筛选器暂不支持视频。${ext?" 文件统计："+ext:""}`:`发现 ${p.unsupported_count||0} 个不支持的文件。${ext}`;}else if(empty){$("#emptyTitle").textContent="这里还没有内容";$("#emptyText").textContent="扫描完成后会显示结果。"}bindGallery()}
-function renderPairs(items){
-  const orderedPairs=items.map(x=>{const recommended=x.a.id===x.recommended_id?x.a:x.b;const candidate=x.a.id===x.recommended_id?x.b:x.a;return {...x,left:{...recommended,_viewerBadge:"推荐保留",_viewerKind:"recommended"},right:{...candidate,_viewerBadge:"可考虑移除",_viewerKind:"candidate-remove"}}});
-  $("#viewSubtitle").textContent=`${items.length} 组比较${items.some(x=>x.face_safe)?" · 人物照片请检查表情":""}`;$("#gallery").innerHTML=orderedPairs.map((x,i)=>`<div class="pair-row">${photoCard(x.left,i*2,"推荐保留","recommended")}${photoCard(x.right,i*2+1,"可考虑移除","candidate-remove",x.kind==="exact"?"完全重复":`相似度 ${Math.round(x.score*100)}%`)}</div>`).join("");
-  state.items=orderedPairs.flatMap(x=>[x.left,x.right]);$("#empty").classList.toggle("hidden",!!items.length);bindGallery()
-}
 function similarFolder(group,compact=false){
   const coverImages=group.covers.map((photo,index)=>`<img class="folder-cover cover-${index}" loading="lazy" src="${photo.thumb_url}" alt="">`).reverse().join("");
   const name=group.recommended.relative_path.split("/").pop();
@@ -330,7 +325,7 @@ async function openRecentFolder(){const id=state.recentMenuId;closeRecentMenu();
 async function checkForUpdates(manual=true){
   if(state.updateChecking)return;state.updateChecking=true;const button=$("#checkUpdateBtn"),status=$("#updateStatus");button.disabled=true;if(manual)status.textContent="正在连接 GitHub…";
   try{
-    const update=await json("/api/update/check",{});state.availableUpdate=update;
+    const update=await json("/api/update/check",{});
     if(update.update_available){status.textContent=`发现 v${update.latest_version}`;showUpdatePrompt(update)}
     else if(update.no_release){if(manual){status.textContent="发布页暂时没有可用版本";toast("暂时没有可用的发布版本")}}
     else if(manual){status.textContent=`当前 v${update.current_version} 已是最新版本`;toast("当前已是最新版本")}

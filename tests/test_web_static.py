@@ -23,7 +23,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_mode_selects_are_rounded_and_csv_actions_share_a_row(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn('class="csv-actions"', markup)
         self.assertIn(".csv-actions {", styles)
         self.assertIn("grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);", styles)
@@ -48,7 +48,7 @@ class WebStaticTests(unittest.TestCase):
     def test_library_multiselects_support_all_none_and_accessible_panels(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
         script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
-        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn('aria-controls="decisionFilterPanel"', markup)
         self.assertIn('aria-controls="aiFilterPanel"', markup)
         self.assertEqual(markup.count('data-filter-group="decisions"'), 3)
@@ -89,15 +89,15 @@ class WebStaticTests(unittest.TestCase):
         self.assertNotIn(".map(photoCard)", script)
         self.assertIn(".map((photo,index)=>photoCard(photo,index))", script)
 
-    def test_similar_pairs_and_viewer_use_explicit_recommendation_state(self):
+    def test_similar_groups_and_viewer_use_explicit_recommendation_state(self):
         script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
-        self.assertIn('left:{...recommended,_viewerBadge:"推荐保留"', script)
-        self.assertIn('right:{...candidate,_viewerBadge:"可考虑移除"', script)
+        self.assertIn('photo.id===detail.recommended_id', script)
+        self.assertIn('_viewerBadge:recommended?"推荐保留":"可考虑移除"', script)
         self.assertIn('p.decision==="keep"', script)
         self.assertIn('p.decision==="remove"', script)
 
     def test_suggestion_badges_share_dark_translucent_background(self):
-        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertGreaterEqual(styles.count("background: rgba(13, 16, 14, 0.76);"), 3)
         self.assertIn(".badge-candidate-remove", styles)
         self.assertIn(".badge-review", styles)
@@ -105,7 +105,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_viewer_navigation_icons_are_centered_svg_buttons(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn('class="close" data-close aria-label="关闭预览"><svg', markup)
         self.assertIn('id="viewerPrev" aria-label="上一张"><svg', markup)
         self.assertIn('id="viewerNext" aria-label="下一张"><svg', markup)
@@ -124,27 +124,27 @@ class WebStaticTests(unittest.TestCase):
 
     def test_custom_profile_empty_fields_are_validated(self):
         script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
-        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn("validateProfileInputs", script)
         self.assertIn("还有项目没有输入完整", script)
         self.assertIn("el.placeholder=", script)
         self.assertIn(".field-invalid", styles)
         self.assertIn(".input-invalid", styles)
 
-    def test_similar_pairs_use_adjacent_standard_cards(self):
+    def test_legacy_pair_view_is_removed(self):
         script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
-        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
-        self.assertIn('class="pair-row"', script)
-        self.assertNotIn('class="pair-card"', script)
-        self.assertIn("人物照片请检查表情", script)
-        self.assertIn("similarity-score", script)
-        self.assertIn(".pair-row", styles)
-        self.assertIn("gap: 3px;", styles)
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        server = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
+        self.assertNotIn("function renderPairs(", script)
+        self.assertNotIn("pair-row", styles)
+        self.assertNotIn("pair-card", styles)
+        self.assertNotIn('"/api/pairs"', server)
+        self.assertNotIn("def api_pairs(", server)
 
     def test_similar_groups_use_folder_and_two_level_browser(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
         script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
-        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         server = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
         self.assertIn('id="similarBrowser"', markup)
         self.assertIn('id="similarCollapseBtn"', markup)
@@ -168,7 +168,7 @@ class WebStaticTests(unittest.TestCase):
     def test_similar_side_panels_scroll_independently_and_share_toolbar(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
         script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
-        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertLess(markup.index('id="similarViewActions"'), markup.index('class="search"'))
         self.assertNotIn("similar-detail-head", markup)
         self.assertNotIn('id="similarDetailTitle"', markup)
@@ -180,7 +180,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_similar_detail_matches_library_card_size_and_keeps_toolbar_on_one_line(self):
         script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
-        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn('classList.toggle("similar-view-open",state.view==="similar")', script)
         self.assertIn('classList.toggle("similar-detail-open"', script)
         self.assertIn("body.similar-view-open .toolbar {", styles)
@@ -188,11 +188,11 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("body.similar-view-open .search {", styles)
         self.assertIn("flex-wrap: nowrap;", styles)
         self.assertIn(".similar-detail-gallery {", styles)
-        self.assertIn("repeat(auto-fill, minmax(210px, 225px))", styles)
-        self.assertIn("repeat(auto-fill, minmax(170px, 225px))", styles)
+        self.assertIn("repeat(auto-fill, minmax(210px, 210px))", styles)
+        self.assertIn("repeat(auto-fill, minmax(170px, 210px))", styles)
 
     def test_similar_selection_outlines_have_safe_insets_and_transparent_scrollbars(self):
-        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn("margin-right: 12px;", styles)
         self.assertIn("overflow-x: hidden;", styles)
         self.assertIn("padding: 3px 4px 40px;", styles)
@@ -231,7 +231,7 @@ class WebStaticTests(unittest.TestCase):
     def test_theme_toggle_and_home_action_visibility(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
         script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
-        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn('id="themeBtn"', markup)
         self.assertIn("photo-culler-theme", script)
         self.assertIn('json("/api/settings",{theme})', script)
@@ -240,7 +240,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('[data-theme="night"]', styles)
 
     def test_night_theme_folders_and_search_have_consistent_backgrounds(self):
-        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn('[data-theme="night"] .similar-folder {', styles)
         self.assertIn('[data-theme="night"] .similar-folder:hover {', styles)
         self.assertIn('[data-theme="night"] .search input {', styles)
@@ -248,7 +248,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("background: var(--card);", styles)
 
     def test_night_mode_select_and_button_hover_states_are_legible(self):
-        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn('[data-theme="night"] select option {', styles)
         self.assertIn('[data-theme="night"] #profileSelect {', styles)
         self.assertIn("button:hover:not(:disabled)", styles)
@@ -258,7 +258,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('[data-theme="night"] .logo:hover:not(:disabled) {', styles)
 
     def test_primary_danger_and_top_controls_have_explicit_theme_hover_states(self):
-        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         for selector in (
             "#chooseBtn:hover:not(:disabled)",
             "#saveProfile:hover:not(:disabled)",
@@ -273,7 +273,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("#settingsBtn:hover {", styles)
 
     def test_context_settings_viewer_and_similar_hover_refinements(self):
-        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn('[data-theme="night"] .context-menu button {', styles)
         self.assertIn('[data-theme="night"] .context-menu button:hover:not(:disabled) {', styles)
         self.assertIn('[data-theme="night"] #settingsBtn {', styles)
@@ -288,14 +288,14 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn(".viewer .viewer-remove.active:hover:not(:disabled)", styles)
 
     def test_confirmation_hover_and_night_quarantine_list_are_theme_correct(self):
-        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn("#confirmOk:hover:not(:disabled)", styles)
         self.assertIn('[data-theme="night"] #confirmOk:hover:not(:disabled)', styles)
         self.assertIn('[data-theme="night"] .confirm-list {', styles)
         self.assertIn("background: #171b18;", styles)
 
     def test_settings_tabs_use_full_outline_and_subtle_night_hover(self):
-        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn(".settings-tabs button.active {", styles)
         self.assertIn("border: 1px solid var(--green);", styles)
         self.assertIn('[data-theme="night"] .settings-tabs button:not(.active) {', styles)

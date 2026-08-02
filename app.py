@@ -23,6 +23,7 @@ from photoculler.core import (
     ConfigStore,
     ProjectManager,
     Scanner,
+    SimilarityGroupCache,
     apply_quarantine,
     build_similarity_groups,
     classify,
@@ -56,7 +57,8 @@ def resource_path(relative: str) -> Path:
 
 CONFIG = ConfigStore()
 MANAGER = ProjectManager(CONFIG)
-SCANNER = Scanner(CONFIG, MANAGER)
+SIMILARITY_GROUPS = SimilarityGroupCache()
+SCANNER = Scanner(CONFIG, MANAGER, SIMILARITY_GROUPS)
 TOKEN = secrets.token_urlsafe(24)
 WEB_ROOT = resource_path("web")
 
@@ -179,7 +181,7 @@ def project_summary(project_id: str) -> dict[str, Any]:
     library_counts = photo_library_counts(conn)
     pairs = conn.execute("SELECT COUNT(*) FROM similar_pairs").fetchone()[0]
     profile = CONFIG.profiles().get(project.profile_id, BUILTIN_PROFILES["balanced"])
-    similar_groups = len(build_similarity_groups(conn, profile))
+    similar_groups = SIMILARITY_GROUPS.count(project_id, conn, profile)
     conn.close()
     return {
         "id": project_id,
@@ -270,13 +272,10 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/project": self.api_project,
                 "/api/progress": self.api_progress,
                 "/api/photos": self.api_photos,
-                "/api/pairs": self.api_pairs,
                 "/api/similar-groups": self.api_similar_groups,
                 "/api/similar-group": self.api_similar_group,
                 "/api/thumb": self.api_thumb,
                 "/api/photo": self.api_photo,
-                "/api/profiles": self.api_profiles,
-                "/api/export": self.api_export,
                 "/api/quarantine/preview": self.api_quarantine_preview,
                 "/api/quarantine/batches": self.api_batches,
             }
@@ -369,17 +368,6 @@ class Handler(BaseHTTPRequestHandler):
         file_state = query.get("file", ["readable"])[0]
         raw_decisions = query.get("decisions", [None])[0]
         raw_ai = query.get("ai_states", [None])[0]
-        category = query.get("category", [None])[0]
-        if category and raw_decisions is None and raw_ai is None and "file" not in query:
-            if category == "quality":
-                suggestion = query.get("suggestion", [""])[0]
-                raw_ai = suggestion if suggestion in {"remove", "review"} else "remove,review"
-            elif category == "unreadable":
-                file_state = "unreadable"
-            elif category == "decided":
-                raw_decisions = "keep,remove"
-            elif category != "all":
-                raise ValueError(f"category 包含无效值：{category}")
 
         decisions = parse_photo_filter(
             raw_decisions, PHOTO_DECISION_FILTERS, "decisions"
@@ -400,32 +388,6 @@ class Handler(BaseHTTPRequestHandler):
         conn.close()
         self._send_json({"total": total, "items": [photo_payload(pid, row) for row in rows]})
 
-    def api_pairs(self) -> None:
-        query = self._query()
-        pid = query.get("project_id", [""])[0]
-        search = query.get("search", [""])[0]
-        project = MANAGER.from_id(pid)
-        conn = connect_db(project.db_path)
-        rows = conn.execute(
-            """SELECT sp.*, a.relative_path a_path, b.relative_path b_path
-               FROM similar_pairs sp JOIN photos a ON a.id=sp.a_id JOIN photos b ON b.id=sp.b_id
-               WHERE a.status='active' AND b.status='active'
-               ORDER BY sp.kind='exact' DESC,sp.score DESC"""
-        ).fetchall()
-        items = []
-        for pair in rows:
-            if search and search.casefold() not in (pair["a_path"] + " " + pair["b_path"]).casefold():
-                continue
-            a = conn.execute("SELECT * FROM photos WHERE id=?", (pair["a_id"],)).fetchone()
-            b = conn.execute("SELECT * FROM photos WHERE id=?", (pair["b_id"],)).fetchone()
-            items.append({
-                "id": pair["id"], "score": pair["score"], "kind": pair["kind"],
-                "recommended_id": pair["recommended_id"], "face_safe": bool(pair["face_safe"]),
-                "a": photo_payload(pid, a), "b": photo_payload(pid, b),
-            })
-        conn.close()
-        self._send_json({"total": len(items), "items": items})
-
     def api_similar_groups(self) -> None:
         query = self._query()
         pid = query.get("project_id", [""])[0]
@@ -433,7 +395,7 @@ class Handler(BaseHTTPRequestHandler):
         project = MANAGER.from_id(pid)
         profile = CONFIG.profiles().get(project.profile_id, BUILTIN_PROFILES["balanced"])
         conn = connect_db(project.db_path)
-        groups = build_similarity_groups(conn, profile)
+        groups = SIMILARITY_GROUPS.get(pid, conn, profile)
         items = []
         for group in groups:
             if search and not any(
@@ -463,7 +425,7 @@ class Handler(BaseHTTPRequestHandler):
         profile = CONFIG.profiles().get(project.profile_id, BUILTIN_PROFILES["balanced"])
         conn = connect_db(project.db_path)
         group = next(
-            (item for item in build_similarity_groups(conn, profile) if item["id"] == group_id),
+            (item for item in SIMILARITY_GROUPS.get(pid, conn, profile) if item["id"] == group_id),
             None,
         )
         if not group:
@@ -511,20 +473,6 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send_file(path)
 
-    def api_profiles(self) -> None:
-        self._send_json({"items": list(CONFIG.profiles().values())})
-
-    def api_export(self) -> None:
-        pid = self._query().get("project_id", [""])[0]
-        project = MANAGER.from_id(pid)
-        data = export_decisions(project).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/csv; charset=utf-8")
-        self.send_header("Content-Disposition", 'attachment; filename="photo-review.csv"')
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
     def api_quarantine_preview(self) -> None:
         pid = self._query().get("project_id", [""])[0]
         self._send_json(quarantine_preview(MANAGER.from_id(pid)))
@@ -548,10 +496,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_open_project(self, body: dict[str, Any]) -> None:
         project = MANAGER.open(body["root"], body.get("cache_root"))
+        SIMILARITY_GROUPS.invalidate(project.project_id)
         self._send_json(project_summary(project.project_id))
 
     def api_project_cache(self, body: dict[str, Any]) -> None:
-        self._send_json(MANAGER.migrate_cache(body["project_id"], body["cache_root"]))
+        project_id = body["project_id"]
+        result = MANAGER.migrate_cache(project_id, body["cache_root"])
+        SIMILARITY_GROUPS.invalidate(project_id)
+        self._send_json(result)
 
     def api_cache_cleanup(self, body: dict[str, Any]) -> None:
         self._send_json(MANAGER.cleanup_old_cache(body["project_id"], body["path"]))
@@ -569,7 +521,9 @@ class Handler(BaseHTTPRequestHandler):
         progress = SCANNER.progress.get(project_id, {})
         if delete_cache and progress and not progress.get("done", False):
             raise ValueError("项目仍在扫描，请等待扫描结束后再删除数据库和缩略图")
-        self._send_json(MANAGER.remove_from_recent(project_id, delete_cache))
+        result = MANAGER.remove_from_recent(project_id, delete_cache)
+        SIMILARITY_GROUPS.invalidate(project_id)
+        self._send_json(result)
 
     def api_open_github(self, body: dict[str, Any]) -> None:
         webbrowser.open("https://github.com/Yuumi0221/photo-culler")
@@ -649,6 +603,7 @@ class Handler(BaseHTTPRequestHandler):
         SCANNER.reclassify(project, conn, profile)
         SCANNER.rebuild_similarity(project, conn, profile)
         conn.close()
+        SIMILARITY_GROUPS.invalidate(project.project_id)
         self._send_json(project_summary(project.project_id))
 
     def api_profile_estimate(self, body: dict[str, Any]) -> None:
@@ -697,10 +652,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(import_decisions(project, csv_path))
 
     def api_quarantine_apply(self, body: dict[str, Any]) -> None:
-        self._send_json(apply_quarantine(MANAGER.from_id(body["project_id"])))
+        project_id = body["project_id"]
+        result = apply_quarantine(MANAGER.from_id(project_id))
+        SIMILARITY_GROUPS.invalidate(project_id)
+        self._send_json(result)
 
     def api_restore(self, body: dict[str, Any]) -> None:
-        self._send_json(restore_batch(MANAGER.from_id(body["project_id"]), body["batch_id"]))
+        project_id = body["project_id"]
+        result = restore_batch(MANAGER.from_id(project_id), body["batch_id"])
+        SIMILARITY_GROUPS.invalidate(project_id)
+        self._send_json(result)
 
 
 def run() -> None:

@@ -455,7 +455,24 @@ class ProjectManager:
         data = self.config.data.get("projects", {}).get(project_id)
         if not data:
             raise ValueError("项目不存在")
-        return self.open(data["root"], data.get("cache_root"))
+        root = Path(data["root"]).resolve()
+        if not root.is_dir():
+            raise ValueError("照片文件夹当前不可用")
+        if project_id_for(root) != project_id:
+            raise ValueError("项目标识与照片目录不匹配")
+        cache_root = Path(
+            data.get("cache_root") or self.config.data["default_cache_root"]
+        ).resolve()
+        project_dir = cache_root / project_id
+        return Project(
+            project_id,
+            root,
+            cache_root,
+            project_dir,
+            project_dir / "project.db",
+            project_dir / "thumbs",
+            data.get("profile_id", "conservative"),
+        )
 
     def project_root(self, project_id: str) -> Path:
         data = self.config.data.get("projects", {}).get(project_id)
@@ -869,10 +886,98 @@ def build_similarity_groups(
     return groups
 
 
+class SimilarityGroupCache:
+    """Cache stable similarity topology while hydrating mutable photo rows."""
+
+    def __init__(self) -> None:
+        self._entries: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def _profile_fingerprint(profile: dict[str, Any]) -> str:
+        payload = json.dumps(
+            profile, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    def _topology(
+        self, project_id: str, conn: sqlite3.Connection, profile: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        key = (project_id, self._profile_fingerprint(profile))
+        with self._lock:
+            cached = self._entries.get(key)
+            if cached is not None:
+                return cached
+            groups = build_similarity_groups(conn, profile)
+            topology = [
+                {
+                    "id": group["id"],
+                    "member_ids": list(group["member_ids"]),
+                    "recommended_id": int(group["recommended_id"]),
+                    "cover_ids": [int(row["id"]) for row in group["covers"]],
+                    "confidence": dict(group["confidence"]),
+                    "kind": group["kind"],
+                    "face_safe": bool(group["face_safe"]),
+                    "sort_key": group["sort_key"],
+                }
+                for group in groups
+            ]
+            self._entries[key] = topology
+            return topology
+
+    def count(
+        self, project_id: str, conn: sqlite3.Connection, profile: dict[str, Any]
+    ) -> int:
+        return len(self._topology(project_id, conn, profile))
+
+    def get(
+        self, project_id: str, conn: sqlite3.Connection, profile: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        topology = self._topology(project_id, conn, profile)
+        photo_ids = sorted(
+            {photo_id for group in topology for photo_id in group["member_ids"]}
+        )
+        if not photo_ids:
+            return []
+        rows = conn.execute(
+            "SELECT * FROM photos WHERE status='active' AND error=''"
+        ).fetchall()
+        wanted = set(photo_ids)
+        photos = {int(row["id"]): row for row in rows if int(row["id"]) in wanted}
+        hydrated: list[dict[str, Any]] = []
+        for group in topology:
+            if any(photo_id not in photos for photo_id in group["member_ids"]):
+                continue
+            members = [photos[photo_id] for photo_id in group["member_ids"]]
+            members.sort(key=photo_shooting_key)
+            recommended = photos[group["recommended_id"]]
+            hydrated.append(
+                {
+                    **group,
+                    "members": members,
+                    "recommended": recommended,
+                    "covers": [photos[photo_id] for photo_id in group["cover_ids"]],
+                }
+            )
+        return hydrated
+
+    def invalidate(self, project_id: str) -> None:
+        with self._lock:
+            keys = [key for key in self._entries if key[0] == project_id]
+            for key in keys:
+                del self._entries[key]
+
+
 class Scanner:
-    def __init__(self, config: ConfigStore, manager: ProjectManager):
+    def __init__(
+        self,
+        config: ConfigStore,
+        manager: ProjectManager,
+        similarity_groups: SimilarityGroupCache | None = None,
+    ):
         self.config = config
         self.manager = manager
+        self.similarity_groups = similarity_groups
         self.progress: dict[str, dict[str, Any]] = {}
         self.cancel_events: dict[str, threading.Event] = {}
         self.threads: dict[str, threading.Thread] = {}
@@ -880,6 +985,8 @@ class Scanner:
     def start(self, project_id: str) -> None:
         if project_id in self.threads and self.threads[project_id].is_alive():
             return
+        if self.similarity_groups:
+            self.similarity_groups.invalidate(project_id)
         cancel = threading.Event()
         self.cancel_events[project_id] = cancel
         self.progress[project_id] = {"stage": "starting", "current": 0, "total": 0, "done": False, "error": ""}
@@ -972,6 +1079,9 @@ class Scanner:
             self._set(project_id, stage="complete", done=True, current=len(files), total=len(files))
         except Exception as error:
             self._set(project_id, stage="error", done=True, error=str(error))
+        finally:
+            if self.similarity_groups:
+                self.similarity_groups.invalidate(project_id)
 
     def _exact_hashes(self, project: Project, conn: sqlite3.Connection, cancel: threading.Event) -> None:
         sizes = conn.execute(

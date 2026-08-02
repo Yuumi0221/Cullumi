@@ -5,6 +5,7 @@ import json
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -15,6 +16,7 @@ from photoculler.core import (
     ConfigStore,
     ProjectManager,
     Scanner,
+    SimilarityGroupCache,
     apply_quarantine,
     build_similarity_groups,
     classification_percentiles,
@@ -66,7 +68,7 @@ class PhotoCullerTests(unittest.TestCase):
         self.assertEqual(progress["stage"], "complete", progress)
 
     def test_profile_validation(self):
-        self.assertEqual(__version__, "1.3.0")
+        self.assertEqual(__version__, "1.0.0")
         self.assertEqual(self.config.data["theme"], "day")
         self.assertTrue(self.config.data["auto_check_updates"])
         validate_profile(BUILTIN_PROFILES["balanced"])
@@ -162,6 +164,13 @@ class PhotoCullerTests(unittest.TestCase):
         self.assertTrue(self.photos.is_dir())
         self.assertTrue(self.project.db_path.is_file())
         self.assertTrue(marker.is_file())
+
+    def test_from_id_resolves_project_without_reopening_it(self):
+        with mock.patch.object(
+            self.manager, "open", side_effect=AssertionError("open must not be called")
+        ):
+            resolved = self.manager.from_id(self.project.project_id)
+        self.assertEqual(resolved, self.project)
 
     def test_remove_from_recent_can_delete_database_and_thumbnails(self):
         marker = self.project.thumb_dir / "delete-me.txt"
@@ -353,6 +362,52 @@ class PhotoCullerTests(unittest.TestCase):
         filtered = build_similarity_groups(conn, profile)
         self.assertEqual(len(filtered), 1)
         self.assertEqual(len(filtered[0]["members"]), 3)
+        conn.close()
+
+    def test_similarity_group_cache_reuses_topology_and_hydrates_decisions(self):
+        self.make_photo("CACHE_0001.jpg", (50, 80, 120))
+        self.make_photo("CACHE_0002.jpg", (80, 110, 140))
+        self.scan()
+        conn = connect_db(self.project.db_path)
+        rows = conn.execute(
+            "SELECT id FROM photos ORDER BY relative_path"
+        ).fetchall()
+        left_id, right_id = (int(row["id"]) for row in rows)
+        conn.execute("DELETE FROM similar_pairs")
+        conn.execute(
+            """INSERT INTO similar_pairs(a_id,b_id,score,kind,recommended_id,face_safe)
+               VALUES(?,?,?,?,?,?)""",
+            (left_id, right_id, 0.9, "similar", left_id, 0),
+        )
+        conn.commit()
+        profile = json.loads(json.dumps(BUILTIN_PROFILES["balanced"]))
+        cache = SimilarityGroupCache()
+
+        with mock.patch(
+            "photoculler.core.build_similarity_groups", wraps=build_similarity_groups
+        ) as builder:
+            first = cache.get(self.project.project_id, conn, profile)
+            second = cache.get(self.project.project_id, conn, profile)
+            self.assertEqual(builder.call_count, 1)
+            self.assertEqual(first[0]["id"], second[0]["id"])
+
+            conn.execute(
+                "UPDATE photos SET decision='keep' WHERE id=?", (right_id,)
+            )
+            conn.commit()
+            fresh = cache.get(self.project.project_id, conn, profile)
+            decisions = {int(row["id"]): row["decision"] for row in fresh[0]["members"]}
+            self.assertEqual(decisions[right_id], "keep")
+            self.assertEqual(builder.call_count, 1)
+
+            changed_profile = json.loads(json.dumps(profile))
+            changed_profile["similarity"]["phash_max"] += 1
+            cache.get(self.project.project_id, conn, changed_profile)
+            self.assertEqual(builder.call_count, 2)
+
+            cache.invalidate(self.project.project_id)
+            cache.get(self.project.project_id, conn, profile)
+            self.assertEqual(builder.call_count, 3)
         conn.close()
 
     def test_csv_quarantine_restore_collision(self):
