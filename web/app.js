@@ -1,6 +1,6 @@
 const TOKEN=window.APP_TOKEN;
 const DECISION_VALUES=["undecided","keep","remove"],AI_VALUES=["remove","review","no_suggestion"],LIBRARY_PAGE_SIZE=120;
-const state={project:null,view:"library",activeNav:"library",items:[],profiles:[],settings:{},recentProjects:[],recentMenuId:"",viewerIndex:0,viewerNeedsRefresh:false,viewerDirtyIds:new Set(),editor:null,poll:null,lastScan:null,theme:localStorage.getItem("photo-culler-theme")||"day",filters:{decisions:new Set(DECISION_VALUES),ai:new Set(AI_VALUES)},library:{offset:0,total:0,done:false,loading:false,generation:0},similar:{groups:[],selectedId:"",mode:"closed",listSearch:"",memberSearch:""},viewerTransform:{scale:1,x:0,y:0,dragging:false,moved:false,suppressClick:false},viewerClickTimer:null};
+const state={project:null,view:"library",activeNav:"library",items:[],profiles:[],settings:{},recentProjects:[],recentMenuId:"",viewerIndex:0,viewerNeedsRefresh:false,viewerDirtyIds:new Set(),editor:null,poll:null,lastScan:null,theme:localStorage.getItem("photo-culler-theme")||"day",filters:{decisions:new Set(DECISION_VALUES),ai:new Set(AI_VALUES)},library:{offset:0,total:0,done:false,loading:false,generation:0},similar:{groups:[],selectedId:"",mode:"closed",listSearch:"",memberSearch:""},viewerTransform:{scale:1,x:0,y:0,dragging:false,moved:false,suppressClick:false},viewerClickTimer:null,updateChecked:false,updateChecking:false,availableUpdate:null};
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const api=async(path,body)=>{
   const opts=body===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json","X-App-Token":TOKEN},body:JSON.stringify(body)};
@@ -19,9 +19,10 @@ async function boot(){
   const b=await json("/api/bootstrap");state.profiles=b.profiles;state.settings=b.settings;state.recentProjects=b.recent_projects;
   applyTheme(b.settings.theme||state.theme);
   $("#appVersion").textContent=`v${b.version}`;
-  renderProfiles();$("#autoAdvance").checked=!!b.settings.auto_advance;$("#defaultCache").value=b.settings.default_cache_root;
+  renderProfiles();$("#autoAdvance").checked=!!b.settings.auto_advance;$("#autoCheckUpdates").checked=!!b.settings.auto_check_updates;$("#defaultCache").value=b.settings.default_cache_root;
   $("#recentList").innerHTML=b.recent_projects.length?b.recent_projects.map(p=>`<button class="recent" data-pid="${p.id}"><b>${esc(p.root.split(/[\\/]/).pop())}</b><span>${esc(p.root)}</span><small>${p.available?"可打开":"存储目录当前不可用"}</small></button>`).join(""):`<div class="empty"><b>暂无最近项目</b><span>选择一个照片文件夹即可开始。</span></div>`;
   $$(".recent").forEach(x=>{x.onclick=()=>openProject(x.dataset.pid);x.oncontextmenu=e=>openRecentMenu(e,x.dataset.pid)});
+  if(b.settings.auto_check_updates&&!state.updateChecked){state.updateChecked=true;setTimeout(()=>checkForUpdates(false),450)}
 }
 function renderProfiles(){
   const opts=state.profiles.map(p=>`<option value="${p.id}">${esc(p.name)}${p.builtin?" · 内置":""}</option>`).join("");
@@ -326,12 +327,35 @@ function openRecentMenu(event,projectId){
   menu.style.left=`${Math.max(8,left)}px`;menu.style.top=`${Math.max(8,top)}px`;
 }
 async function openRecentFolder(){const id=state.recentMenuId;closeRecentMenu();if(!id)return;try{await json("/api/project/open-folder",{project_id:id})}catch(e){toast(e.message)}}
+async function checkForUpdates(manual=true){
+  if(state.updateChecking)return;state.updateChecking=true;const button=$("#checkUpdateBtn"),status=$("#updateStatus");button.disabled=true;if(manual)status.textContent="正在连接 GitHub…";
+  try{
+    const update=await json("/api/update/check",{});state.availableUpdate=update;
+    if(update.update_available){status.textContent=`发现 v${update.latest_version}`;showUpdatePrompt(update)}
+    else if(update.no_release){if(manual){status.textContent="发布页暂时没有可用版本";toast("暂时没有可用的发布版本")}}
+    else if(manual){status.textContent=`当前 v${update.current_version} 已是最新版本`;toast("当前已是最新版本")}
+  }catch(e){if(manual){status.textContent=`检查失败：${e.message}`;toast(`检查更新失败：${e.message}`)}else console.warn("自动检查更新失败",e)}
+  finally{state.updateChecking=false;button.disabled=false}
+}
+function showUpdatePrompt(update){
+  $("#updateTitle").textContent=`发现新版本 v${update.latest_version}`;
+  $("#updateBody").innerHTML=update.download_available
+    ?`<p>当前版本为 v${esc(update.current_version)}。是否将 <b>${esc(update.asset_name)}</b> 下载到系统 Downloads 文件夹？</p><p id="updateDownloadStatus" class="update-download-status">照片和项目数据不会受到影响。</p>`
+    :`<p>当前版本为 v${esc(update.current_version)}。新版本已经发布，但发布页没有可直接下载的 Windows 附件。</p><p id="updateDownloadStatus" class="update-download-status">可以前往 Releases 页面查看详情。</p>`;
+  const button=$("#updateDownload");button.disabled=false;button.textContent=update.download_available?"下载更新":"查看发布页";button.onclick=update.download_available?downloadUpdate:async()=>{await json("/api/update/open",{});$("#updateDialog").close()};
+  $("#updateDialog").showModal();
+}
+async function downloadUpdate(){
+  const button=$("#updateDownload"),status=$("#updateDownloadStatus");button.disabled=true;button.textContent="正在下载…";status.textContent="正在下载更新，请不要关闭软件。";
+  try{const result=await json("/api/update/download",{});$("#updateTitle").textContent=`v${result.version} 已下载`;$("#updateBody").innerHTML=`<p>更新包已保存到：</p><p class="download-path">${esc(result.path)}</p><p>关闭当前软件后，解压并运行新版本即可。</p>`;button.disabled=false;button.textContent="完成";button.onclick=()=>$("#updateDialog").close();toast("更新包下载完成")}
+  catch(e){status.textContent=`下载失败：${e.message}`;button.disabled=false;button.textContent="重试下载";toast(`下载失败：${e.message}`)}
+}
 function confirmRemoveRecent(){
   const id=state.recentMenuId;const project=state.recentProjects.find(x=>x.id===id);closeRecentMenu();if(!project)return;
   $("#confirmTitle").textContent="从最近项目中移除？";
-  $("#confirmBody").textContent=`“${project.root.split(/[\\/]/).pop()}”将从首页列表移除，照片、项目数据库和缩略图不会被删除。`;
+  $("#confirmBody").innerHTML=`<p>“${esc(project.root.split(/[\\/]/).pop())}”将从首页列表移除。真实照片不会被删除或移动。</p><label class="toggle confirm-option"><input id="deleteProjectCache" type="checkbox"><span>同时删除项目数据库和缩略图</span></label><p class="confirm-note">不勾选时，数据库和缩略图会保留，今后重新打开该照片目录可继续使用。</p>`;
   $("#confirmOk").textContent="确认移除";
-  $("#confirmOk").onclick=async()=>{$("#confirm").close();await json("/api/project/remove-recent",{project_id:id});toast("已从最近项目中移除");await boot()};
+  $("#confirmOk").onclick=async()=>{const deleteCache=$("#deleteProjectCache").checked;try{await json("/api/project/remove-recent",{project_id:id,delete_cache:deleteCache});$("#confirm").close();toast(deleteCache?"项目数据库和缩略图已删除":"已从最近项目中移除");await boot()}catch(e){toast(e.message)}};
   $("#confirm").showModal();
 }
 function confirmDeleteProfile(){const profile=state.editor;if(!profile||profile.builtin)return;$("#confirmTitle").textContent="删除自定义模式？";$("#confirmBody").textContent=`“${profile.name}”将从本机配置中删除，此操作无法撤销。`;$("#confirmOk").textContent="确认删除";$("#confirmOk").onclick=async()=>{try{await json("/api/profile/delete",{profile_id:profile.id});$("#confirm").close();state.profiles=state.profiles.filter(x=>x.id!==profile.id);renderProfiles();editorLoad(state.profiles[0].id);toast("自定义模式已删除")}catch(e){toast(e.message)}};$("#confirm").showModal()}
@@ -395,6 +419,8 @@ $("#quarantineBtn").onclick=quarantine;
 $("#clearDecisionsBtn").onclick=confirmClearDecisions;
 $$("[data-setting]").forEach(b=>b.onclick=()=>{$$("[data-setting]").forEach(x=>x.classList.remove("active"));b.classList.add("active");$("#generalSettings").classList.toggle("hidden",b.dataset.setting!=="general");$("#profileSettings").classList.toggle("hidden",b.dataset.setting!=="profiles")});
 $("#autoAdvance").onchange=async e=>{state.settings.auto_advance=e.target.checked;await json("/api/settings",{auto_advance:e.target.checked})};
+$("#autoCheckUpdates").onchange=async e=>{state.settings.auto_check_updates=e.target.checked;await json("/api/settings",{auto_check_updates:e.target.checked})};
+$("#checkUpdateBtn").onclick=()=>checkForUpdates(true);
 $("#defaultCacheBtn").onclick=async()=>{const r=await json("/api/choose-cache",{});if(r.path){$("#defaultCache").value=r.path;state.settings.default_cache_root=r.path;await json("/api/settings",{default_cache_root:r.path});toast("默认位置已保存")}};
 $("#projectCacheBtn").onclick=async()=>{if(!state.project)return;const r=await json("/api/choose-cache",{});if(!r.path)return;const m=await json("/api/project/cache",{project_id:state.project.id,cache_root:r.path});$("#projectCache").value=r.path;if(m.old_cache){$("#oldCaches").innerHTML=`<p>旧缓存已保留：${esc(m.old_cache)}</p><button id="cleanOld">确认清理旧缓存</button>`;$("#cleanOld").onclick=async()=>{await json("/api/project/cache/cleanup",{project_id:state.project.id,path:m.old_cache});$("#oldCaches").innerHTML="";toast("旧缓存已清理")}}toast("迁移完成，旧缓存仍保留")};
 $("#profileEditorSelect").onchange=e=>editorLoad(e.target.value);$("#cloneProfile").onclick=cloneProfile;$("#saveProfile").onclick=saveProfile;$("#estimateBtn").onclick=estimate;

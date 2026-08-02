@@ -42,6 +42,11 @@ from photoculler.core import (
     validate_profile,
     app_data_dir,
 )
+from photoculler.updates import (
+    RELEASES_PAGE_URL,
+    check_for_update,
+    download_release_asset,
+)
 
 
 def resource_path(relative: str) -> Path:
@@ -300,6 +305,9 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/project/open-folder": self.api_project_open_folder,
                 "/api/project/remove-recent": self.api_project_remove_recent,
                 "/api/open-github": self.api_open_github,
+                "/api/update/check": self.api_update_check,
+                "/api/update/download": self.api_update_download,
+                "/api/update/open": self.api_update_open,
                 "/api/scan": self.api_scan,
                 "/api/scan/cancel": self.api_scan_cancel,
                 "/api/decision": self.api_decision,
@@ -335,6 +343,7 @@ class Handler(BaseHTTPRequestHandler):
             "settings": {
                 "default_cache_root": CONFIG.data["default_cache_root"],
                 "auto_advance": CONFIG.data.get("auto_advance", True),
+                "auto_check_updates": CONFIG.data.get("auto_check_updates", True),
                 "theme": CONFIG.data.get("theme", "day"),
             },
             "recent_projects": recent,
@@ -555,11 +564,31 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"opened": True})
 
     def api_project_remove_recent(self, body: dict[str, Any]) -> None:
-        MANAGER.remove_from_recent(body["project_id"])
-        self._send_json({"removed": True})
+        project_id = body["project_id"]
+        delete_cache = bool(body.get("delete_cache", False))
+        progress = SCANNER.progress.get(project_id, {})
+        if delete_cache and progress and not progress.get("done", False):
+            raise ValueError("项目仍在扫描，请等待扫描结束后再删除数据库和缩略图")
+        self._send_json(MANAGER.remove_from_recent(project_id, delete_cache))
 
     def api_open_github(self, body: dict[str, Any]) -> None:
         webbrowser.open("https://github.com/Yuumi0221/photo-culler")
+        self._send_json({"opened": True})
+
+    def api_update_check(self, body: dict[str, Any]) -> None:
+        self._send_json(check_for_update(__version__))
+
+    def api_update_download(self, body: dict[str, Any]) -> None:
+        update = check_for_update(__version__)
+        if not update["update_available"]:
+            raise ValueError("当前已经是最新版本")
+        if not update["download_available"]:
+            raise ValueError("最新版本没有可下载的 Windows 附件，请前往发布页查看")
+        path = download_release_asset(update["download_url"], update["asset_name"])
+        self._send_json({"downloaded": True, "path": str(path), "version": update["latest_version"]})
+
+    def api_update_open(self, body: dict[str, Any]) -> None:
+        webbrowser.open(RELEASES_PAGE_URL)
         self._send_json({"opened": True})
 
     def api_scan(self, body: dict[str, Any]) -> None:
@@ -592,6 +621,8 @@ class Handler(BaseHTTPRequestHandler):
             CONFIG.data["default_cache_root"] = str(path)
         if "auto_advance" in body:
             CONFIG.data["auto_advance"] = bool(body["auto_advance"])
+        if "auto_check_updates" in body:
+            CONFIG.data["auto_check_updates"] = bool(body["auto_check_updates"])
         if "theme" in body:
             theme = str(body["theme"])
             if theme not in {"day", "night"}:

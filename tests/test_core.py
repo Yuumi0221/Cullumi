@@ -66,8 +66,9 @@ class PhotoCullerTests(unittest.TestCase):
         self.assertEqual(progress["stage"], "complete", progress)
 
     def test_profile_validation(self):
-        self.assertEqual(__version__, "1.2.2")
+        self.assertEqual(__version__, "1.3.0")
         self.assertEqual(self.config.data["theme"], "day")
+        self.assertTrue(self.config.data["auto_check_updates"])
         validate_profile(BUILTIN_PROFILES["balanced"])
         self.assertTrue(
             all(
@@ -161,6 +162,16 @@ class PhotoCullerTests(unittest.TestCase):
         self.assertTrue(self.photos.is_dir())
         self.assertTrue(self.project.db_path.is_file())
         self.assertTrue(marker.is_file())
+
+    def test_remove_from_recent_can_delete_database_and_thumbnails(self):
+        marker = self.project.thumb_dir / "delete-me.txt"
+        marker.write_text("cache", encoding="utf-8")
+        result = self.manager.remove_from_recent(self.project.project_id, delete_cache=True)
+        self.assertTrue(result["cache_deleted"])
+        self.assertNotIn(self.project.project_id, self.config.data["recent_projects"])
+        self.assertNotIn(self.project.project_id, self.config.data["projects"])
+        self.assertTrue(self.photos.is_dir())
+        self.assertFalse(self.project.project_dir.exists())
 
     def test_clear_decisions_only_resets_active_photos(self):
         self.make_photo("keep.jpg")

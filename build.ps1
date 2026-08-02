@@ -28,9 +28,16 @@ try {
         Remove-Item -LiteralPath $ResolvedVersioned -Recurse -Force
     }
     Copy-Item -LiteralPath $PrimaryOutput -Destination $VersionedOutput -Recurse
+    $ReleaseArchive = Join-Path $DistRoot "照片筛选器-v$Version-Windows-便携版.zip"
+    $ArchiveFullPath = [IO.Path]::GetFullPath($ReleaseArchive)
+    if (-not $ArchiveFullPath.StartsWith("$($DistRoot.TrimEnd('\'))\", [StringComparison]::OrdinalIgnoreCase)) {
+        throw "发布压缩包不在 dist 内，已停止生成。"
+    }
+    Compress-Archive -Path (Join-Path $VersionedOutput "*") -DestinationPath $ArchiveFullPath -CompressionLevel Optimal -Force
     Write-Host "构建完成："
     Write-Host "  $PrimaryOutput\照片筛选器.exe"
     Write-Host "  $VersionedOutput\照片筛选器.exe"
+    Write-Host "  $ArchiveFullPath"
 }
 finally {
     Pop-Location

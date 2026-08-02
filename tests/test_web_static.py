@@ -3,6 +3,34 @@ import unittest
 
 
 class WebStaticTests(unittest.TestCase):
+    def test_project_removal_can_delete_cache_without_touching_photos(self):
+        markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('id="deleteProjectCache"', script)
+        self.assertIn("delete_cache:deleteCache", script)
+        self.assertIn("真实照片不会被删除或移动", script)
+        self.assertIn('id="recentRemove"', markup)
+
+    def test_update_controls_and_download_prompt_are_wired(self):
+        markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('id="autoCheckUpdates"', markup)
+        self.assertIn('id="checkUpdateBtn"', markup)
+        self.assertIn('id="updateDialog"', markup)
+        self.assertIn('json("/api/update/check",{})', script)
+        self.assertIn('json("/api/update/download",{})', script)
+        self.assertIn("auto_check_updates:e.target.checked", script)
+
+    def test_mode_selects_are_rounded_and_csv_actions_share_a_row(self):
+        markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
+        styles = (Path(__file__).parents[1] / "web" / "overrides.css").read_text(encoding="utf-8")
+        self.assertIn('class="csv-actions"', markup)
+        self.assertIn(".csv-actions {", styles)
+        self.assertIn("grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);", styles)
+        self.assertIn("#profileEditorSelect {", styles)
+        self.assertIn(".form-grid select[data-p] {", styles)
+        self.assertIn("appearance: none;", styles)
+
     def test_sidebar_uses_library_presets_instead_of_duplicate_pages(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
         script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")

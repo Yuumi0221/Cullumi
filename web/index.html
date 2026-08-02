@@ -54,8 +54,10 @@
           <button data-nav="quarantine" data-view="quarantine">隔离历史</button>
         </nav>
         <div class="aside-actions">
-          <button id="exportBtn" class="ghost">导出 CSV</button>
-          <button id="importBtn" class="ghost">导入 CSV</button>
+          <div class="csv-actions">
+            <button id="importBtn" class="ghost">导入 CSV</button>
+            <button id="exportBtn" class="ghost">导出 CSV</button>
+          </div>
           <button id="clearDecisionsBtn" class="ghost">清空所有选择</button>
           <button id="quarantineBtn" class="danger">隔离已标记移除</button>
         </div>
@@ -127,6 +129,8 @@
     <div class="settings-tabs"><button data-setting="general" class="active">常规与存储</button><button data-setting="profiles">自定义模式</button></div>
     <section id="generalSettings" class="settings-page">
       <label class="toggle"><input id="autoAdvance" type="checkbox"><span>标记后自动下一张</span></label>
+      <label class="toggle"><input id="autoCheckUpdates" type="checkbox"><span>启动时自动检查更新</span></label>
+      <div class="update-row"><button id="checkUpdateBtn">检查更新</button><span id="updateStatus" role="status"></span></div>
       <label>全局默认数据库与缩略图位置<div class="path-row"><input id="defaultCache" readonly><button id="defaultCacheBtn">选择</button></div></label>
       <label>当前项目存储位置<div class="path-row"><input id="projectCache" readonly><button id="projectCacheBtn">迁移</button></div></label>
       <div id="oldCaches"></div>
@@ -186,6 +190,7 @@
   </dialog>
 
   <dialog id="confirm" class="confirm"><h2 id="confirmTitle"></h2><div id="confirmBody"></div><footer><button data-close>取消</button><button id="confirmOk" class="danger">确认</button></footer></dialog>
+  <dialog id="updateDialog" class="confirm"><h2 id="updateTitle">发现新版本</h2><div id="updateBody"></div><footer><button data-close>以后再说</button><button id="updateDownload" class="primary">下载更新</button></footer></dialog>
   <div id="recentMenu" class="context-menu hidden" role="menu">
     <button id="recentOpenFolder" role="menuitem">在文件管理器中打开</button>
     <button id="recentRemove" class="context-danger" role="menuitem">移除项目</button>

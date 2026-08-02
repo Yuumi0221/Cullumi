@@ -26,6 +26,17 @@
   padding-right: 3px;
 }
 
+.csv-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 7px;
+}
+
+.csv-actions button {
+  min-width: 0;
+  padding-inline: 7px;
+}
+
 .nav-section-label {
   display: block;
   padding: 14px 11px 4px;
@@ -189,6 +200,7 @@ body > main {
 }
 
 #profileSelect,
+#profileEditorSelect,
 #settingsBtn {
   height: 39px;
   border: 1px solid var(--line);
@@ -202,7 +214,31 @@ body > main {
   cursor: pointer;
 }
 
+#profileSelect,
+#profileEditorSelect,
+.form-grid select[data-p] {
+  height: 42px;
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 9px;
+  padding: 0 34px 0 13px;
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 18px, calc(100% - 11px) 18px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+#profileEditorSelect,
+.form-grid select[data-p] {
+  border: 1px solid var(--line);
+  background-color: #fff;
+  color: var(--ink);
+}
+
 #profileSelect:hover,
+#profileEditorSelect:hover,
+.form-grid select[data-p]:hover,
 #settingsBtn:hover {
   border-color: #aeb4ab;
   background: #e8e9e4;
@@ -640,6 +676,40 @@ body.similar-side-open .similar-browser {
   font-size: 12px;
 }
 
+.update-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: -3px 0 20px;
+}
+
+.update-row span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.confirm-option {
+  margin: 16px 0 8px;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f5f6f2;
+}
+
+.confirm-note,
+.update-download-status {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.download-path {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f1f2ee;
+  word-break: break-all;
+  user-select: text;
+}
+
 .context-menu {
   position: fixed;
   z-index: 100;
@@ -903,11 +973,26 @@ body.similar-side-open .similar-browser {
   color: var(--ink);
 }
 
+[data-theme="night"] #profileEditorSelect {
+  background-color: #262b27;
+}
+
+[data-theme="night"] .form-grid select[data-p] {
+  background-color: #262b27;
+}
+
+[data-theme="night"] .confirm-option,
+[data-theme="night"] .download-path {
+  background: #262b27;
+}
+
 [data-theme="night"] #settingsBtn {
   background: #262b27;
 }
 
 [data-theme="night"] #profileSelect:hover,
+[data-theme="night"] #profileEditorSelect:hover,
+[data-theme="night"] .form-grid select[data-p]:hover,
 [data-theme="night"] #settingsBtn:hover {
   border-color: #59625a;
   background: #343a35;

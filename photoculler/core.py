@@ -247,6 +247,7 @@ class ConfigStore:
             "version": 1,
             "default_cache_root": str(default_cache),
             "auto_advance": True,
+            "auto_check_updates": True,
             "theme": "day",
             "projects": {},
             "recent_projects": [],
@@ -465,13 +466,33 @@ class ProjectManager:
             raise ValueError("照片文件夹当前不可用")
         return root
 
-    def remove_from_recent(self, project_id: str) -> None:
-        if project_id not in self.config.data.get("projects", {}):
+    def remove_from_recent(self, project_id: str, delete_cache: bool = False) -> dict[str, Any]:
+        data = self.config.data.get("projects", {}).get(project_id)
+        if not data:
             raise ValueError("项目不存在")
+        deleted_paths: list[str] = []
+        if delete_cache:
+            root = Path(data["root"]).resolve()
+            if project_id_for(root) != project_id:
+                raise ValueError("项目标识与照片目录不匹配，已停止删除")
+            cache_root = Path(data["cache_root"]).resolve()
+            targets = [(cache_root / project_id).resolve()]
+            targets.extend(Path(item).resolve() for item in data.get("old_caches", []))
+            unique_targets = list(dict.fromkeys(targets))
+            for target in unique_targets:
+                if target.name.casefold() != project_id.casefold():
+                    raise ValueError("项目缓存目录校验失败，已停止删除")
+            for target in unique_targets:
+                if target.exists():
+                    shutil.rmtree(target)
+                    deleted_paths.append(str(target))
         self.config.data["recent_projects"] = [
             item for item in self.config.data.get("recent_projects", []) if item != project_id
         ]
+        if delete_cache:
+            self.config.data.get("projects", {}).pop(project_id, None)
         self.config.save()
+        return {"removed": True, "cache_deleted": delete_cache, "deleted_paths": deleted_paths}
 
     def migrate_cache(self, project_id: str, new_root: str) -> dict[str, Any]:
         project = self.from_id(project_id)
