@@ -25,6 +25,7 @@ from photoculler.core import (
     HEIF_EXTENSIONS,
     import_decisions,
     mark_ai_remove_suggestions,
+    open_heif,
     parse_photo_filter,
     photo_filter_where,
     photo_library_counts,
@@ -85,9 +86,7 @@ class PhotoCullerTests(unittest.TestCase):
             validate_profile(broken)
 
     def test_heif_phone_variants_use_tolerant_decoder(self):
-        import pillow_heif.options
-
-        self.assertTrue(pillow_heif.options.ALLOW_INCORRECT_HEADERS)
+        self.assertIsNotNone(open_heif)
         self.assertTrue({".heic", ".heics", ".heif", ".heifs", ".hif"} <= HEIF_EXTENSIONS)
         path = self.photos / "phone.heic"
         Image.new("RGB", (64, 48), (30, 80, 120)).save(path, "HEIF", quality=80)

@@ -27,14 +27,16 @@
     <section id="home" class="home">
       <div class="hero">
         <div><p class="eyebrow">从任意照片文件夹开始</p><h1><span>快速留下</span><span>美好瞬间</span></h1>
-          <p>递归扫描常见图片、HEIC/HEIF 与相机 RAW。所有分析均在本机完成。</p>
-          <button id="chooseBtn" class="primary hero-choose">选择照片文件夹</button>
+          <p>支持 JPG / PNG / HEIC / HEIF / RAW 等常见图片格式。所有分析均在本机完成。</p>
+          <button id="chooseBtn" class="primary hero-choose"><svg class="hero-choose-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6Z"/></svg>从文件夹导入</button>
         </div>
-        <!-- <div class="hero-art" aria-hidden="true"><span><b>JPG</b><small>STANDARD</small></span><span><b>HEIC</b><small>MOBILE</small></span><span><b>RAW</b><small>CAMERA</small></span></div> -->
+      </div>
+      <div class="home-bg-left" aria-hidden="true">
+        <img class="home-bg-img" src="/static/2022_0724_15425500.jpg" alt="">
       </div>
       <section class="recent-panel" aria-labelledby="recentTitle">
         <div class="section-title recent-title-row">
-          <h2 id="recentTitle">最近项目</h2>
+          <h1 id="recentTitle">最近项目</h1>
           <label class="recent-search">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
             <input id="recentSearch" type="search" placeholder="搜索项目名称" aria-label="搜索最近项目名称">
@@ -50,7 +52,7 @@
         <nav id="nav">
           <button data-nav="library" data-preset="library" class="active">照片库 <em id="libraryCount">0</em></button>
           <span class="nav-section-label">智能整理</span>
-          <button data-nav="ai" data-preset="ai">AI建议 <em id="aiCount">0</em></button>
+          <button data-nav="ai" data-preset="ai">AI 建议 <em id="aiCount">0</em></button>
           <button data-nav="similar" data-view="similar">相似连拍 <em id="pairCount">0</em></button>
           <span class="nav-section-label">我的处理</span>
           <button data-nav="undecided" data-preset="undecided">待决定 <em id="undecidedCount">0</em></button>

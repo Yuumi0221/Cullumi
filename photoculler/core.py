@@ -23,10 +23,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 try:
     from pillow_heif import open_heif, register_heif_opener
 
-    # A few phone cameras write dimensions that differ from the decoded HEVC
-    # image.  libheif can recover those files when it is allowed to trust the
-    # decoded size instead of rejecting the container header.
-    register_heif_opener(allow_incorrect_headers=True)
+    register_heif_opener()
 except Exception:
     open_heif = None
 

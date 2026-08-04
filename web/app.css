@@ -33,7 +33,7 @@ button,input,select {
 button {
   border:1px solid var(--line);
   background:#fff;
-  border-radius:9px;
+  border-radius:6px;
   padding:9px 14px;
   cursor:pointer;
   color:var(--ink);
@@ -91,6 +91,10 @@ select:focus-visible {
   backdrop-filter:blur(14px)
 }
 
+body:not(.project-open) .topbar {
+  margin-left:calc(100vw / 1.618)
+}
+
 .brand {
   display:flex;
   align-items:center;
@@ -132,50 +136,37 @@ select:focus-visible {
 
 .home {
   width:100%;
-  max-width:1280px;
   height:calc(100vh - 70px);
   min-height:0;
   margin:0 auto;
-  padding:clamp(24px,4vh,56px) clamp(28px,4vw,80px);
+  padding:clamp(24px,4vh,56px) clamp(35px,4vw,80px);
   display:grid;
-  grid-template-columns:minmax(330px,.618fr) minmax(0,1fr);
-  align-items:stretch;
+  grid-template-columns:calc(100vw / 1.618 - clamp(28px, 4vw, 80px)) minmax(320px,1fr);
+  align-items:start;
   gap:clamp(20px,2.4vw,42px);
   overflow:hidden;
   box-sizing:border-box;
-} 
+  position:relative;
+}
 
 .hero {
   --hero-pad-y:clamp(34px,3.4vw,58px);
   --hero-pad-x:clamp(30px,3vw,52px);
   position:relative;
-  height:100%;
-  min-height:0;
-  border-radius:24px;
-  background:#e4ebe400;
+  z-index:1;
+  width:min(720px, 100%);
+  margin-left:auto;
+  margin-top:calc(100vh * 0.15 - clamp(24px, 4vh, 56px));
+  border-radius:0px;
+  background:color-mix(in srgb, var(--card) 90%, transparent);
   padding:var(--hero-pad-y) var(--hero-pad-x);
+  padding-bottom:60px;
   display:flex;
   flex-direction:column;
   align-items:stretch;
   justify-content:flex-start;
-  overflow:hidden;
+  overflow:visible;
   box-shadow:none
-}
-
-.hero > div:first-child::before {
-  content:"";
-  position:absolute;
-  top:calc(18px - var(--hero-pad-y));
-  right:calc(18px - var(--hero-pad-x));
-  bottom:-50px;
-  left:calc(18px - var(--hero-pad-x));
-  pointer-events:none;
-  background:
-    linear-gradient(var(--green),var(--green)) left top/28px 2px no-repeat,
-    linear-gradient(var(--green),var(--green)) left top/2px 28px no-repeat,
-    linear-gradient(var(--green),var(--green)) right bottom/28px 2px no-repeat,
-    linear-gradient(var(--green),var(--green)) right bottom/2px 28px no-repeat;
-  opacity:.34
 }
 
 .hero > div:first-child {
@@ -188,7 +179,7 @@ select:focus-visible {
 }
 
 .hero h1 {
-  font:750 46px/1.08 var(--display-font);
+  font:750 70px/1.08 var(--display-font);
   letter-spacing:.018em;
   width:100%;
   max-width:590px;
@@ -210,7 +201,8 @@ select:focus-visible {
 }
 
 .hero h1 span:last-child {
-  text-align:right
+  text-align:right;
+  padding-right:150px
 }
 
 .hero p {
@@ -242,67 +234,6 @@ select:focus-visible {
   font:600 11px/1 var(--utility-font)
 }
 
-.hero-art {
-  width:min(100%,330px);
-  height:224px;
-  position:relative;
-  align-self:center;
-  margin-top:auto
-}
-
-.hero-art span {
-  position:absolute;
-  background:#fff;
-  width:124px;
-  height:164px;
-  border:7px solid #f9faf7;
-  outline:1px solid #bdc9bf;
-  box-shadow:var(--shadow);
-  border-radius:5px;
-  padding:105px 12px 12px;
-  color:#223329;
-  background:
-    linear-gradient(145deg,rgba(47,98,72,.76),rgba(165,184,169,.62) 46%,rgba(224,230,222,.9) 47%,rgba(76,98,82,.72));
-  font-family:var(--utility-font)
-}
-
-.hero-art span b,
-.hero-art span small {
-  display:block;
-  position:relative;
-  z-index:1
-}
-
-.hero-art span b {
-  font-size:13px;
-  letter-spacing:.08em
-}
-
-.hero-art span small {
-  margin-top:3px;
-  font-size:8px;
-  letter-spacing:.1em;
-  opacity:.7
-}
-
-.hero-art span:nth-child(1) {
-  left:12px;
-  top:28px;
-  transform:rotate(-7deg)
-}
-
-.hero-art span:nth-child(2) {
-  left:105px;
-  top:50px;
-  z-index:2
-}
-
-.hero-art span:nth-child(3) {
-  right:10px;
-  top:18px;
-  transform:rotate(8deg)
-}
-
 .section-title {
   margin:0 0 13px
 }
@@ -319,6 +250,23 @@ select:focus-visible {
   background:transparent
 }
 
+.home-bg-left {
+  position:fixed;
+  left:0;
+  top:0;
+  width:calc(100vw / 1.618);
+  height:100vh;
+  overflow:hidden;
+  pointer-events:none;
+  z-index:0
+}
+
+.home-bg-img {
+  width:100%;
+  height:100%;
+  object-fit:cover
+}
+
 .hero-choose {
   width:auto;
   min-height:50px;
@@ -328,6 +276,20 @@ select:focus-visible {
   padding-inline:28px;
   font-size:16px;
   font-weight:700;
+  display:inline-flex;
+  align-items:center;
+  gap:10px
+}
+
+.hero-choose-icon {
+  width:22px;
+  height:22px;
+  flex:0 0 auto;
+  fill:none;
+  stroke:currentColor;
+  stroke-width:1.8;
+  stroke-linecap:round;
+  stroke-linejoin:round
 }
 
 .recent-title-row {
@@ -337,7 +299,7 @@ select:focus-visible {
   gap:16px
 }
 
-.recent-title-row h2 {
+.recent-title-row h1 {
   flex:0 0 auto;
   margin:0
 }
@@ -1061,10 +1023,6 @@ nav button.active em {
   grid-template-columns:1fr 1fr
 }
 
-.hero-art {
-  display:none
-}
-
 
 }
 
@@ -1424,7 +1382,6 @@ button:hover:not(:disabled):not(.active) {
 
 .primary:hover:not(:disabled),
 #scanBtn:hover:not(:disabled),
-#chooseBtn:hover:not(:disabled),
 #saveProfile:hover:not(:disabled),
 .logo:hover:not(:disabled),
 #homeBtn:hover:not(:disabled),
@@ -1432,6 +1389,12 @@ button:hover:not(:disabled):not(.active) {
 .viewer .viewer-keep.active:hover:not(:disabled) {
   border-color: #294f3a;
   background: #294f3a;
+}
+
+#chooseBtn:hover:not(:disabled) {
+  color:#fff;
+  border-color: #294f3a;
+  background: #294f3a
 }
 
 .danger:hover:not(:disabled),
@@ -2077,7 +2040,7 @@ body.similar-side-open .similar-browser {
 
 [data-theme="night"] .hero {
   border-color:#344c3b;
-  background:#20242000;
+  background:color-mix(in srgb, var(--card) 90%, transparent);
 }
 
 [data-theme="night"] .recent-panel,
@@ -2088,7 +2051,6 @@ body.similar-side-open .similar-browser {
   background:var(--bg)
 }
 
-[data-theme="night"] .hero-art span,
 [data-theme="night"] button,
 [data-theme="night"] input,
 [data-theme="night"] select,
@@ -2099,11 +2061,12 @@ body.similar-side-open .similar-browser {
   border-color: var(--line);
 }
 
-[data-theme="night"] .hero-art span {
-  border-color:#dfe5de;
-  outline-color:#526156;
-  color:#f1f5f1;
-  background:linear-gradient(145deg,#467257,#314b3a 45%,#243129 46%,#52705d)
+[data-theme="night"] .home-bg-left::after {
+  content:"";
+  position:absolute;
+  inset:0;
+  background:rgba(21, 40, 27, 0.473);
+  pointer-events:none
 }
 
 [data-theme="night"] .hero p {

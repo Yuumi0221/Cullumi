@@ -488,7 +488,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"items": [json_safe_row(row) for row in rows]})
 
     def api_choose_folder(self, body: dict[str, Any]) -> None:
-        self._send_json({"path": choose_directory("选择照片文件夹")})
+        self._send_json({"path": choose_directory("从文件夹导入")})
 
     def api_choose_cache(self, body: dict[str, Any]) -> None:
         self._send_json({"path": choose_directory("选择缩略图和数据库存储位置")})
