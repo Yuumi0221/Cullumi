@@ -1354,7 +1354,7 @@ body.similar-side-open .similar-browser {
   border: 2px solid var(--card);
   border-radius: 12px;
   background: var(--image-surface);
-  box-shadow: 0 10px 25px rgba(67,37,45,.14);
+  box-shadow: 0 5px 15px rgba(67,37,45,.14);
 }
 
 .folder-cover.cover-0 {
@@ -1905,7 +1905,8 @@ body.similar-side-open .similar-browser {
 }
 
 [data-theme="night"] nav button.active:hover {
-  background: var(--pink2);
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
 }
 
 [data-theme="night"] .settings-tabs button:not(.active) {
@@ -2582,7 +2583,7 @@ body:not(.project-open) .icon-button {
   border-color:#ca7576;
   background:var(--home-card);
   transform:translateY(-2px);
-  box-shadow:0 14px 30px rgba(36,21,26,.15);
+  box-shadow:0 10px 25px rgba(36,21,26,.15);
 }
 
 .recent-thumb {
