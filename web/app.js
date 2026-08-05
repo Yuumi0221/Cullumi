@@ -16,17 +16,27 @@ function applyTheme(theme,persist=false){state.theme=theme;document.documentElem
 applyTheme(state.theme);
 
 const recentProjectName=project=>project.root.split(/[\\/]/).pop()||project.root;
+function recentProjectTime(value){
+  const opened=new Date(value||0);if(Number.isNaN(opened.getTime()))return "最近使用";
+  const now=new Date(),today=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+  const day=new Date(opened.getFullYear(),opened.getMonth(),opened.getDate());
+  const days=Math.max(0,Math.floor((today-day)/86400000));
+  if(days===0)return `今天 ${String(opened.getHours()).padStart(2,"0")}:${String(opened.getMinutes()).padStart(2,"0")}`;
+  if(days===1)return "昨天";if(days<7)return `${days} 天前`;if(days<14)return "上周";
+  return `${opened.getMonth()+1} 月 ${opened.getDate()} 日`;
+}
 function renderRecentProjects(){
   const query=state.recentQuery.trim().toLocaleLowerCase();
   const projects=state.recentProjects.filter(project=>recentProjectName(project).toLocaleLowerCase().includes(query));
-  $("#recentList").innerHTML=projects.length?projects.map(project=>`<button class="recent" data-pid="${project.id}"><b>${esc(recentProjectName(project))}</b><span>${esc(project.root)}</span><small>${project.available?"可打开":"存储目录当前不可用"}</small></button>`).join(""):`<div class="empty recent-empty"><b>${state.recentProjects.length?"没有匹配的项目":"暂无最近项目"}</b><span>${state.recentProjects.length?"请尝试其他项目名称。":"选择一个照片文件夹即可开始。"}</span></div>`;
-  $$(".recent").forEach(item=>{item.onclick=()=>openProject(item.dataset.pid);item.oncontextmenu=event=>openRecentMenu(event,item.dataset.pid)});
+  $("#recentList").innerHTML=projects.length?projects.map(project=>`<button class="recent" data-pid="${project.id}" title="${esc(project.root)}"><span class="recent-thumb">${project.thumbnail_url?`<img src="${esc(project.thumbnail_url)}" alt="">`:`<span class="recent-thumb-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6Z"/></svg></span>`}</span><span class="recent-info"><b>${esc(recentProjectName(project))}</b><span class="recent-meta">${project.total||0} 张&nbsp; · &nbsp;已留 ${project.kept||0}</span><small>${project.available?recentProjectTime(project.last_opened):"目录当前不可用"}</small></span><span class="recent-more" aria-label="项目操作" title="项目操作"><svg viewBox="0 0 18 4" aria-hidden="true"><circle cx="2" cy="2" r="2"/><circle cx="9" cy="2" r="2"/><circle cx="16" cy="2" r="2"/></svg></span></button>`).join(""):`<div class="empty recent-empty"><b>${state.recentProjects.length?"没有匹配的项目":"暂无最近筛选"}</b><span>${state.recentProjects.length?"请尝试其他项目名称。":"选择一个照片文件夹即可开始。"}</span></div>`;
+  $$(".recent").forEach(item=>{item.onclick=event=>event.target.closest(".recent-more")?openRecentMenu(event,item.dataset.pid):openProject(item.dataset.pid);item.oncontextmenu=event=>openRecentMenu(event,item.dataset.pid)});
 }
 
 async function boot(){
   const b=await json("/api/bootstrap");state.profiles=b.profiles;state.settings=b.settings;state.recentProjects=b.recent_projects;
   applyTheme(b.settings.theme||state.theme);
   $("#appVersion").textContent=`v${b.version}`;
+  $("#homeVersion").textContent=`v${b.version}`;
   renderProfiles();$("#autoAdvance").checked=!!b.settings.auto_advance;$("#autoCheckUpdates").checked=!!b.settings.auto_check_updates;$("#defaultCache").value=b.settings.default_cache_root;
   renderRecentProjects();
   if(b.settings.auto_check_updates&&!state.updateChecked){state.updateChecked=true;setTimeout(()=>checkForUpdates(false),450)}
@@ -138,6 +148,7 @@ async function loadLibraryPage(reset=false){
 async function loadView(){
   if(!state.project)return;const search=encodeURIComponent($("#searchInput").value.trim());
   document.body.classList.toggle("similar-view-open",state.view==="similar");
+  applySimilarMode();
   const libraryTitle={library:"照片库",ai:"AI 建议",undecided:"待决定",keep:"已保留",remove:"已移除"}[state.activeNav]||"照片库";
   $("#viewTitle").textContent=state.view==="library"?libraryTitle:{similar:"相似连拍",unreadable:"无法读取",quarantine:"隔离历史"}[state.view];
   $("#libraryFilters").classList.toggle("hidden",state.view!=="library");
@@ -172,11 +183,11 @@ function renderSimilarFolders(){
   $$("[data-similar-group]").forEach(button=>button.onclick=e=>{e.stopPropagation();openSimilarGroup(button.dataset.similarGroup)});
 }
 function applySimilarMode(){
-  const selected=!!state.similar.selectedId,expanded=state.similar.mode==="expanded";
+  const selected=!!state.similar.selectedId,expanded=state.similar.mode==="expanded",visible=state.view==="similar"&&selected;
   $("#similarBrowser").classList.toggle("detail-open",selected);
   $("#similarBrowser").classList.toggle("detail-expanded",selected&&expanded);
   $("#similarDetail").classList.toggle("hidden",!selected);
-  $("#similarViewActions").classList.toggle("hidden",!selected);
+  $("#similarViewActions").classList.toggle("hidden",!visible);
   $("#similarCollapseBtn").classList.toggle("hidden",expanded);
   $("#similarExpandBtn").classList.toggle("hidden",expanded);
   $("#similarBackBtn").classList.toggle("hidden",!expanded);

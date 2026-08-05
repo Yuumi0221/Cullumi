@@ -45,3 +45,6 @@ Desktop.ini
 .env
 .env.*
 !.env.example
+
+# Pencil
+pen

@@ -198,6 +198,52 @@ def project_summary(project_id: str) -> dict[str, Any]:
     }
 
 
+def recent_project_payload(project_id: str, stored: dict[str, Any]) -> dict[str, Any]:
+    available = Path(stored["root"]).is_dir()
+    payload = {
+        "id": project_id,
+        **stored,
+        "available": available,
+        "total": 0,
+        "kept": 0,
+        "thumbnail_url": "",
+    }
+    if not available:
+        return payload
+    conn = None
+    try:
+        project = MANAGER.from_id(project_id)
+        if not project.db_path.is_file():
+            return payload
+        conn = connect_db(project.db_path)
+        counts = conn.execute(
+            """SELECT COUNT(*) total,
+                      SUM(CASE WHEN decision='keep' THEN 1 ELSE 0 END) kept
+                 FROM photos WHERE status='active'"""
+        ).fetchone()
+        payload["total"] = int(counts["total"] or 0)
+        payload["kept"] = int(counts["kept"] or 0)
+        cover = conn.execute(
+            """SELECT id,thumbnail FROM photos
+                WHERE status='active' AND error='' AND thumbnail<>''
+                ORDER BY CASE WHEN decision='keep' THEN 0 ELSE 1 END,
+                         mtime DESC, id DESC LIMIT 1"""
+        ).fetchone()
+        if cover and Path(cover["thumbnail"]).is_file():
+            query = urllib.parse.urlencode({
+                "project_id": project_id,
+                "id": cover["id"],
+                "token": TOKEN,
+            })
+            payload["thumbnail_url"] = f"/api/thumb?{query}"
+    except Exception:
+        pass
+    finally:
+        if conn is not None:
+            conn.close()
+    return payload
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = f"PhotoCuller/{__version__}"
 
@@ -338,7 +384,7 @@ class Handler(BaseHTTPRequestHandler):
         for pid in CONFIG.data.get("recent_projects", []):
             project = CONFIG.data.get("projects", {}).get(pid)
             if project:
-                recent.append({"id": pid, **project, "available": Path(project["root"]).is_dir()})
+                recent.append(recent_project_payload(pid, project))
         self._send_json({
             "version": __version__,
             "settings": {

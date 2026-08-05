@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Photo Culler</title>
-  <link rel="stylesheet" href="/static/app.css?v=1.0.0-ui9">
+  <link rel="stylesheet" href="/static/app.css?v=1.0.0-ui13-theme-layout">
 </head>
 <body>
   <header class="topbar">
@@ -27,16 +27,16 @@
     <section id="home" class="home">
       <div class="hero">
         <div><p class="eyebrow">从任意照片文件夹开始</p><h1><span>快速留下</span><span>美好瞬间</span></h1>
-          <p>支持 JPG / PNG / HEIC / HEIF / RAW 等常见图片格式。所有分析均在本机完成。</p>
-          <button id="chooseBtn" class="primary hero-choose"><svg class="hero-choose-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6Z"/></svg>从文件夹导入</button>
+          <p class="hero-description">支持 JPG / PNG / HEIC / HEIF / RAW 等常见图片格式<br>所有分析均在本机完成，保护你的隐私</p>
+          <button id="chooseBtn" class="primary hero-choose"><svg class="hero-choose-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6Z"/></svg>选择照片文件夹</button>
         </div>
       </div>
       <div class="home-bg-left" aria-hidden="true">
-        <img class="home-bg-img" src="/static/2022_0724_15425500.jpg" alt="">
+        <img class="home-bg-img" src="/static/home-background.jpg" alt="">
       </div>
       <section class="recent-panel" aria-labelledby="recentTitle">
         <div class="section-title recent-title-row">
-          <h1 id="recentTitle">最近项目</h1>
+          <h1 id="recentTitle">最近筛选</h1>
           <label class="recent-search">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
             <input id="recentSearch" type="search" placeholder="搜索项目名称" aria-label="搜索最近项目名称">
@@ -44,6 +44,7 @@
         </div>
         <div id="recentList" class="recent-grid"></div>
       </section>
+      <small class="home-version">拾忆 <span id="homeVersion">v1.0.0</span></small>
     </section>
 
     <section id="workspace" class="workspace hidden">
@@ -219,6 +220,6 @@
   </div>
   <div id="toast"></div>
   <script>window.APP_TOKEN="__APP_TOKEN__"</script>
-  <script src="/static/app.js?v=1.0.0-ui2"></script>
+  <script src="/static/app.js?v=1.0.0-ui13-theme-layout"></script>
 </body>
 </html>
