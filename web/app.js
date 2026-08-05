@@ -36,7 +36,6 @@ async function boot(){
   const b=await json("/api/bootstrap");state.profiles=b.profiles;state.settings=b.settings;state.recentProjects=b.recent_projects;
   applyTheme(b.settings.theme||state.theme);
   $("#appVersion").textContent=`v${b.version}`;
-  $("#homeVersion").textContent=`v${b.version}`;
   renderProfiles();$("#autoAdvance").checked=!!b.settings.auto_advance;$("#autoCheckUpdates").checked=!!b.settings.auto_check_updates;$("#defaultCache").value=b.settings.default_cache_root;
   renderRecentProjects();
   if(b.settings.auto_check_updates&&!state.updateChecked){state.updateChecked=true;setTimeout(()=>checkForUpdates(false),450)}

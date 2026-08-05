@@ -4,18 +4,21 @@
   --ink:#34282c;
   --muted:#75676c;
   --line:#e2d4d5;
-  --pink:#ca7576;
+  --pink:#c44468;
   --pink2:#f4e1df;
-  --accent-hover:#b96368;
-  --red:#b34c41;
+  --pink-hover:#aa2f52;
+  --red:#ae431e;
+  --remove-hover:#e4776e;
+  --remove-hover-dark:#963211;
   --soft:#eee5e3;
   --surface-hover:#f3e7e5;
   --surface-hover-strong:#ead8d6;
   --border-hover:#d3b6b8;
   --image-surface:#eee7e5;
-  --keep:#398354;
+  --keep:#5e7a47;
   --keep-soft:#e1ece3;
-  --keep-hover:#294f3a;
+  --keep-hover:#47965f;
+  --keep-hover-dark:#445e2f;
   --display-font:"Segoe UI","Microsoft YaHei",sans-serif;
   --body-font:"Segoe UI","Microsoft YaHei",sans-serif;
   --utility-font:"Segoe UI","Microsoft YaHei",sans-serif;
@@ -65,7 +68,13 @@ select:focus-visible {
   outline-offset:2px
 }
 
-.primary,#scanBtn {
+.primary {
+  background:var(--keep);
+  color:#fff;
+  border-color:var(--keep)
+}
+
+#scanBtn {
   background:var(--pink);
   color:#fff;
   border-color:var(--pink)
@@ -562,6 +571,7 @@ nav button.active em {
   border:1px solid var(--line);
   border-radius:16px;
   padding:0;
+  background:var(--card);
   box-shadow:var(--shadow)
 }
 
@@ -1122,25 +1132,30 @@ button:hover:not(:disabled):not(.active) {
   background: var(--surface-hover);
 }
 
+#saveProfile:hover:not(:disabled) {
+  background:var(--keep-hover-dark);
+  color:#fff;
+  border-color:var(--keep-hover-dark)
+}
+
 .primary:hover:not(:disabled),
 #scanBtn:hover:not(:disabled),
-#saveProfile:hover:not(:disabled),
 .logo:hover:not(:disabled),
 #homeBtn:hover:not(:disabled) {
-  border-color: var(--accent-hover);
-  background: var(--accent-hover);
+  border-color: var(--pink-hover);
+  background: var(--pink-hover);
 }
 
 #chooseBtn:hover:not(:disabled) {
   color:#fff;
-  border-color: var(--accent-hover);
-  background: var(--accent-hover)
+  border-color: var(--pink-hover);
+  background: var(--pink-hover)
 }
 
 .decision-keep .card-actions .keep:hover:not(:disabled),
 .viewer .viewer-keep.active:hover:not(:disabled) {
-  border-color: var(--keep-hover);
-  background: var(--keep-hover);
+  border-color: var(--keep-hover-dark);
+  background: var(--keep-hover-dark);
 }
 
 .danger:hover:not(:disabled),
@@ -1149,8 +1164,8 @@ button:hover:not(:disabled):not(.active) {
 #confirmOk:hover:not(:disabled),
 .decision-remove .card-actions .danger:hover:not(:disabled),
 .viewer .viewer-remove.active:hover:not(:disabled) {
-  border-color: #913a32;
-  background: #913a32;
+  border-color: var(--remove-hover-dark);
+  background: var(--remove-hover-dark);
 }
 
 nav button:hover:not(:disabled),
@@ -1166,8 +1181,8 @@ nav button:hover:not(:disabled),
 }
 
 .photo-card.decision-keep {
-  border-color: #398354;
-  box-shadow: 0 0 0 1px #398354, 0 5px 20px rgba(67,37,45,.04);
+  border-color: var(--keep);
+  box-shadow: 0 0 0 1px var(--keep), 0 5px 20px rgba(67,37,45,.04);
 }
 
 .photo-card.decision-remove {
@@ -1184,8 +1199,8 @@ nav button:hover:not(:disabled),
 
 .decision-keep .card-actions .keep {
   color: #fff;
-  background: #398354;
-  border-color: #398354;
+  background: var(--keep);
+  border-color: var(--keep);
 }
 
 .decision-remove .card-actions .danger {
@@ -1694,13 +1709,13 @@ body.similar-side-open .similar-browser {
 }
 
 .viewer .viewer-keep.active:hover:not(:disabled) {
-  border-color: #47965f;
-  background: #47965f;
+  border-color: var(--keep-hover);
+  background: var(--keep-hover);
 }
 
 .viewer .viewer-remove.active:hover:not(:disabled) {
-  border-color: #e4776e;
-  background: #e4776e;
+  border-color: var(--remove-hover);
+  background: var(--remove-hover);
 }
 
 .viewer .viewer-decision {
@@ -1711,8 +1726,8 @@ body.similar-side-open .similar-browser {
 
 .viewer .viewer-keep.active {
   color: #fff;
-  background: #398354;
-  border-color: #398354;
+  background: var(--keep);
+  border-color: var(--keep);
 }
 
 .viewer .viewer-remove.active {
@@ -1760,15 +1775,21 @@ body.similar-side-open .similar-browser {
   --ink: #fff7f8;
   --muted: #b8adb0;
   --line: #51464a;
-  --pink: #e59691;
-  --pink2: #4a3033;
-  --accent-hover: #f0a19a;
-  --red: #d8645b;
+  --pink: #c44468;
+  --pink2: #30292c;
+  --pink-hover: #e76086;
+  --red: #ae431e;
+  --remove-hover:#cb552d;
+  --remove-hover-dark:#913a32;
   --soft:#332d2f;
   --surface-hover:#3a3235;
   --surface-hover-strong:#44383c;
   --border-hover:#7c696f;
   --image-surface:#171416;
+  --keep:#5e7a47;
+  --keep-soft:#e1ece3;
+  --keep-hover:#7c9b63;
+  --keep-hover-dark:#294f3a;
   --shadow: 0 18px 50px #0008;
 }
 
@@ -1834,7 +1855,7 @@ body.similar-side-open .similar-browser {
 }
 
 [data-theme="night"] .toolbar button.ai-sweep-button:hover:not(:disabled) {
-  border-color:#e4776e;
+  border-color:var(--remove-hover);
   color:#ffd0cc;
   background:#6a3531;
   transform:none;
@@ -1916,8 +1937,8 @@ body.similar-side-open .similar-browser {
 }
 
 [data-theme="night"] .logo:hover:not(:disabled) {
-  border-color: var(--accent-hover);
-  background: var(--accent-hover);
+  border-color: var(--pink-hover);
+  background: var(--pink-hover);
 }
 
 [data-theme="night"] .field-reset:hover:not(:disabled) {
@@ -1932,11 +1953,16 @@ body.similar-side-open .similar-browser {
   background: var(--surface-hover);
 }
 
-[data-theme="night"] #scanBtn,
-[data-theme="night"] .primary {
+[data-theme="night"] #scanBtn {
   color: #fff;
   background: var(--pink);
   border-color: var(--pink);
+}
+
+[data-theme="night"] .primary {
+  color: #fff;
+  background: var(--keep);
+  border-color: var(--keep);
 }
 
 [data-theme="night"] .decision-keep .card-actions .keep,
@@ -1946,19 +1972,24 @@ body.similar-side-open .similar-browser {
   border-color: var(--keep);
 }
 
+[data-theme="night"] #saveProfile:hover:not(:disabled) {
+  background:var(--keep-hover);
+  color:#fff;
+  border-color:var(--keep-hover)
+}
+
 [data-theme="night"] #scanBtn:hover:not(:disabled),
 [data-theme="night"] .primary:hover:not(:disabled),
 [data-theme="night"] #chooseBtn:hover:not(:disabled),
-[data-theme="night"] #saveProfile:hover:not(:disabled),
 [data-theme="night"] #homeBtn:hover:not(:disabled) {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
+  background: var(--pink-hover);
+  border-color: var(--pink-hover);
 }
 
 [data-theme="night"] .decision-keep .card-actions .keep:hover:not(:disabled),
 [data-theme="night"] .viewer .viewer-keep.active:hover:not(:disabled) {
-  background: #47965f;
-  border-color: #47965f;
+  background: var(--keep-hover);
+  border-color: var(--keep-hover);
 }
 
 [data-theme="night"] .danger,
@@ -1975,8 +2006,8 @@ body.similar-side-open .similar-browser {
 [data-theme="night"] #confirmOk:hover:not(:disabled),
 [data-theme="night"] .decision-remove .card-actions .danger:hover:not(:disabled),
 [data-theme="night"] .viewer .viewer-remove.active:hover:not(:disabled) {
-  background: #e4776e;
-  border-color: #e4776e;
+  background: var(--remove-hover);
+  border-color: var(--remove-hover);
 }
 
 [data-theme="night"] .confirm-list {
@@ -2395,8 +2426,7 @@ body:not(.project-open) .icon-button {
   font:400 20px/1.45 "Segoe UI","Microsoft YaHei",sans-serif;
 }
 
-.home .hero-choose,
-[data-theme="night"] .home .hero-choose {
+.home .hero-choose {
   width:308px;
   height:78px;
   min-height:78px;
@@ -2409,9 +2439,13 @@ body:not(.project-open) .icon-button {
   color:#fff;
   border:0;
   border-radius:40px;
-  background:#ca7576;
+  background:#bc6869;
   font-size:25px;
   font-weight:700;
+}
+
+[data-theme="night"] .home .hero-choose {
+  background:#ca7576
 }
 
 .home #chooseBtn:hover:not(:disabled),
@@ -2439,7 +2473,7 @@ body:not(.project-open) .icon-button {
   inset:0 0 0 var(--home-split);
   min-width:0;
   min-height:0;
-  padding:37px 68px 68px 68px;
+  padding:37px 68px 40px 68px;
   display:flex;
   flex-direction:column;
   overflow:hidden;
@@ -2663,14 +2697,6 @@ body:not(.project-open) .icon-button {
   color:var(--home-muted);
 }
 
-.home-version {
-  position:absolute;
-  right:68px;
-  bottom:32px;
-  color:#9e9e9e;
-  font:16px/1.45 Inter,var(--utility-font);
-}
-
 @media (max-width: 1500px) {
   .hero {
     top:clamp(72px,14vh,160px);
@@ -2851,11 +2877,6 @@ body:not(.project-open) .icon-button {
     padding:0;
     overflow:visible;
     grid-template-columns:repeat(2,minmax(0,1fr));
-  }
-
-  .home-version {
-    right:32px;
-    bottom:24px;
   }
 }
 
