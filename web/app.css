@@ -4,9 +4,11 @@
   --ink:#34282c;
   --muted:#75676c;
   --line:#e2d4d5;
-  --pink:#c44468;
+  --pink:#d74b73;
   --pink2:#f4e1df;
   --pink-hover:#aa2f52;
+  --pink-hero:#d75871;
+  --pink-hero-hover:#f1648c;
   --red:#ae431e;
   --remove-hover:#e4776e;
   --remove-hover-dark:#963211;
@@ -44,7 +46,7 @@ button,input,select {
 button {
   border:1px solid var(--line);
   background:var(--card);
-  border-radius:6px;
+  border-radius:9px;
   padding:9px 14px;
   cursor:pointer;
   color:var(--ink);
@@ -1610,7 +1612,7 @@ body.similar-side-open .similar-browser {
   display: inline-flex;
   align-items: center;
   padding: 3px 7px;
-  border-radius: 6px;
+  border-radius: 9px;
   color: #fff;
   font-size: 11px;
   font-weight: 700;
@@ -2440,20 +2442,16 @@ body:not(.project-open) .icon-button {
   color:#fff;
   border:0;
   border-radius:40px;
-  background:#bc6869;
+  background:var(--pink-hero);
   font-size:25px;
   font-weight:700;
-}
-
-[data-theme="night"] .home .hero-choose {
-  background:#ca7576
 }
 
 .home #chooseBtn:hover:not(:disabled),
 [data-theme="night"] .home #chooseBtn:hover:not(:disabled) {
   color:#fff;
-  border-color:#da8888;
-  background:#da8888;
+  border-color:var(--pink-hero-hover);
+  background:var(--pink-hero-hover);
   transform:translateY(-2px);
   box-shadow:0 14px 32px rgba(74,25,32,.24);
 }
@@ -2565,7 +2563,7 @@ body:not(.project-open) .icon-button {
   color:var(--home-title);
   text-align:left;
   border:1px solid var(--home-card-border);
-  border-radius:6px;
+  border-radius:11px;
   background:var(--home-card);
   box-shadow:none;
   transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease;
@@ -2580,7 +2578,7 @@ body:not(.project-open) .icon-button {
 .recent:hover:not(:disabled),
 [data-theme="night"] .recent:hover:not(:disabled) {
   z-index:1;
-  border-color:#ca7576;
+  border-color:var(--home-accent);
   background:var(--home-card);
   transform:translateY(-2px);
   box-shadow:0 10px 25px rgba(36,21,26,.15);
@@ -2673,7 +2671,7 @@ body:not(.project-open) .icon-button {
   justify-content:center;
   color:var(--home-more);
   border:1px solid var(--home-control-border);
-  border-radius:6px;
+  border-radius:11px;
   background:var(--home-control);
   transition:color .15s ease,background-color .15s ease,border-color .15s ease;
 }
