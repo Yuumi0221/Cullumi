@@ -7,8 +7,8 @@
   --pink:#d74b73;
   --pink2:#f4e1df;
   --pink-hover:#aa2f52;
-  --pink-hero:#d75871;
-  --pink-hero-hover:#f1648c;
+  --pink-hero:#c75f6d;
+  --pink-hero-hover:#e26780;
   --red:#ae431e;
   --remove-hover:#e4776e;
   --remove-hover-dark:#963211;
@@ -1777,9 +1777,9 @@ body.similar-side-open .similar-browser {
   --ink: #fff7f8;
   --muted: #b8adb0;
   --line: #51464a;
-  --pink: #c44468;
-  --pink2: #30292c;
-  --pink-hover: #e76086;
+  --pink: #e26780;
+  --pink2: #42363c;
+  --pink-hover: #f88199;
   --red: #ae431e;
   --remove-hover:#cb552d;
   --remove-hover-dark:#913a32;
@@ -2482,10 +2482,11 @@ body:not(.project-open) .icon-button {
 }
 
 .recent-title-row {
-  width:548px;
-  max-width:100%;
+  width:674px;
+  max-width:calc(100% + 22px);
   min-height:49px;
-  margin:0 0 22px;
+  margin:0 0 22px -22px;
+  padding:0 36px 0 22px;
   display:flex;
   align-items:center;
   justify-content:space-between;
@@ -2502,6 +2503,7 @@ body:not(.project-open) .icon-button {
 .recent-search {
   width:280px;
   min-height:44px;
+  margin-right:9px;
   padding:0 15px;
   display:flex;
   align-items:center;
@@ -2537,12 +2539,12 @@ body:not(.project-open) .icon-button {
 }
 
 .recent-grid {
-  width:650px;
+  width:674px;
   max-width:calc(100% + 22px);
   flex:1;
   min-height:0;
   margin:-10px 0 0 -22px;
-  padding:10px 12px 80px 22px;
+  padding:10px 36px 80px 22px;
   display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));
   grid-auto-rows:269px;
@@ -2601,7 +2603,7 @@ body:not(.project-open) .icon-button {
   object-fit:cover;
 }
 
-.recent-thumb-empty {
+.recent span.recent-thumb-empty {
   width:100%;
   height:100%;
   display:flex;
@@ -2612,8 +2614,8 @@ body:not(.project-open) .icon-button {
 }
 
 .recent-thumb-empty svg {
-  width:38px;
-  height:38px;
+  width:64px;
+  height:64px;
   fill:none;
   stroke:currentColor;
   stroke-width:1.4;
@@ -2729,7 +2731,8 @@ body:not(.project-open) .icon-button {
   }
 
   .recent-title-row {
-    width:100%;
+    width:calc(100% + 22px);
+    padding-right:36px;
   }
 
   .recent-grid {
@@ -2737,7 +2740,7 @@ body:not(.project-open) .icon-button {
   }
 
   .recent-grid {
-    padding-right:12px;
+    padding-right:36px;
     grid-template-columns:repeat(2,minmax(0,1fr));
   }
 
@@ -2865,6 +2868,8 @@ body:not(.project-open) .icon-button {
 
   .recent-title-row {
     width:100%;
+    margin:0 0 22px;
+    padding:0;
     flex-direction:row;
     align-items:center;
   }
