@@ -23,7 +23,7 @@
     </div>
   </header>
 
-  <main>
+  <main class="scroll-fade-region">
     <section id="home" class="home">
       <div class="hero">
         <div><p class="eyebrow">从任意照片文件夹开始</p><h1><span>快速留下</span><span>美好瞬间</span></h1>
@@ -42,14 +42,14 @@
             <input id="recentSearch" type="search" placeholder="搜索项目名称" aria-label="搜索最近项目名称">
           </label>
         </div>
-        <div id="recentList" class="recent-grid"></div>
+        <div id="recentList" class="recent-grid scroll-fade-region"></div>
       </section>
     </section>
 
     <section id="workspace" class="workspace hidden">
       <aside>
         <div id="projectBox" class="project-box" role="button" tabindex="0" title="双击在文件管理器中打开" aria-label="当前项目，双击在文件管理器中打开"><small>当前项目</small><b id="projectName"></b><span id="projectPath"></span></div>
-        <nav id="nav">
+        <nav id="nav" class="scroll-fade-region">
           <button data-nav="library" data-preset="library" class="active">照片库 <em id="libraryCount">0</em></button>
           <span class="nav-section-label">智能整理</span>
           <button data-nav="ai" data-preset="ai">AI 建议 <em id="aiCount">0</em></button>
@@ -120,10 +120,10 @@
         <div id="gallery" class="gallery"></div>
         <div id="librarySentinel" class="library-sentinel hidden" aria-live="polite"></div>
         <section id="similarBrowser" class="similar-browser hidden">
-          <div id="similarFolderPane" class="similar-folder-pane">
+          <div id="similarFolderPane" class="similar-folder-pane scroll-fade-region">
             <div id="similarFolders" class="similar-folders"></div>
           </div>
-          <section id="similarDetail" class="similar-detail hidden">
+          <section id="similarDetail" class="similar-detail scroll-fade-region hidden">
             <div id="similarDetailGallery" class="gallery similar-detail-gallery"></div>
           </section>
         </section>
@@ -148,7 +148,7 @@
           <line x1="13" y1="3" x2="3" y2="13"/>
         </svg></button></div>
     <div class="settings-tabs"><button data-setting="general" class="active">常规与存储</button><button data-setting="profiles">自定义模式</button></div>
-    <section id="generalSettings" class="settings-page">
+    <section id="generalSettings" class="settings-page scroll-fade-region">
       <label class="toggle"><input id="autoAdvance" type="checkbox"><span>标记后自动下一张</span></label>
       <div class="update-row">
         <label class="toggle"><input id="autoCheckUpdates" type="checkbox"><span>启动时自动检查更新</span><button id="checkUpdateBtn">检查更新</button><span id="updateStatus" role="status"></span></label>
@@ -157,7 +157,7 @@
       <label>当前项目存储位置<div class="path-row"><input id="projectCache" readonly><button id="projectCacheBtn">迁移</button></div></label>
       <div id="oldCaches"></div>
     </section>
-    <section id="profileSettings" class="settings-page hidden">
+    <section id="profileSettings" class="settings-page scroll-fade-region hidden">
       <div class="profile-toolbar"><select id="profileEditorSelect"></select><button id="cloneProfile">复制为自定义</button><button id="deleteProfile" class="danger">删除</button></div>
       <label>配置名称：<input id="profileName" maxlength="40"></label>
       <div class="form-grid">

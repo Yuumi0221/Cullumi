@@ -17,6 +17,8 @@
   --surface-hover-strong:#ead6d9;
   --border-hover:#d3b6b8;
   --image-surface:#eee7e5;
+  --scrollbar-thumb:rgba(117,102,108,.28);
+  --scrollbar-thumb-hover:rgba(117,102,108,.45);
   --keep:#5e7a47;
   --keep-soft:#e1ece3;
   --keep-hover:#47965f;
@@ -1473,7 +1475,7 @@ body.similar-side-open .similar-browser {
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb,var(--muted) 28%,transparent) transparent;
+  scrollbar-color: transparent transparent;
 }
 
 *::-webkit-scrollbar {
@@ -1494,11 +1496,25 @@ body.similar-side-open .similar-browser {
   min-height: 36px;
   border: 0;
   border-radius: 999px;
-  background:color-mix(in srgb,var(--muted) 28%,transparent);
+  background-color:transparent;
 }
 
-*::-webkit-scrollbar-thumb:hover {
-  background:color-mix(in srgb,var(--muted) 45%,transparent);
+.scroll-fade-region {
+  scrollbar-color:transparent transparent;
+  transition:scrollbar-color .5s ease;
+}
+
+.scroll-fade-region:hover {
+  scrollbar-color:var(--scrollbar-thumb) transparent;
+  transition-duration:.15s;
+}
+
+.scroll-fade-region:hover::-webkit-scrollbar-thumb {
+  background-color:var(--scrollbar-thumb);
+}
+
+.scroll-fade-region:hover::-webkit-scrollbar-thumb:hover {
+  background-color:var(--scrollbar-thumb-hover);
 }
 
 *::-webkit-scrollbar-button {
@@ -1788,6 +1804,8 @@ body.similar-side-open .similar-browser {
   --surface-hover-strong:#44383c;
   --border-hover:#7c696f;
   --image-surface:#171416;
+  --scrollbar-thumb:rgba(184,173,176,.30);
+  --scrollbar-thumb-hover:rgba(184,173,176,.48);
   --keep:#5e7a47;
   --keep-soft:#e1ece3;
   --keep-hover:#7c9b63;
@@ -1867,18 +1885,6 @@ body.similar-side-open .similar-browser {
 [data-theme="night"] .toolbar button.ai-sweep-button:hover:not(:disabled) em {
   color:#321b19;
   background:#ffc0bb
-}
-
-[data-theme="night"] * {
-  scrollbar-color:color-mix(in srgb,var(--muted) 30%,transparent) transparent
-}
-
-[data-theme="night"] *::-webkit-scrollbar-thumb {
-  background:color-mix(in srgb,var(--muted) 30%,transparent)
-}
-
-[data-theme="night"] *::-webkit-scrollbar-thumb:hover {
-  background:color-mix(in srgb,var(--muted) 48%,transparent)
 }
 
 [data-theme="night"] #settingsBtn {
