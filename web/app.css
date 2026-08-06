@@ -5,7 +5,7 @@
   --muted:#75676c;
   --line:#e2d4d5;
   --pink:#d74b73;
-  --pink2:#f4e1df;
+  --pink2:#f4dfe2;
   --pink-hover:#aa2f52;
   --pink-hero:#c75f6d;
   --pink-hero-hover:#e26780;
@@ -13,8 +13,8 @@
   --remove-hover:#e4776e;
   --remove-hover-dark:#963211;
   --soft:#eee5e3;
-  --surface-hover:#f3e7e5;
-  --surface-hover-strong:#ead8d6;
+  --surface-hover:#f3e5e6;
+  --surface-hover-strong:#ead6d9;
   --border-hover:#d3b6b8;
   --image-surface:#eee7e5;
   --keep:#5e7a47;
@@ -1316,12 +1316,12 @@ body.similar-side-open .similar-browser {
 
 [data-theme="day"] button.similar-folder:hover:not(:disabled):not(.active) {
   border-color: var(--border-hover);
-  background: var(--surface-hover-strong);
+  background: var(--surface-hover);
 }
 
 [data-theme="day"] button.similar-folder.active:hover:not(:disabled) {
   border-color: var(--border-hover);
-  background: var(--surface-hover-strong);
+  background: var(--surface-hover);
 }
 
 [data-theme="day"] .similar-toolbar-actions button {
@@ -1332,11 +1332,11 @@ body.similar-side-open .similar-browser {
 
 [data-theme="day"] .similar-toolbar-actions button:hover:not(:disabled) {
   border-color: var(--border-hover);
-  background: var(--surface-hover-strong);
+  background: var(--surface-hover);
 }
 
 .similar-folder.active {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pink) 50%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pink) 50%, transparent);
 }
 
 .folder-stack {
@@ -2040,7 +2040,7 @@ body.similar-side-open .similar-browser {
 
 [data-theme="night"] .similar-folder.active {
   border-color: var(--line);
-  background: transparent;
+  background: color-mix(in srgb, var(--card) 82%, transparent);
 }
 
 [data-theme="night"] .similar-folder.active:hover {

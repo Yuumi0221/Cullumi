@@ -194,6 +194,8 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("repeat(auto-fill, minmax(170px, 210px))", styles)
 
     def test_similar_selection_outlines_have_safe_insets_and_subtle_scrollbars(self):
+        markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn("margin-right: 12px;", styles)
         self.assertIn("overflow-x: hidden;", styles)
@@ -392,7 +394,7 @@ class WebStaticTests(unittest.TestCase):
         script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn("--home-accent:#ca7576;", styles)
-        self.assertIn("--pink2:#f4e1df;", styles)
+        self.assertIn("--pink2:#f4dfe2;", styles)
         self.assertIn("--home-accent:#e59691;", styles)
         self.assertIn("--keep:#5e7a47;", styles)
         self.assertIn("--red:#ae431e;", styles)
