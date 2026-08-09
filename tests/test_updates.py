@@ -28,10 +28,10 @@ class UpdateTests(unittest.TestCase):
         self.assertGreater(version_key("1.10.0"), version_key("1.9.9"))
         asset = select_release_asset([
             {"name": "source.zip", "browser_download_url": "https://github.com/source.zip"},
-            {"name": "照片筛选器-v1.4.0-Windows-便携版.zip", "browser_download_url": "https://github.com/app.zip"},
+            {"name": "Cullumi-v1.4.0-Windows-便携版.zip", "browser_download_url": "https://github.com/app.zip"},
             {"name": "installer.msi", "browser_download_url": "https://github.com/app.msi"},
         ])
-        self.assertEqual(asset["name"], "照片筛选器-v1.4.0-Windows-便携版.zip")
+        self.assertEqual(asset["name"], "Cullumi-v1.4.0-Windows-便携版.zip")
         self.assertIsNone(select_release_asset([
             {"name": "source.zip", "browser_download_url": "https://github.com/source.zip"},
         ]))
@@ -39,11 +39,11 @@ class UpdateTests(unittest.TestCase):
     def test_check_for_update_uses_latest_release_asset(self):
         release = {
             "tag_name": "v1.4.0",
-            "name": "Photo Culler 1.4.0",
-            "html_url": "https://github.com/Yuumi0221/photo-culler/releases/tag/v1.4.0",
+            "name": "Cullumi 1.4.0",
+            "html_url": "https://github.com/Yuumi0221/Cullumi/releases/tag/v1.4.0",
             "assets": [{
-                "name": "photo-culler-v1.4.0-windows.zip",
-                "browser_download_url": "https://github.com/Yuumi0221/photo-culler/releases/download/v1.4.0/app.zip",
+                "name": "Cullumi-v1.4.0-windows.zip",
+                "browser_download_url": "https://github.com/Yuumi0221/Cullumi/releases/download/v1.4.0/app.zip",
             }],
         }
 
@@ -67,7 +67,7 @@ class UpdateTests(unittest.TestCase):
                 return FakeResponse(b"new update")
 
             result = download_release_asset(
-                "https://github.com/Yuumi0221/photo-culler/releases/download/v1.4.0/update.zip",
+                "https://github.com/Yuumi0221/Cullumi/releases/download/v1.4.0/update.zip",
                 "update.zip",
                 destination=destination,
                 opener=opener,

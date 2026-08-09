@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-RELEASES_API_URL = "https://api.github.com/repos/Yuumi0221/photo-culler/releases/latest"
-RELEASES_PAGE_URL = "https://github.com/Yuumi0221/photo-culler/releases"
+RELEASES_API_URL = "https://api.github.com/repos/Yuumi0221/Cullumi/releases/latest"
+RELEASES_PAGE_URL = "https://github.com/Yuumi0221/Cullumi/releases"
 _VERSION_PATTERN = re.compile(r"(?<!\d)(\d+)(?:\.(\d+))?(?:\.(\d+))?")
 
 
@@ -48,7 +48,7 @@ def select_release_asset(assets: list[dict[str, Any]]) -> dict[str, Any] | None:
         score = {".zip": 30, ".exe": 20, ".msi": 10}[suffix]
         if any(word in lowered for word in ("windows", "win64", "win-x64", "portable", "便携")):
             score += 50
-        if any(word in lowered for word in ("photo-culler", "photoculler", "照片筛选器")):
+        if any(word in lowered for word in ("Cullumi", "photoculler", "Cullumi")):
             score += 30
         candidates.append((score, asset))
     return max(candidates, key=lambda item: item[0])[1] if candidates else None
@@ -113,7 +113,7 @@ def downloads_directory() -> Path:
 
 
 def _unused_download_path(directory: Path, name: str) -> Path:
-    safe_name = Path(name).name.strip() or "photo-culler-update.zip"
+    safe_name = Path(name).name.strip() or "Cullumi-update.zip"
     candidate = directory / safe_name
     for index in range(1, 1000):
         if not candidate.exists():

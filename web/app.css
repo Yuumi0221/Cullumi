@@ -133,11 +133,10 @@ select:focus-visible {
 }
 
 .logo {
-  background:var(--pink);
-  color:#fff;
-  padding:8px 11px;
-  border-radius:10px;
-  font-size:20px
+  background:transparent;
+  color:inherit;
+  padding:0;
+  border-radius:10px
 }
 
 .top-actions {
@@ -794,7 +793,6 @@ nav button.active em {
 
 .logo {
   border: 0;
-  font-size: 23px;
   line-height: 1;
   width: 42px;
   height: 42px;
@@ -804,6 +802,16 @@ nav button.active em {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--ink) 18%, transparent);
+  transition: transform .18s ease, filter .18s ease, box-shadow .18s ease;
+}
+
+.logo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .workspace aside nav {
@@ -1143,11 +1151,17 @@ button:hover:not(:disabled):not(.active) {
 }
 
 .primary:hover:not(:disabled),
-#scanBtn:hover:not(:disabled),
-.logo:hover:not(:disabled),
-#homeBtn:hover:not(:disabled) {
+#scanBtn:hover:not(:disabled) {
   border-color: var(--pink-hover);
   background: var(--pink-hover);
+}
+
+#homeBtn:hover:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+  filter: saturate(1.08) brightness(1.03);
+  transform: translateY(-1px);
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--ink) 24%, transparent);
 }
 
 #chooseBtn:hover:not(:disabled) {
@@ -1940,14 +1954,13 @@ body.similar-side-open .similar-browser {
 }
 
 [data-theme="night"] .logo {
-  border-color: var(--pink);
-  background: var(--pink);
-  color: #fff;
+  border-color: transparent;
+  background: transparent;
 }
 
 [data-theme="night"] .logo:hover:not(:disabled) {
-  border-color: var(--pink-hover);
-  background: var(--pink-hover);
+  border-color: transparent;
+  background: transparent;
 }
 
 [data-theme="night"] .field-reset:hover:not(:disabled) {
@@ -1989,10 +2002,14 @@ body.similar-side-open .similar-browser {
 
 [data-theme="night"] #scanBtn:hover:not(:disabled),
 [data-theme="night"] .primary:hover:not(:disabled),
-[data-theme="night"] #chooseBtn:hover:not(:disabled),
-[data-theme="night"] #homeBtn:hover:not(:disabled) {
+[data-theme="night"] #chooseBtn:hover:not(:disabled) {
   background: var(--pink-hover);
   border-color: var(--pink-hover);
+}
+
+[data-theme="night"] #homeBtn:hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
 }
 
 [data-theme="night"] .decision-keep .card-actions .keep:hover:not(:disabled),
@@ -2265,7 +2282,7 @@ body.similar-side-open .similar-browser {
 
 /* Homepage: font, theme tokens, layout, cards, and responsive rules */
 @font-face {
-  font-family:"Photo Culler Display";
+  font-family:"Cullumi Display";
   src:url("/static/home-display.otf") format("opentype");
   font-display:swap;
   font-weight:700;
@@ -2408,7 +2425,7 @@ body:not(.project-open) .icon-button {
   flex-direction:column;
   gap:0;
   color:#fff;
-  font:700 95px/1.08 "Photo Culler Display","STSong","SimSun",serif;
+  font:700 95px/1.08 "Cullumi Display","STSong","SimSun",serif;
   letter-spacing:.013em;
 }
 

@@ -20,9 +20,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller 构建失败。" }
 
     $DistRoot = Join-Path $ProjectRoot "dist"
-    $PrimaryOutput = Join-Path $BuildDistPath "照片筛选器"
+    $PrimaryOutput = Join-Path $BuildDistPath "Cullumi"
     Copy-Item -LiteralPath "README.md" -Destination (Join-Path $PrimaryOutput "使用说明.md") -Force
-    $VersionedOutput = Join-Path $DistRoot "照片筛选器-v$Version"
+    $VersionedOutput = Join-Path $DistRoot "Cullumi-v$Version"
     if (Test-Path -LiteralPath $VersionedOutput) {
         $ResolvedDist = (Resolve-Path -LiteralPath $DistRoot).Path.TrimEnd("\")
         $ResolvedVersioned = (Resolve-Path -LiteralPath $VersionedOutput).Path
@@ -32,7 +32,7 @@ try {
         Remove-Item -LiteralPath $ResolvedVersioned -Recurse -Force
     }
     Copy-Item -LiteralPath $PrimaryOutput -Destination $VersionedOutput -Recurse
-    $ReleaseArchive = Join-Path $DistRoot "照片筛选器-v$Version-Windows-便携版.zip"
+    $ReleaseArchive = Join-Path $DistRoot "Cullumi-v$Version-Windows-便携版.zip"
     $ArchiveFullPath = [IO.Path]::GetFullPath($ReleaseArchive)
     if (-not $ArchiveFullPath.StartsWith("$($DistRoot.TrimEnd('\'))\", [StringComparison]::OrdinalIgnoreCase)) {
         throw "发布压缩包不在 dist 内，已停止生成。"
@@ -48,7 +48,7 @@ try {
         }
     }
     Write-Host "构建完成："
-    Write-Host "  $VersionedOutput\照片筛选器.exe"
+    Write-Host "  $VersionedOutput\Cullumi.exe"
     Write-Host "  $ArchiveFullPath"
 }
 finally {

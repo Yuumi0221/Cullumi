@@ -37,12 +37,13 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="照片筛选器",
+    name="Cullumi",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     console=False,
+    icon="web/brand-icon.ico",
 )
 coll = COLLECT(
     exe,
@@ -51,5 +52,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="照片筛选器",
+    name="Cullumi",
 )

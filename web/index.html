@@ -3,12 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Photo Culler</title>
-  <link rel="stylesheet" href="/static/app.css?v=1.0.0-ui13-theme-layout">
+  <title>Cullumi</title>
+  <link rel="icon" href="/static/brand-icon.png" type="image/png">
+  <link rel="stylesheet" href="/static/app.css?v=1.0.0-ui15-window-icon">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><button id="homeBtn" class="logo" title="返回首页" aria-label="返回首页">⌂</button></div>
+    <div class="brand"><button id="homeBtn" class="logo" title="返回首页" aria-label="返回首页"><img src="/static/brand-icon.png" alt="" draggable="false"></button></div>
     <div class="top-actions">
       <select id="profileSelect" class="project-only-action" title="分析模式"></select>
       <button id="scanBtn" class="project-only-action">开始扫描</button>
@@ -208,7 +209,7 @@
       <div id="profileSaveStatus" class="profile-save-status hidden" role="status"></div>
       <div class="dialog-actions"><button id="estimateBtn">预估当前项目</button><button id="saveProfile" class="primary">保存自定义模式</button></div>
     </section>
-    <footer class="settings-footer">© 2026 Yuumi · Photo Culler <span id="appVersion"></span></footer>
+    <footer class="settings-footer">© 2026 Yuumi · Cullumi <span id="appVersion"></span></footer>
   </dialog>
 
   <dialog id="confirm" class="confirm"><h2 id="confirmTitle"></h2><div id="confirmBody"></div><footer><button data-close>取消</button><button id="confirmOk" class="danger">确认</button></footer></dialog>

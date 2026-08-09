@@ -247,11 +247,24 @@ class WebStaticTests(unittest.TestCase):
         script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn('id="themeBtn"', markup)
-        self.assertIn("photo-culler-theme", script)
+        self.assertIn("Cullumi-theme", script)
         self.assertIn('json("/api/settings",{theme})', script)
         self.assertIn("project-open", script)
         self.assertIn("body:not(.project-open) .project-only-action", styles)
         self.assertIn('[data-theme="night"]', styles)
+
+    def test_application_and_topbar_brand_icons_are_wired(self):
+        root = Path(__file__).parents[1]
+        markup = (root / "web" / "index.html").read_text(encoding="utf-8")
+        spec = (root / "PhotoCuller.spec").read_text(encoding="utf-8")
+        app_entry = (root / "app.py").read_text(encoding="utf-8")
+        self.assertIn('/static/brand-icon.png', markup)
+        self.assertIn('icon="web/brand-icon.ico"', spec)
+        self.assertIn('APP_ICON = WEB_ROOT / "brand-icon.ico"', app_entry)
+        self.assertIn('webview.start(apply_native_window_icon, (window,), icon=str(APP_ICON))', app_entry)
+        self.assertIn('native.Invoke(Action(lambda: setattr(native, "Icon", icon)))', app_entry)
+        for name in ("brand-icon.png", "brand-icon.ico"):
+            self.assertTrue((root / "web" / name).is_file())
 
     def test_night_theme_folders_and_search_have_consistent_backgrounds(self):
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")

@@ -62,6 +62,23 @@ SIMILARITY_GROUPS = SimilarityGroupCache()
 SCANNER = Scanner(CONFIG, MANAGER, SIMILARITY_GROUPS)
 TOKEN = secrets.token_urlsafe(24)
 WEB_ROOT = resource_path("web")
+APP_ICON = WEB_ROOT / "brand-icon.ico"
+
+
+def apply_native_window_icon(window: Any) -> None:
+    if sys.platform != "win32" or not APP_ICON.is_file():
+        return
+    if not window.events.shown.wait(15):
+        return
+    try:
+        from System import Action
+        from System.Drawing import Icon
+
+        native = window.native
+        icon = Icon(str(APP_ICON))
+        native.Invoke(Action(lambda: setattr(native, "Icon", icon)))
+    except Exception:
+        pass
 
 
 def choose_directory(title: str) -> str:
@@ -574,7 +591,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(result)
 
     def api_open_github(self, body: dict[str, Any]) -> None:
-        webbrowser.open("https://github.com/Yuumi0221/photo-culler")
+        webbrowser.open("https://github.com/Yuumi0221/Cullumi")
         self._send_json({"opened": True})
 
     def api_update_check(self, body: dict[str, Any]) -> None:
@@ -725,8 +742,8 @@ def run() -> None:
     try:
         import webview
 
-        webview.create_window("照片筛选器", url, width=1460, height=940, min_size=(980, 680))
-        webview.start()
+        window = webview.create_window("Cullumi", url, width=1460, height=940, min_size=(980, 680))
+        webview.start(apply_native_window_icon, (window,), icon=str(APP_ICON))
     except Exception as error:
         try:
             log_path = app_data_dir() / "webview-error.log"
