@@ -28,10 +28,10 @@ class UpdateTests(unittest.TestCase):
         self.assertGreater(version_key("1.10.0"), version_key("1.9.9"))
         asset = select_release_asset([
             {"name": "source.zip", "browser_download_url": "https://github.com/source.zip"},
-            {"name": "Cullumi-v1.4.0-Windows-便携版.zip", "browser_download_url": "https://github.com/app.zip"},
+            {"name": "Cullumi-v1.4.0-Windows-Portable.zip", "browser_download_url": "https://github.com/app.zip"},
             {"name": "installer.msi", "browser_download_url": "https://github.com/app.msi"},
         ])
-        self.assertEqual(asset["name"], "Cullumi-v1.4.0-Windows-便携版.zip")
+        self.assertEqual(asset["name"], "Cullumi-v1.4.0-Windows-Portable.zip")
         self.assertIsNone(select_release_asset([
             {"name": "source.zip", "browser_download_url": "https://github.com/source.zip"},
         ]))

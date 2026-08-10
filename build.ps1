@@ -32,7 +32,7 @@ try {
         Remove-Item -LiteralPath $ResolvedVersioned -Recurse -Force
     }
     Copy-Item -LiteralPath $PrimaryOutput -Destination $VersionedOutput -Recurse
-    $ReleaseArchive = Join-Path $DistRoot "Cullumi-v$Version-Windows-便携版.zip"
+    $ReleaseArchive = Join-Path $DistRoot "Cullumi-v$Version-Windows-Portable.zip"
     $ArchiveFullPath = [IO.Path]::GetFullPath($ReleaseArchive)
     if (-not $ArchiveFullPath.StartsWith("$($DistRoot.TrimEnd('\'))\", [StringComparison]::OrdinalIgnoreCase)) {
         throw "发布压缩包不在 dist 内，已停止生成。"

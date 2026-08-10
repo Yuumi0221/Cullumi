@@ -41,4 +41,4 @@ python -m venv .venv
 .\build.ps1
 ```
 
-输出位于 `dist\Cullumi-v1.0.0\`，并生成可上传到 GitHub Release 的 `dist\Cullumi-v1.0.0-Windows-便携版.zip`。
+输出位于 `dist\Cullumi-v1.0.0\`，并生成可上传到 GitHub Release 的 `dist\Cullumi-v1.0.0-Windows-Portable.zip`。
