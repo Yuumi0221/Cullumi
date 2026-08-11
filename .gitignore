@@ -47,5 +47,8 @@ Desktop.ini
 !.env.example
 
 # Pencil
-pen
-photo-culler-icon
+pen/
+cullumi-icon/
+
+# blog
+blog-page.md

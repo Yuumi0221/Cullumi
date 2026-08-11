@@ -28,7 +28,7 @@ def _request(url: str, current_version: str = "") -> urllib.request.Request:
         url,
         headers={
             "Accept": "application/vnd.github+json",
-            "User-Agent": f"PhotoCuller/{current_version or 'update'}",
+            "User-Agent": f"Cullumi/{current_version or 'update'}",
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
@@ -48,7 +48,7 @@ def select_release_asset(assets: list[dict[str, Any]]) -> dict[str, Any] | None:
         score = {".zip": 30, ".exe": 20, ".msi": 10}[suffix]
         if any(word in lowered for word in ("windows", "win64", "win-x64", "portable", "便携")):
             score += 50
-        if any(word in lowered for word in ("Cullumi", "photoculler", "Cullumi")):
+        if "cullumi" in lowered:
             score += 30
         candidates.append((score, asset))
     return max(candidates, key=lambda item: item[0])[1] if candidates else None

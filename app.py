@@ -17,8 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from photoculler import __version__
-from photoculler.core import (
+from cullumi import __version__
+from cullumi.core import (
     BUILTIN_PROFILES,
     ConfigStore,
     ProjectManager,
@@ -44,7 +44,7 @@ from photoculler.core import (
     validate_profile,
     app_data_dir,
 )
-from photoculler.updates import (
+from cullumi.updates import (
     RELEASES_PAGE_URL,
     check_for_update,
     download_release_asset,
@@ -86,7 +86,7 @@ def choose_directory(title: str) -> str:
         import webview
 
         if webview.windows:
-            selected = webview.windows[0].create_file_dialog(webview.FOLDER_DIALOG)
+            selected = webview.windows[0].create_file_dialog(webview.FileDialog.FOLDER)
             return selected[0] if selected else ""
     except Exception:
         pass
@@ -112,7 +112,7 @@ def choose_csv(title: str) -> str:
 
         if webview.windows:
             selected = webview.windows[0].create_file_dialog(
-                webview.OPEN_DIALOG, allow_multiple=False, file_types=("CSV 文件 (*.csv)",)
+                webview.FileDialog.OPEN, allow_multiple=False, file_types=("CSV 文件 (*.csv)",)
             )
             return selected[0] if selected else ""
     except Exception:
@@ -139,7 +139,7 @@ def choose_save_csv(title: str, default_dir: Path, default_name: str) -> str:
 
         if webview.windows:
             selected = webview.windows[0].create_file_dialog(
-                webview.SAVE_DIALOG,
+                webview.FileDialog.SAVE,
                 directory=str(default_dir),
                 save_filename=default_name,
                 file_types=("CSV 文件 (*.csv)",),
@@ -262,10 +262,10 @@ def recent_project_payload(project_id: str, stored: dict[str, Any]) -> dict[str,
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = f"PhotoCuller/{__version__}"
+    server_version = f"Cullumi/{__version__}"
 
     def log_message(self, format: str, *args: Any) -> None:
-        if os.environ.get("PHOTOCULLER_DEBUG"):
+        if os.environ.get("CULLUMI_DEBUG"):
             super().log_message(format, *args)
 
     def _parsed(self):

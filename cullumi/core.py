@@ -33,7 +33,7 @@ except Exception:
     rawpy = None
 
 
-APP_NAME = "PhotoCuller"
+APP_NAME = "Cullumi"
 HEIF_EXTENSIONS = {".heic", ".heics", ".heif", ".heifs", ".hif"}
 IMAGE_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp",

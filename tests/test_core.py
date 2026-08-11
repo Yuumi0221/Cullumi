@@ -10,8 +10,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from photoculler import __version__
-from photoculler.core import (
+from cullumi import __version__
+from cullumi.core import (
     BUILTIN_PROFILES,
     ConfigStore,
     ProjectManager,
@@ -38,7 +38,7 @@ from photoculler.core import (
 )
 
 
-class PhotoCullerTests(unittest.TestCase):
+class CullumiTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.base = Path(self.temp.name)
@@ -415,7 +415,7 @@ class PhotoCullerTests(unittest.TestCase):
         cache = SimilarityGroupCache()
 
         with mock.patch(
-            "photoculler.core.build_similarity_groups", wraps=build_similarity_groups
+            "cullumi.core.build_similarity_groups", wraps=build_similarity_groups
         ) as builder:
             first = cache.get(self.project.project_id, conn, profile)
             second = cache.get(self.project.project_id, conn, profile)

@@ -2716,8 +2716,10 @@ body:not(.project-open) .icon-button {
 
 .recent-empty {
   grid-column:1 / -1;
-  width:548px;
+  width:100%;
   min-height:180px;
+  padding:80px 0;
+  justify-self:stretch;
   color:var(--home-muted);
 }
 

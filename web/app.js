@@ -28,7 +28,7 @@ function recentProjectTime(value){
 function renderRecentProjects(){
   const query=state.recentQuery.trim().toLocaleLowerCase();
   const projects=state.recentProjects.filter(project=>recentProjectName(project).toLocaleLowerCase().includes(query));
-  $("#recentList").innerHTML=projects.length?projects.map(project=>`<button class="recent" data-pid="${project.id}" title="${esc(project.root)}"><span class="recent-thumb">${project.thumbnail_url?`<img src="${esc(project.thumbnail_url)}" alt="">`:`<span class="recent-thumb-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6Z"/></svg></span>`}</span><span class="recent-info"><b>${esc(recentProjectName(project))}</b><span class="recent-meta">${project.total||0} 张&nbsp; · &nbsp;已留 ${project.kept||0}</span><small>${project.available?recentProjectTime(project.last_opened):"目录当前不可用"}</small></span><span class="recent-more" aria-label="项目操作" title="项目操作"><svg viewBox="0 0 18 4" aria-hidden="true"><circle cx="2" cy="2" r="2"/><circle cx="9" cy="2" r="2"/><circle cx="16" cy="2" r="2"/></svg></span></button>`).join(""):`<div class="empty recent-empty"><b>${state.recentProjects.length?"没有匹配的项目":"暂无最近筛选"}</b><span>${state.recentProjects.length?"请尝试其他项目名称。":"选择一个照片文件夹即可开始。"}</span></div>`;
+  $("#recentList").innerHTML=projects.length?projects.map(project=>`<button class="recent" data-pid="${project.id}" title="${esc(project.root)}"><span class="recent-thumb">${project.thumbnail_url?`<img src="${esc(project.thumbnail_url)}" alt="">`:`<span class="recent-thumb-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6Z"/></svg></span>`}</span><span class="recent-info"><b>${esc(recentProjectName(project))}</b><span class="recent-meta">${project.total||0} 张&nbsp; · &nbsp;已留 ${project.kept||0}</span><small>${project.available?recentProjectTime(project.last_opened):"目录当前不可用"}</small></span><span class="recent-more" aria-label="项目操作" title="项目操作"><svg viewBox="0 0 18 4" aria-hidden="true"><circle cx="2" cy="2" r="2"/><circle cx="9" cy="2" r="2"/><circle cx="16" cy="2" r="2"/></svg></span></button>`).join(""):`<div class="empty recent-empty"><b>${state.recentProjects.length?"没有匹配的项目":"暂无最近筛选"}</b><span>${state.recentProjects.length?"请尝试其他项目名称":"选择一个照片文件夹即可开始"}</span></div>`;
   $$(".recent").forEach(item=>{item.onclick=event=>event.target.closest(".recent-more")?openRecentMenu(event,item.dataset.pid):openProject(item.dataset.pid);item.oncontextmenu=event=>openRecentMenu(event,item.dataset.pid)});
 }
 
@@ -120,8 +120,8 @@ async function loadLibraryPage(reset=false){
     state.library={offset:0,total:0,done:false,loading:false,generation:state.library.generation+1};
     state.items=[];$("#gallery").innerHTML="";$("#empty").classList.add("hidden");
   }
-  if(!state.filters.decisions.size){renderLibraryEmpty("当前没有选择决定状态。");return}
-  if(!state.filters.ai.size){renderLibraryEmpty("当前没有选择 AI 状态。");return}
+  if(!state.filters.decisions.size){renderLibraryEmpty("当前没有选择决定状态");return}
+  if(!state.filters.ai.size){renderLibraryEmpty("当前没有选择筛选状态");return}
   if(state.library.loading||state.library.done)return;
   const generation=state.library.generation;state.library.loading=true;
   const sentinel=$("#librarySentinel");sentinel.textContent="正在加载更多照片…";sentinel.classList.remove("hidden");
@@ -138,7 +138,7 @@ async function loadLibraryPage(reset=false){
     state.library.done=state.library.offset>=data.total||!data.items.length;
     $("#gallery").insertAdjacentHTML("beforeend",data.items.map((photo,index)=>photoCard(photo,start+index)).join(""));
     $("#viewSubtitle").textContent=`显示 ${state.items.length} / ${data.total}`;$("#empty").classList.toggle("hidden",!!state.items.length);
-    if(!state.items.length){$("#emptyTitle").textContent="这里还没有内容";$("#emptyText").textContent="没有照片符合当前组合筛选。"}
+    if(!state.items.length){$("#emptyTitle").textContent="这里还没有内容";$("#emptyText").textContent="没有照片符合当前组合筛选"}
     sentinel.textContent=state.library.done?(data.total?"已加载全部照片":""):"继续向下滚动加载";
     sentinel.classList.toggle("hidden",state.library.done&&!data.total);bindGallery();
   }catch(error){if(generation===state.library.generation)toast(error.message)}
@@ -356,8 +356,8 @@ async function checkForUpdates(manual=true){
 function showUpdatePrompt(update){
   $("#updateTitle").textContent=`发现新版本 v${update.latest_version}`;
   $("#updateBody").innerHTML=update.download_available
-    ?`<p>当前版本为 v${esc(update.current_version)}。是否将 <b>${esc(update.asset_name)}</b> 下载到系统 Downloads 文件夹？</p><p id="updateDownloadStatus" class="update-download-status">照片和项目数据不会受到影响。</p>`
-    :`<p>当前版本为 v${esc(update.current_version)}。新版本已经发布，但发布页没有可直接下载的 Windows 附件。</p><p id="updateDownloadStatus" class="update-download-status">可以前往 Releases 页面查看详情。</p>`;
+    ?`<p>当前版本为 v${esc(update.current_version)}，是否将 <b>${esc(update.asset_name)}</b> 下载到系统 Downloads 文件夹？</p><p id="updateDownloadStatus" class="update-download-status">照片和项目数据不会受到影响。</p>`
+    :`<p>当前版本为 v${esc(update.current_version)}，新版本已经发布，但发布页没有可直接下载的 Windows 附件。</p><p id="updateDownloadStatus" class="update-download-status">可以前往 Releases 页面查看详情。</p>`;
   const button=$("#updateDownload");button.disabled=false;button.textContent=update.download_available?"下载更新":"查看发布页";button.onclick=update.download_available?downloadUpdate:async()=>{await json("/api/update/open",{});$("#updateDialog").close()};
   $("#updateDialog").showModal();
 }

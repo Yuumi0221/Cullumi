@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from photoculler.updates import (
+from cullumi.updates import (
     check_for_update,
     download_release_asset,
     select_release_asset,

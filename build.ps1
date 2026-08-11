@@ -2,21 +2,21 @@
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $TempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd("\")
-$BuildRoot = Join-Path $TempRoot ("PhotoCuller-build-" + [guid]::NewGuid().ToString("N"))
+$BuildRoot = Join-Path $TempRoot ("Cullumi-build-" + [guid]::NewGuid().ToString("N"))
 $BuildWorkPath = Join-Path $BuildRoot "work"
 $BuildDistPath = Join-Path $BuildRoot "dist"
 
 if (-not (Test-Path -LiteralPath $Python)) {
-    throw "未找到 .venv。请先创建虚拟环境并安装 requirements.txt。"
+    throw "未找到 .venv，请先创建虚拟环境并安装 requirements.txt。"
 }
 
 Push-Location $ProjectRoot
 try {
-    $Version = (& $Python -c "from photoculler import __version__; print(__version__)").Trim()
+    $Version = (& $Python -c "from cullumi import __version__; print(__version__)").Trim()
     if (-not $Version) { throw "无法读取应用版本号。" }
     & $Python -m unittest discover -s tests -v
     if ($LASTEXITCODE -ne 0) { throw "测试失败，已停止构建。" }
-    & $Python -m PyInstaller --noconfirm --clean --workpath $BuildWorkPath --distpath $BuildDistPath PhotoCuller.spec
+    & $Python -m PyInstaller --noconfirm --clean --workpath $BuildWorkPath --distpath $BuildDistPath Cullumi.spec
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller 构建失败。" }
 
     $DistRoot = Join-Path $ProjectRoot "dist"
@@ -55,7 +55,7 @@ finally {
     Pop-Location
     if (Test-Path -LiteralPath $BuildRoot) {
         $ResolvedBuildRoot = (Resolve-Path -LiteralPath $BuildRoot).Path
-        if ($ResolvedBuildRoot.StartsWith("$TempRoot\PhotoCuller-build-", [StringComparison]::OrdinalIgnoreCase)) {
+        if ($ResolvedBuildRoot.StartsWith("$TempRoot\Cullumi-build-", [StringComparison]::OrdinalIgnoreCase)) {
             Remove-Item -LiteralPath $ResolvedBuildRoot -Recurse -Force
         }
     }

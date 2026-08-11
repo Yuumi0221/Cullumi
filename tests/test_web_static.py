@@ -256,7 +256,7 @@ class WebStaticTests(unittest.TestCase):
     def test_application_and_topbar_brand_icons_are_wired(self):
         root = Path(__file__).parents[1]
         markup = (root / "web" / "index.html").read_text(encoding="utf-8")
-        spec = (root / "PhotoCuller.spec").read_text(encoding="utf-8")
+        spec = (root / "Cullumi.spec").read_text(encoding="utf-8")
         app_entry = (root / "app.py").read_text(encoding="utf-8")
         self.assertIn('/static/brand-icon.png', markup)
         self.assertIn('icon="web/brand-icon.ico"', spec)
@@ -265,6 +265,20 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('native.Invoke(Action(lambda: setattr(native, "Icon", icon)))', app_entry)
         for name in ("brand-icon.png", "brand-icon.ico"):
             self.assertTrue((root / "web" / name).is_file())
+
+    def test_png_assets_have_no_problematic_icc_profile(self):
+        web_root = Path(__file__).parents[1] / "web"
+        for path in web_root.glob("*.png"):
+            self.assertNotIn(b"iCCP", path.read_bytes(), path.name)
+
+    def test_native_dialogs_use_current_pywebview_enum(self):
+        app_entry = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
+        self.assertIn("webview.FileDialog.FOLDER", app_entry)
+        self.assertIn("webview.FileDialog.OPEN", app_entry)
+        self.assertIn("webview.FileDialog.SAVE", app_entry)
+        self.assertNotIn("webview.FOLDER_DIALOG", app_entry)
+        self.assertNotIn("webview.OPEN_DIALOG", app_entry)
+        self.assertNotIn("webview.SAVE_DIALOG", app_entry)
 
     def test_night_theme_folders_and_search_have_consistent_backgrounds(self):
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
@@ -392,6 +406,8 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn(".recent-grid {\n  width:674px;\n  max-width:calc(100% + 22px);\n  flex:1;\n  min-height:0;", styles)
         self.assertIn("margin:-10px 0 0 -22px;", styles)
         self.assertIn("padding:10px 36px 80px 22px;", styles)
+        self.assertIn(".recent-empty {\n  grid-column:1 / -1;\n  width:100%;", styles)
+        self.assertIn("padding:80px 0;\n  justify-self:stretch;", styles)
         self.assertIn("display:grid;\n  grid-template-columns:repeat(2,minmax(0,1fr));", styles)
         self.assertIn("top:185px;", styles)
         self.assertIn("top:160px;", styles)
