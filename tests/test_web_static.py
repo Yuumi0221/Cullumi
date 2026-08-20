@@ -3,24 +3,72 @@ from pathlib import Path
 import unittest
 
 
+WEB_SCRIPT_FILES = (
+    "runtime.js",
+    "session.js",
+    "similar.js",
+    "settings.js",
+    "app.js",
+)
+
+
+def web_script() -> str:
+    web = Path(__file__).parents[1] / "web"
+    return "\n".join(
+        (web / filename).read_text(encoding="utf-8")
+        for filename in WEB_SCRIPT_FILES
+    )
+
+
+class WebModuleStructureTests(unittest.TestCase):
+    def test_scripts_load_once_in_dependency_order(self):
+        markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
+        positions = []
+        for filename in WEB_SCRIPT_FILES:
+            source = f'/static/{filename}'
+            self.assertEqual(markup.count(source), 1)
+            positions.append(markup.index(source))
+        self.assertEqual(positions, sorted(positions))
+
+    def test_feature_owners_stay_out_of_app_entrypoint(self):
+        web = Path(__file__).parents[1] / "web"
+        runtime = (web / "runtime.js").read_text(encoding="utf-8")
+        session = (web / "session.js").read_text(encoding="utf-8")
+        similar = (web / "similar.js").read_text(encoding="utf-8")
+        settings = (web / "settings.js").read_text(encoding="utf-8")
+        entrypoint = (web / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const state=", runtime)
+        self.assertIn("async function boot()", session)
+        self.assertIn("async function loadSimilarView()", similar)
+        self.assertIn("async function saveProfile()", settings)
+        for feature_source in (
+            "const state=",
+            "async function boot()",
+            "async function loadSimilarView()",
+            "async function saveProfile()",
+        ):
+            self.assertNotIn(feature_source, entrypoint)
+
+
 class WebStaticTests(unittest.TestCase):
     def test_configuration_recovery_warning_is_visible_once(self):
         root = Path(__file__).parents[1]
         markup = (root / "web" / "index.html").read_text(encoding="utf-8")
-        script = (root / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         server = (root / "app.py").read_text(encoding="utf-8")
         self.assertIn('id="startupWarning"', markup)
         self.assertIn('b.startup_warning&&!$("#startupWarning").dataset.shown', script)
         self.assertIn('"startup_warning": CONFIG.load_warning', server)
 
     def test_scan_reports_files_that_become_unavailable(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn("p.unavailable_count", script)
         self.assertIn("张照片在扫描期间不可用，已安全跳过", script)
 
     def test_project_removal_can_delete_cache_without_touching_photos(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn('id="deleteProjectCache"', script)
         self.assertIn("delete_cache:deleteCache", script)
         self.assertIn("真实照片不会被删除或移动", script)
@@ -28,7 +76,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_update_controls_and_download_prompt_are_wired(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn('id="autoCheckUpdates"', markup)
         self.assertIn('id="checkUpdateBtn"', markup)
         self.assertIn('id="updateDialog"', markup)
@@ -48,7 +96,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_sidebar_uses_library_presets_instead_of_duplicate_pages(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn('data-nav="library" data-preset="library"', markup)
         self.assertIn('data-nav="ai" data-preset="ai"', markup)
         self.assertIn('data-nav="undecided" data-preset="undecided"', markup)
@@ -62,7 +110,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_library_multiselects_support_all_none_and_accessible_panels(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn('aria-controls="decisionFilterPanel"', markup)
         self.assertIn('aria-controls="aiFilterPanel"', markup)
@@ -79,7 +127,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_library_uses_incremental_loading_and_stale_request_generation(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn('id="librarySentinel"', markup)
         self.assertIn("LIBRARY_PAGE_SIZE=120", script)
         self.assertIn("new IntersectionObserver", script)
@@ -88,24 +136,24 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('insertAdjacentHTML("beforeend"', script)
 
     def test_library_decisions_reconcile_without_full_page_reload(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn("function photoMatchesLibrary(", script)
         self.assertIn("function reconcileLibraryDecision(", script)
         self.assertIn("state.library.offset=Math.max(0,state.library.offset-1)", script)
         self.assertIn("state.viewerDirtyIds.add(id)", script)
 
     def test_similar_decisions_update_every_visible_copy_of_a_photo(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn('$$(`[data-photo-id="${id}"]`).forEach(card=>{', script)
         self.assertNotIn('const card=$(`[data-photo-id="${id}"]`);if(!card)return;', script)
 
     def test_photo_card_is_not_passed_directly_to_array_map(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertNotIn(".map(photoCard)", script)
         self.assertIn(".map((photo,index)=>photoCard(photo,index))", script)
 
     def test_similar_groups_and_viewer_use_explicit_recommendation_state(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn('photo.id===detail.recommended_id', script)
         self.assertIn('_viewerBadge:recommended?"推荐保留":"可考虑移除"', script)
         self.assertIn('p.decision==="keep"', script)
@@ -131,7 +179,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_profile_estimate_and_save_have_visible_status(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn('id="profileSaveStatus"', markup)
         self.assertIn("estimated_pairs", script)
         self.assertIn("estimated_groups", script)
@@ -139,7 +187,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("自定义模式已保存", script)
 
     def test_custom_profile_empty_fields_are_validated(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn("validateProfileInputs", script)
         self.assertIn("还有项目没有输入完整", script)
@@ -148,7 +196,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn(".input-invalid", styles)
 
     def test_legacy_pair_view_is_removed(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         server = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
         self.assertNotIn("function renderPairs(", script)
@@ -159,7 +207,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_similar_groups_use_folder_and_two_level_browser(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         server = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
         self.assertIn('id="similarBrowser"', markup)
@@ -177,13 +225,13 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('"/api/similar-group": self.api_similar_group', server)
 
     def test_similar_group_escape_respects_open_dialogs(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn('if($$("dialog[open]").length)return', script)
         self.assertIn('state.view==="similar"&&state.similar.selectedId', script)
 
     def test_similar_side_panels_scroll_independently_and_share_toolbar(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertLess(markup.index('id="similarViewActions"'), markup.index('class="search"'))
         self.assertNotIn("similar-detail-head", markup)
@@ -195,7 +243,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('detail.face_safe?" · 人物照片请检查表情":""', script)
 
     def test_similar_detail_matches_library_card_size_and_keeps_toolbar_on_one_line(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn('classList.toggle("similar-view-open",state.view==="similar")', script)
         self.assertIn('classList.toggle("similar-detail-open"', script)
@@ -209,7 +257,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_similar_selection_outlines_have_safe_insets_and_subtle_scrollbars(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn("margin-right: 12px;", styles)
         self.assertIn("overflow-x: hidden;", styles)
@@ -231,7 +279,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_viewer_supports_click_wheel_reset_and_drag(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn('id="viewerImage" draggable="false"', markup)
         self.assertIn("function zoomViewer(", script)
         self.assertIn('addEventListener("dblclick"', script)
@@ -240,7 +288,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("Math.max(1,Math.min(8", script)
 
     def test_destructive_ui_actions_require_confirmation(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn("function confirmDeleteProfile()", script)
         self.assertIn("function confirmClearDecisions()", script)
         self.assertIn('$("#deleteProfile").onclick=confirmDeleteProfile', script)
@@ -251,7 +299,7 @@ class WebStaticTests(unittest.TestCase):
     def test_active_custom_profile_delete_shows_switch_warning(self):
         root = Path(__file__).parents[1]
         markup = (root / "web" / "index.html").read_text(encoding="utf-8")
-        script = (root / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn('id="profileInUseWarning"', markup)
         self.assertIn("projectsUsingProfile(profile.id)", script)
         self.assertIn("project.profile_id===profileId", script)
@@ -263,7 +311,7 @@ class WebStaticTests(unittest.TestCase):
     def test_notice_only_dialogs_close_when_the_backdrop_is_clicked(self):
         root = Path(__file__).parents[1]
         markup = (root / "web" / "index.html").read_text(encoding="utf-8")
-        script = (root / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertEqual(markup.count("data-backdrop-close"), 2)
         self.assertIn(
             'id="startupWarning" class="confirm" data-backdrop-close', markup
@@ -286,7 +334,7 @@ class WebStaticTests(unittest.TestCase):
         )
 
     def test_export_uses_native_save_route_and_restored_batches_have_no_button(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         server = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
         self.assertIn('json("/api/export/save"', script)
         self.assertNotIn("window.open('/api/export", script)
@@ -295,7 +343,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_theme_toggle_and_home_action_visibility(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn('id="themeBtn"', markup)
         self.assertIn("Cullumi-theme", script)
@@ -409,14 +457,14 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("background: var(--surface-hover);", styles)
 
     def test_viewer_close_refreshes_card_decisions(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn("viewerNeedsRefresh", script)
         self.assertIn("async function syncViewerDecisions()", script)
         self.assertIn('$("#viewer").addEventListener("close"', script)
 
     def test_ai_suggestions_can_be_marked_for_removal_in_one_confirmed_action(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         server = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
         self.assertIn('id="markAiRemoveBtn"', markup)
@@ -435,7 +483,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_home_uses_adaptive_golden_split_and_searchable_two_column_recents(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn('class="recent-panel"', markup)
         self.assertIn('class="primary hero-choose"', markup)
@@ -483,7 +531,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("@media (prefers-reduced-motion: reduce)", styles)
 
     def test_warm_theme_preserves_semantic_action_colors_and_resets_similar_actions(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
         self.assertIn("--home-accent:#ca7576;", styles)
         self.assertIn("--pink2:#f4dfe2;", styles)
@@ -498,7 +546,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_current_project_card_opens_its_folder_on_double_click(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn('id="projectBox"', markup)
         self.assertIn('title="双击在文件管理器中打开"', markup)
         self.assertIn("async function openCurrentProjectFolder()", script)
@@ -506,13 +554,13 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('json("/api/project/open-folder",{project_id:state.project.id})', script)
 
     def test_cache_migration_updates_current_project_state_and_reports_errors(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn("state.project.cache_root=migration.cache_root", script)
         self.assertIn('$("#projectCache").value=migration.cache_root', script)
         self.assertIn("迁移失败：${e.message}", script)
 
     def test_default_cache_updates_ui_only_after_settings_are_saved(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         request = 'const saved=await json("/api/settings",{default_cache_root:selected.path})'
         state_update = "state.settings.default_cache_root=cacheRoot"
         self.assertLess(script.index(request), script.index(state_update))
@@ -520,13 +568,13 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("保存失败：${e.message}", script)
 
     def test_toast_moves_inside_the_topmost_open_dialog(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn('dialogs=$$("dialog[open]")', script)
         self.assertIn("host=dialogs.at(-1)||document.body", script)
         self.assertIn("host.appendChild(t)", script)
 
     def test_recent_project_details_load_after_bootstrap_with_bounded_workers(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         server = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
         self.assertIn("recent_project_stub(pid, project)", server)
         self.assertIn('"/api/recent-project": self.api_recent_project', server)
@@ -536,7 +584,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("项目数据暂时无法读取", script)
 
     def test_scan_progress_polling_waits_for_each_request_before_repeating(self):
-        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        script = web_script()
         self.assertIn("while(generation===state.poll", script)
         self.assertIn("await wait(700)", script)
         self.assertNotIn("setInterval(async", script)

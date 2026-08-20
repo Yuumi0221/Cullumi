@@ -1,26 +1,21 @@
 from __future__ import annotations
 
-import csv
 import copy
 import hashlib
-import io
 import json
 import math
 import os
-import re
 import shutil
 import sqlite3
 import threading
 import time
 import uuid
 from contextlib import closing, contextmanager
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
-from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .similarity import (
     SimilarityGroupCache,
@@ -35,34 +30,42 @@ from .similarity import (
     photo_shooting_key,
     quality_score,
 )
-
-try:
-    from pillow_heif import open_heif, register_heif_opener
-
-    register_heif_opener()
-except Exception:
-    open_heif = None
-
-try:
-    import rawpy
-except Exception:
-    rawpy = None
-
+from .project_store import (
+    DATABASE_SCHEMA_VERSION,
+    Project,
+    ProjectManager,
+    _is_within,
+    connect_db,
+    project_id_for,
+    project_thumbnail_path,
+    project_thumbnail_storage_path,
+    safe_relative_path,
+)
+from .media import (
+    DISPLAY_PREVIEW_EXTENSIONS,
+    DISPLAY_PREVIEW_MAX_SIZE,
+    HEIF_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    RAW_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    analyze_photo,
+    display_preview_path,
+    ensure_display_preview,
+    open_heif,
+    open_image,
+)
+from .workflows import (
+    QUARANTINE_DIR,
+    apply_quarantine,
+    clear_decisions,
+    export_decisions,
+    import_decisions,
+    mark_ai_remove_suggestions,
+    quarantine_preview,
+    restore_batch,
+)
 
 APP_NAME = "Cullumi"
-DATABASE_SCHEMA_VERSION = 1
-HEIF_EXTENSIONS = {".heic", ".heics", ".heif", ".heifs", ".hif"}
-IMAGE_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp",
-    *HEIF_EXTENSIONS, ".dng", ".cr2", ".cr3", ".nef", ".arw",
-    ".raf", ".orf", ".rw2", ".pef",
-}
-RAW_EXTENSIONS = {".dng", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".orf", ".rw2", ".pef"}
-DISPLAY_PREVIEW_EXTENSIONS = HEIF_EXTENSIONS | RAW_EXTENSIONS | {".tif", ".tiff"}
-DISPLAY_PREVIEW_MAX_SIZE = (2560, 2560)
-VIDEO_EXTENSIONS = {
-    ".mov", ".mp4", ".m4v", ".avi", ".mkv", ".wmv", ".mts", ".m2ts", ".3gp", ".webm",
-}
 PHOTO_DECISION_FILTERS = frozenset({"undecided", "keep", "remove"})
 PHOTO_AI_FILTERS = frozenset({"remove", "review", "no_suggestion"})
 PHOTO_ANALYSIS_COLUMNS = (
@@ -75,7 +78,6 @@ PHOTO_UPSERT_SQL = f"""INSERT INTO photos({','.join(PHOTO_ANALYSIS_COLUMNS)})
     VALUES({','.join('?' for _ in PHOTO_ANALYSIS_COLUMNS)})
     ON CONFLICT(relative_path) DO UPDATE SET
     {','.join(f'{column}=excluded.{column}' for column in PHOTO_ANALYSIS_COLUMNS if column != 'relative_path')}"""
-
 
 def parse_photo_filter(raw: str | None, allowed: frozenset[str], label: str) -> set[str]:
     """Parse an all/none/comma-separated photo filter without changing stored values."""
@@ -92,7 +94,6 @@ def parse_photo_filter(raw: str | None, allowed: frozenset[str], label: str) -> 
     if not values:
         raise ValueError(f"{label}不能为空；请使用 all 或 none")
     return values
-
 
 def photo_filter_where(
     file_state: str,
@@ -127,7 +128,6 @@ def photo_filter_where(
         params.extend(stored_ai)
     return " AND ".join(clauses), params
 
-
 def photo_library_counts(conn: sqlite3.Connection) -> dict[str, int]:
     """Counts for every sidebar preset, using the same readable-photo definition."""
     readable = "status='active' AND COALESCE(error,'')='' AND suggestion<>'unreadable'"
@@ -146,43 +146,12 @@ def photo_library_counts(conn: sqlite3.Connection) -> dict[str, int]:
            FROM photos"""
     ).fetchone()
     return {key: int(row[key] or 0) for key in row.keys()}
-QUARANTINE_DIR = "_照片筛选隔离"
-
-
 class ScanCancelled(Exception):
     """Internal control flow used to stop every scan stage consistently."""
-
 
 def _check_cancelled(cancel: threading.Event | None) -> None:
     if cancel is not None and cancel.is_set():
         raise ScanCancelled
-
-
-def _is_within(path: Path, root: Path) -> bool:
-    resolved_path = path.resolve()
-    resolved_root = root.resolve()
-    return resolved_path == resolved_root or resolved_root in resolved_path.parents
-
-
-def safe_relative_path(root: Path, relative_path: str, label: str = "文件路径") -> Path:
-    """Resolve an untrusted relative path and keep it inside ``root``."""
-    if not isinstance(relative_path, str) or not relative_path.strip():
-        raise ValueError(f"{label}为空")
-    relative = Path(relative_path)
-    if relative.is_absolute():
-        raise ValueError(f"{label}必须是相对路径")
-    resolved_root = root.resolve()
-    target = (resolved_root / relative).resolve()
-    if target == resolved_root or not _is_within(target, resolved_root):
-        raise ValueError(f"{label}超出项目目录")
-    return target
-
-
-def _atomic_write_json(path: Path, value: Any) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(path)
-
 
 def _profile(
     profile_id: str,
@@ -265,7 +234,6 @@ def _profile(
         },
     }
 
-
 BUILTIN_PROFILES = {
     "conservative": _profile(
         "conservative", "保守优先", blur_review=150, blur_remove=70,
@@ -290,13 +258,11 @@ BUILTIN_PROFILES = {
     ),
 }
 
-
 def app_data_dir() -> Path:
     base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
     path = base / APP_NAME
     path.mkdir(parents=True, exist_ok=True)
     return path
-
 
 class ConfigStore:
     def __init__(self, path: Path | None = None):
@@ -602,7 +568,6 @@ class ConfigStore:
                     raise ValueError("该配置仍被项目使用，请先切换项目模式")
             data.get("custom_profiles", {}).pop(profile_id, None)
 
-
 def validate_profile(profile: dict[str, Any]) -> None:
     if not isinstance(profile, dict):
         raise ValueError("配置格式无效")
@@ -692,606 +657,6 @@ def validate_profile(profile: dict[str, Any]) -> None:
     if number(q, "blur_remove_percentile", 1) > number(q, "blur_review_percentile", 5):
         raise ValueError("清晰度移除百分位不能高于复看百分位")
 
-
-def project_id_for(root: Path) -> str:
-    return hashlib.sha1(str(root.resolve()).casefold().encode("utf-8")).hexdigest()[:16]
-
-
-DATABASE_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS project (
-  id INTEGER PRIMARY KEY CHECK(id=1), root TEXT NOT NULL, profile_id TEXT NOT NULL,
-  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS photos (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  relative_path TEXT NOT NULL UNIQUE, extension TEXT, size INTEGER, mtime REAL,
-  width INTEGER, height INTEGER, megapixels REAL, taken TEXT,
-  luminance REAL, contrast REAL, dark_clip REAL, bright_clip REAL,
-  sharpness REAL, entropy REAL, phash TEXT, dhash TEXT, sha256 TEXT,
-  thumbnail TEXT, error TEXT DEFAULT '', suggestion TEXT DEFAULT 'keep',
-  reason TEXT DEFAULT '', decision TEXT DEFAULT '', status TEXT DEFAULT 'active',
-  analyzed_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_photos_suggestion ON photos(suggestion);
-CREATE INDEX IF NOT EXISTS idx_photos_decision ON photos(decision);
-CREATE INDEX IF NOT EXISTS idx_photos_status_decision ON photos(status,decision);
-CREATE INDEX IF NOT EXISTS idx_photos_status_error_size ON photos(status,error,size);
-CREATE TABLE IF NOT EXISTS similar_pairs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, a_id INTEGER NOT NULL, b_id INTEGER NOT NULL,
-  score REAL, kind TEXT, recommended_id INTEGER, face_safe INTEGER DEFAULT 0,
-  UNIQUE(a_id,b_id)
-);
-CREATE TABLE IF NOT EXISTS quarantine_batches (
-  id TEXT PRIMARY KEY, created_at TEXT, manifest_path TEXT, count INTEGER,
-  total_size INTEGER, restored_at TEXT DEFAULT ''
-);
-"""
-
-
-def _database_has_user_tables(conn: sqlite3.Connection) -> bool:
-    return conn.execute(
-        """SELECT 1 FROM sqlite_master
-           WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1"""
-    ).fetchone() is not None
-
-
-def _backup_database_for_migration(
-    conn: sqlite3.Connection, path: Path, target_version: int
-) -> Path:
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup_path = path.with_name(
-        f"{path.stem}.pre-v{target_version}-{stamp}-{uuid.uuid4().hex[:8]}{path.suffix}"
-    )
-    backup_conn: sqlite3.Connection | None = None
-    try:
-        backup_conn = sqlite3.connect(backup_path)
-        conn.backup(backup_conn)
-        backup_conn.commit()
-    except Exception as error:
-        if backup_conn is not None:
-            backup_conn.close()
-            backup_conn = None
-        backup_path.unlink(missing_ok=True)
-        raise RuntimeError("无法创建数据库升级备份，已停止升级") from error
-    finally:
-        if backup_conn is not None:
-            backup_conn.close()
-    return backup_path
-
-
-def _initialize_database(
-    conn: sqlite3.Connection, path: Path, existed: bool
-) -> None:
-    current_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-    if current_version > DATABASE_SCHEMA_VERSION:
-        raise RuntimeError(
-            f"项目数据库版本 {current_version} 高于当前支持的 {DATABASE_SCHEMA_VERSION}，"
-            "请使用更新版本的 Cullumi 打开"
-        )
-    if current_version == DATABASE_SCHEMA_VERSION:
-        return
-    if existed and _database_has_user_tables(conn):
-        _backup_database_for_migration(conn, path, DATABASE_SCHEMA_VERSION)
-    try:
-        conn.executescript(
-            "BEGIN IMMEDIATE;\n"
-            + DATABASE_SCHEMA_SQL
-            + f"\nPRAGMA user_version={DATABASE_SCHEMA_VERSION};\nCOMMIT;"
-        )
-    except Exception:
-        if conn.in_transaction:
-            conn.rollback()
-        raise
-
-
-def connect_db(path: Path) -> sqlite3.Connection:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    existed = path.is_file() and path.stat().st_size > 0
-    conn = sqlite3.connect(path, timeout=30, check_same_thread=False)
-    try:
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
-        _initialize_database(conn, path, existed)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.commit()
-        return conn
-    except Exception:
-        conn.close()
-        raise
-
-
-@dataclass
-class Project:
-    project_id: str
-    root: Path
-    cache_root: Path
-    project_dir: Path
-    db_path: Path
-    thumb_dir: Path
-    profile_id: str
-
-
-def project_thumbnail_path(project: Project, stored_path: str | Path) -> Path:
-    """Resolve relative or legacy absolute thumbnail paths in the current cache."""
-    raw = str(stored_path or "").strip()
-    if not raw:
-        return Path()
-    return project.thumb_dir / Path(raw).name
-
-
-def project_thumbnail_storage_path(path: str | Path) -> str:
-    """Store thumbnails relocatably while accepting legacy absolute inputs."""
-    raw = str(path or "").strip()
-    return (Path("thumbs") / Path(raw).name).as_posix() if raw else ""
-
-
-def _rewrite_project_thumbnail_paths(project: Project) -> None:
-    """Persist the new cache location in a copied project database."""
-    with closing(connect_db(project.db_path)) as conn:
-        rows = conn.execute(
-            "SELECT id,thumbnail FROM photos WHERE thumbnail<>''"
-        ).fetchall()
-        updates = [
-            (project_thumbnail_storage_path(row["thumbnail"]), row["id"])
-            for row in rows
-        ]
-        if updates:
-            conn.executemany("UPDATE photos SET thumbnail=? WHERE id=?", updates)
-            conn.commit()
-        integrity = [row[0] for row in conn.execute("PRAGMA quick_check").fetchall()]
-        if integrity != ["ok"]:
-            raise RuntimeError("迁移后的项目数据库完整性校验失败")
-
-
-_ACTIVE_DATABASE_FILES = {"project.db", "project.db-wal", "project.db-shm"}
-
-
-def _is_regenerable_preview(path: Path) -> bool:
-    return ".display-" in path.name or path.name.endswith(".tmp")
-
-
-def _migration_file_manifest(root: Path) -> dict[Path, int]:
-    manifest: dict[Path, int] = {}
-    for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        relative = path.relative_to(root)
-        if len(relative.parts) == 1 and relative.name in _ACTIVE_DATABASE_FILES:
-            continue
-        if _is_regenerable_preview(relative):
-            continue
-        manifest[relative] = path.stat().st_size
-    return manifest
-
-
-def _copy_project_cache_without_live_database(source: Path, target: Path) -> None:
-    def ignore(directory: str, names: list[str]) -> list[str]:
-        relative_dir = Path(directory).relative_to(source)
-        ignored = [name for name in names if _is_regenerable_preview(Path(name))]
-        if not relative_dir.parts:
-            ignored.extend(name for name in names if name in _ACTIVE_DATABASE_FILES)
-        return list(dict.fromkeys(ignored))
-
-    shutil.copytree(source, target, ignore=ignore)
-
-
-def _backup_project_database(source: Path, target: Path) -> None:
-    with closing(connect_db(source)) as source_conn:
-        with closing(sqlite3.connect(target)) as target_conn:
-            source_conn.backup(target_conn)
-            target_conn.commit()
-
-
-class ProjectManager:
-    def __init__(self, config: ConfigStore):
-        self.config = config
-        self._data_locks_guard = threading.Lock()
-        self._data_locks: dict[str, threading.RLock] = {}
-
-    def _data_lock(self, project_id: str) -> threading.RLock:
-        with self._data_locks_guard:
-            return self._data_locks.setdefault(project_id, threading.RLock())
-
-    @contextmanager
-    def data_operation(self, project_id: str):
-        """Serialize writes that must not cross a project cache migration."""
-        with self._data_lock(project_id):
-            yield
-
-    def open(self, root: str, cache_root: str | None = None) -> Project:
-        root_path = Path(root).resolve()
-        if not root_path.is_dir():
-            raise ValueError("照片文件夹不存在")
-        pid = project_id_for(root_path)
-        config_data = self.config.snapshot()
-        existing = config_data.get("projects", {}).get(pid, {})
-        default_cache_root = config_data["default_cache_root"]
-        cache = Path(cache_root or existing.get("cache_root") or default_cache_root).resolve()
-        project_dir = cache / pid
-        overlaps_photos = _is_within(project_dir, root_path) or _is_within(root_path, project_dir)
-        existing_cache = Path(existing["cache_root"]).resolve() if existing.get("cache_root") else None
-        if overlaps_photos and existing_cache != cache:
-            raise ValueError("缓存位置不能与照片文件夹重叠")
-        project_dir.mkdir(parents=True, exist_ok=True)
-        thumb_dir = project_dir / "thumbs"
-        thumb_dir.mkdir(exist_ok=True)
-        profile_id = existing.get("profile_id", "conservative")
-        project = Project(pid, root_path, cache, project_dir, project_dir / "project.db", thumb_dir, profile_id)
-        now = datetime.now().isoformat(timespec="seconds")
-        with closing(connect_db(project.db_path)) as conn:
-            conn.execute(
-                """INSERT INTO project(id,root,profile_id,created_at,updated_at) VALUES(1,?,?,?,?)
-                   ON CONFLICT(id) DO UPDATE SET root=excluded.root,profile_id=excluded.profile_id,updated_at=excluded.updated_at""",
-                (str(root_path), profile_id, now, now),
-            )
-            conn.commit()
-        with self.config.edit() as data:
-            stored = data.setdefault("projects", {}).setdefault(pid, {})
-            stored.update({
-                "root": str(root_path), "cache_root": str(cache), "profile_id": profile_id,
-                "last_opened": now,
-            })
-            recent = [pid] + [x for x in data.get("recent_projects", []) if x != pid]
-            data["recent_projects"] = recent[:12]
-        return project
-
-    def from_id(self, project_id: str) -> Project:
-        config_data = self.config.snapshot()
-        data = config_data.get("projects", {}).get(project_id)
-        if not data:
-            raise ValueError("项目不存在")
-        root = Path(data["root"]).resolve()
-        if not root.is_dir():
-            raise ValueError("照片文件夹当前不可用")
-        if project_id_for(root) != project_id:
-            raise ValueError("项目标识与照片目录不匹配")
-        cache_root = Path(
-            data.get("cache_root") or config_data["default_cache_root"]
-        ).resolve()
-        project_dir = cache_root / project_id
-        return Project(
-            project_id,
-            root,
-            cache_root,
-            project_dir,
-            project_dir / "project.db",
-            project_dir / "thumbs",
-            data.get("profile_id", "conservative"),
-        )
-
-    def project_root(self, project_id: str) -> Path:
-        data = self.config.snapshot().get("projects", {}).get(project_id)
-        if not data:
-            raise ValueError("项目不存在")
-        root = Path(data["root"]).resolve()
-        if not root.is_dir():
-            raise ValueError("照片文件夹当前不可用")
-        return root
-
-    def remove_from_recent(self, project_id: str, delete_cache: bool = False) -> dict[str, Any]:
-        with self.config.lock:
-            data = copy.deepcopy(self.config.data.get("projects", {}).get(project_id))
-        if not data:
-            raise ValueError("项目不存在")
-        deleted_paths: list[str] = []
-        if delete_cache:
-            root = Path(data["root"]).resolve()
-            if project_id_for(root) != project_id:
-                raise ValueError("项目标识与照片目录不匹配，已停止删除")
-            cache_root = Path(data["cache_root"]).resolve()
-            targets = [(cache_root / project_id).resolve()]
-            targets.extend(Path(item).resolve() for item in data.get("old_caches", []))
-            unique_targets = list(dict.fromkeys(targets))
-            for target in unique_targets:
-                if target.name.casefold() != project_id.casefold():
-                    raise ValueError("项目缓存目录校验失败，已停止删除")
-            for target in unique_targets:
-                if target.exists():
-                    shutil.rmtree(target)
-                    deleted_paths.append(str(target))
-        with self.config.edit() as config_data:
-            config_data["recent_projects"] = [
-                item for item in config_data.get("recent_projects", []) if item != project_id
-            ]
-            if delete_cache:
-                config_data.get("projects", {}).pop(project_id, None)
-        return {"removed": True, "cache_deleted": delete_cache, "deleted_paths": deleted_paths}
-
-    def migrate_cache(self, project_id: str, new_root: str) -> dict[str, Any]:
-        with self.data_operation(project_id):
-            return self._migrate_cache_locked(project_id, new_root)
-
-    def _migrate_cache_locked(self, project_id: str, new_root: str) -> dict[str, Any]:
-        project = self.from_id(project_id)
-        new_cache = Path(new_root).resolve()
-        new_dir = new_cache / project_id
-        if new_dir == project.project_dir:
-            return {
-                "changed": False,
-                "path": str(new_dir),
-                "cache_root": str(new_cache),
-            }
-        if _is_within(new_dir, project.root) or _is_within(project.root, new_dir):
-            raise ValueError("新缓存位置不能与照片文件夹重叠")
-        if new_dir.exists() and any(new_dir.iterdir()):
-            raise ValueError("新位置已有同名项目缓存")
-        temp = new_dir.with_name(new_dir.name + ".migrating")
-        if temp.exists():
-            shutil.rmtree(temp)
-        temp.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            source_manifest = _migration_file_manifest(project.project_dir)
-            _copy_project_cache_without_live_database(project.project_dir, temp)
-            _backup_project_database(project.db_path, temp / "project.db")
-            copied_manifest = _migration_file_manifest(temp)
-        except Exception:
-            shutil.rmtree(temp, ignore_errors=True)
-            raise
-        if source_manifest != copied_manifest:
-            shutil.rmtree(temp, ignore_errors=True)
-            raise RuntimeError("缓存迁移文件校验失败，原位置保持不变")
-        migrated_project = Project(
-            project.project_id,
-            project.root,
-            new_cache,
-            new_dir,
-            temp / "project.db",
-            new_dir / "thumbs",
-            project.profile_id,
-        )
-        destination_was_empty = new_dir.exists()
-        installed = False
-        try:
-            _rewrite_project_thumbnail_paths(migrated_project)
-            if new_dir.exists():
-                new_dir.rmdir()
-            temp.rename(new_dir)
-            installed = True
-            with self.config.edit() as data:
-                stored = data["projects"][project_id]
-                stored["cache_root"] = str(new_cache)
-                old_caches = stored.setdefault("old_caches", [])
-                if str(project.project_dir) not in old_caches:
-                    old_caches.append(str(project.project_dir))
-        except Exception:
-            shutil.rmtree(temp, ignore_errors=True)
-            if installed:
-                shutil.rmtree(new_dir, ignore_errors=True)
-                if destination_was_empty:
-                    new_dir.mkdir(parents=True, exist_ok=True)
-            raise
-        return {
-            "changed": True,
-            "path": str(new_dir),
-            "cache_root": str(new_cache),
-            "old_cache": str(project.project_dir),
-        }
-
-    def cleanup_old_cache(self, project_id: str, path: str) -> dict[str, Any]:
-        with self.config.lock:
-            data = copy.deepcopy(self.config.data.get("projects", {}).get(project_id))
-        if not data:
-            raise ValueError("项目不存在")
-        target = Path(path).resolve()
-        allowed = [Path(item).resolve() for item in data.get("old_caches", [])]
-        if target not in allowed:
-            raise ValueError("该目录不在此项目的待清理旧缓存列表中")
-        current = Path(data["cache_root"]).resolve() / project_id
-        if target == current or target.name != project_id:
-            raise ValueError("不能清理当前项目缓存")
-        if target.exists():
-            shutil.rmtree(target)
-        with self.config.edit() as config_data:
-            stored = config_data["projects"][project_id]
-            stored["old_caches"] = [
-                item for item in stored.get("old_caches", [])
-                if Path(item).resolve() != target
-            ]
-        return {"cleaned": True, "path": str(target)}
-
-
-def _dct_matrix(n: int) -> np.ndarray:
-    matrix = np.empty((n, n), dtype=np.float32)
-    factor = math.pi / (2 * n)
-    for k in range(n):
-        scale = math.sqrt(1 / n) if k == 0 else math.sqrt(2 / n)
-        for i in range(n):
-            matrix[k, i] = scale * math.cos((2 * i + 1) * k * factor)
-    return matrix
-
-
-DCT32 = _dct_matrix(32)
-
-
-def _phash(gray: Image.Image) -> str:
-    arr = np.asarray(gray.resize((32, 32), Image.Resampling.LANCZOS), dtype=np.float32)
-    coeff = DCT32 @ arr @ DCT32.T
-    block = coeff[:8, :8]
-    median = float(np.median(block[1:, :]))
-    value = 0
-    for bit in (block > median).ravel():
-        value = (value << 1) | int(bit)
-    return f"{value:016x}"
-
-
-def _dhash(gray: Image.Image) -> str:
-    arr = np.asarray(gray.resize((9, 8), Image.Resampling.LANCZOS), dtype=np.int16)
-    value = 0
-    for bit in (arr[:, 1:] > arr[:, :-1]).ravel():
-        value = (value << 1) | int(bit)
-    return f"{value:016x}"
-
-
-def _open_raw(path: Path) -> Image.Image:
-    if rawpy is None:
-        raise RuntimeError("RAW 解码组件未安装")
-    with rawpy.imread(str(path)) as raw:
-        try:
-            thumb = raw.extract_thumb()
-            if thumb.format == rawpy.ThumbFormat.JPEG:
-                with Image.open(io.BytesIO(thumb.data)) as embedded:
-                    return embedded.convert("RGB")
-            source = Image.fromarray(thumb.data)
-            try:
-                return source.convert("RGB")
-            finally:
-                source.close()
-        except Exception:
-            rgb = raw.postprocess(half_size=True, use_camera_wb=True, no_auto_bright=False)
-            source = Image.fromarray(rgb)
-            try:
-                return source.convert("RGB")
-            finally:
-                source.close()
-
-
-def _open_heif(path: Path) -> Image.Image:
-    if open_heif is None:
-        raise RuntimeError("HEIC/HEIF 解码组件未安装")
-    container = open_heif(path, convert_hdr_to_8bit=True, reload_size=True)
-    if not len(container):
-        raise UnidentifiedImageError("HEIC/HEIF 文件中没有可读取的照片")
-
-    # Prefer the declared primary image, but tolerate phone containers whose
-    # primary item is damaged while another full-size image remains readable.
-    indices = [container.primary_index] + [
-        index for index in range(len(container)) if index != container.primary_index
-    ]
-    errors: list[Exception] = []
-    for index in indices:
-        try:
-            return container[index].to_pillow()
-        except Exception as error:
-            errors.append(error)
-    raise UnidentifiedImageError(f"HEIC/HEIF 解码失败：{errors[0]}") from errors[0]
-
-
-def open_image(path: Path) -> tuple[Image.Image, str]:
-    if path.suffix.lower() in RAW_EXTENSIONS:
-        return _open_raw(path), ""
-    if path.suffix.lower() in HEIF_EXTENSIONS:
-        source = _open_heif(path)
-        try:
-            exif = source.getexif()
-            taken = str(exif.get(36867, "") or exif.get(306, ""))
-            oriented = ImageOps.exif_transpose(source)
-            try:
-                return oriented.convert("RGB"), taken
-            finally:
-                if oriented is not source:
-                    oriented.close()
-        finally:
-            source.close()
-    with Image.open(path) as source:
-        source.load()
-        exif = source.getexif()
-        taken = str(exif.get(36867, "") or exif.get(306, ""))
-        oriented = ImageOps.exif_transpose(source)
-        try:
-            return oriented.convert("RGB"), taken
-        finally:
-            if oriented is not source:
-                oriented.close()
-
-
-def display_preview_path(source: Path, thumbnail: Path) -> Path:
-    """Return a cache path tied to the source file's current contents."""
-    stat = source.stat()
-    fingerprint = hashlib.sha1(
-        f"{stat.st_size}:{stat.st_mtime_ns}".encode("ascii")
-    ).hexdigest()[:12]
-    return thumbnail.with_name(f"{thumbnail.stem}.display-{fingerprint}.jpg")
-
-
-def ensure_display_preview(source: Path, thumbnail: Path) -> Path:
-    """Build and atomically cache a browser-friendly, high-resolution preview."""
-    target = display_preview_path(source, thumbnail)
-    if target.is_file():
-        return target
-
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(f"{target.name}.{uuid.uuid4().hex}.tmp")
-    image: Image.Image | None = None
-    try:
-        image, _ = open_image(source)
-        image.thumbnail(DISPLAY_PREVIEW_MAX_SIZE, Image.Resampling.LANCZOS)
-        image.save(temporary, "JPEG", quality=92, optimize=True)
-        temporary.replace(target)
-    finally:
-        temporary.unlink(missing_ok=True)
-        if image is not None:
-            image.close()
-
-    prefix = f"{thumbnail.stem}.display-"
-    for candidate in target.parent.iterdir():
-        if (
-            candidate != target
-            and candidate.name.startswith(prefix)
-            and candidate.name.endswith(".jpg")
-        ):
-            try:
-                candidate.unlink()
-            except OSError:
-                pass
-    return target
-
-
-def analyze_photo(
-    path: Path,
-    thumb_path: Path,
-    stat: os.stat_result | None = None,
-) -> dict[str, Any]:
-    base = {
-        "extension": path.suffix.lower(), "size": 0, "mtime": 0,
-        "width": 0, "height": 0, "megapixels": 0, "taken": "",
-        "luminance": None, "contrast": None, "dark_clip": None, "bright_clip": None,
-        "sharpness": None, "entropy": None, "phash": "", "dhash": "",
-        "sha256": "", "thumbnail": str(thumb_path), "error": "",
-    }
-    image: Image.Image | None = None
-    preview: Image.Image | None = None
-    gray: Image.Image | None = None
-    temporary = thumb_path.with_suffix(thumb_path.suffix + ".tmp")
-    try:
-        stat = stat or path.stat()
-        base.update({"size": stat.st_size, "mtime": stat.st_mtime})
-        image, taken = open_image(path)
-        width, height = image.size
-        preview = image
-        image = None
-        preview.thumbnail((512, 512), Image.Resampling.LANCZOS)
-        gray = ImageOps.grayscale(preview)
-        arr = np.asarray(gray, dtype=np.float32)
-        center = arr[1:-1, 1:-1]
-        lap = -4 * center + arr[:-2, 1:-1] + arr[2:, 1:-1] + arr[1:-1, :-2] + arr[1:-1, 2:]
-        hist = np.bincount(arr.astype(np.uint8).ravel(), minlength=256).astype(np.float64)
-        probs = hist[hist > 0] / hist.sum()
-        entropy = float(-(probs * np.log2(probs)).sum())
-        metrics = {
-            "width": width, "height": height, "megapixels": round(width * height / 1_000_000, 3),
-            "taken": taken, "luminance": round(float(arr.mean()), 3),
-            "contrast": round(float(arr.std()), 3), "dark_clip": round(float((arr <= 8).mean()), 5),
-            "bright_clip": round(float((arr >= 247).mean()), 5),
-            "sharpness": round(float(lap.var()), 3), "entropy": round(entropy, 4),
-            "phash": _phash(gray), "dhash": _dhash(gray),
-        }
-        thumb_path.parent.mkdir(parents=True, exist_ok=True)
-        preview.save(temporary, "JPEG", quality=86, optimize=True)
-        temporary.replace(thumb_path)
-        base.update(metrics)
-    except Exception as error:
-        base["error"] = str(error)
-    finally:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
-        for resource in (gray, preview, image):
-            if resource is not None:
-                resource.close()
-    return base
-
-
 def classify(row: sqlite3.Row | dict[str, Any], profile: dict[str, Any], percentiles: dict[str, float] | None = None) -> tuple[str, str]:
     if row["error"]:
         return "unreadable", "无法读取或文件损坏"
@@ -1333,7 +698,6 @@ def classify(row: sqlite3.Row | dict[str, Any], profile: dict[str, Any], percent
         return "review", "、".join(dict.fromkeys(reasons_review + reasons_remove))
     return "keep", ""
 
-
 def classification_percentiles(
     rows: Iterable[sqlite3.Row | dict[str, Any]], profile: dict[str, Any]
 ) -> dict[str, float] | None:
@@ -1350,7 +714,6 @@ def classification_percentiles(
             np.percentile(sharp, profile["quality"].get("blur_review_percentile", 5))
         ),
     }
-
 
 class Scanner:
     def __init__(
@@ -1805,270 +1168,3 @@ class Scanner:
             if candidate.exists():
                 import_decisions(project, candidate)
                 break
-
-
-def import_decisions(project: Project, csv_path: Path) -> dict[str, int]:
-    imported = missing = 0
-    with closing(connect_db(project.db_path)) as conn:
-        with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
-            for row in csv.DictReader(handle):
-                decision = row.get("决定") or row.get("decision") or ""
-                raw_path = (row.get("路径") or row.get("path") or "").replace("\\", "/")
-                if decision not in {"keep", "remove"}:
-                    continue
-                candidates = [raw_path]
-                prefix = project.root.name + "/"
-                if raw_path.startswith(prefix):
-                    candidates.append(raw_path[len(prefix):])
-                target = None
-                for rel in candidates:
-                    found = conn.execute("SELECT id FROM photos WHERE relative_path=?", (rel,)).fetchone()
-                    if found:
-                        target = found["id"]
-                        break
-                if target:
-                    conn.execute("UPDATE photos SET decision=? WHERE id=?", (decision, target))
-                    imported += 1
-                else:
-                    missing += 1
-        conn.commit()
-    return {"imported": imported, "missing": missing}
-
-
-def export_decisions(project: Project) -> str:
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["决定", "路径", "建议", "原因"])
-    with closing(connect_db(project.db_path)) as conn:
-        for row in conn.execute("SELECT decision,relative_path,suggestion,reason FROM photos WHERE decision<>'' ORDER BY relative_path"):
-            writer.writerow([row["decision"], row["relative_path"], row["suggestion"], row["reason"]])
-    return "\ufeff" + output.getvalue()
-
-
-def clear_decisions(project: Project) -> int:
-    with closing(connect_db(project.db_path)) as conn:
-        cursor = conn.execute(
-            "UPDATE photos SET decision='' WHERE status='active' AND decision<>''"
-        )
-        conn.commit()
-        return cursor.rowcount
-
-
-def mark_ai_remove_suggestions(project: Project) -> int:
-    """Mark only active, readable, undecided AI-remove suggestions for removal."""
-    with closing(connect_db(project.db_path)) as conn:
-        cursor = conn.execute(
-            """UPDATE photos SET decision='remove'
-               WHERE status='active' AND COALESCE(error,'')=''
-                 AND suggestion='remove' AND decision=''"""
-        )
-        conn.commit()
-        return cursor.rowcount
-
-
-def quarantine_preview(project: Project) -> dict[str, Any]:
-    with closing(connect_db(project.db_path)) as conn:
-        rows = conn.execute(
-            "SELECT id,relative_path,size,mtime FROM photos WHERE decision='remove' AND status='active' ORDER BY relative_path"
-        ).fetchall()
-    return {
-        "count": len(rows),
-        "total_size": sum(int(row["size"] or 0) for row in rows),
-        "items": [dict(row) for row in rows],
-    }
-
-
-def _write_manifest_csv(batch_root: Path, manifest: list[dict[str, Any]]) -> None:
-    with (batch_root / "manifest.csv").open("w", encoding="utf-8-sig", newline="") as handle:
-        fields = [
-            "photo_id", "relative_path", "quarantine_path", "restore_path", "status", "size", "error"
-        ]
-        writer = csv.DictWriter(handle, fieldnames=fields)
-        writer.writeheader()
-        writer.writerows([{key: row.get(key, "") for key in fields} for row in manifest])
-
-
-def _quarantine_batch_root(project: Project, batch_id: str) -> Path:
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", batch_id):
-        raise ValueError("隔离批次标识无效")
-    quarantine_root = safe_relative_path(project.root, QUARANTINE_DIR, "隔离目录")
-    return safe_relative_path(quarantine_root, batch_id, "隔离批次路径")
-
-
-def apply_quarantine(project: Project) -> dict[str, Any]:
-    preview = quarantine_preview(project)
-    batch_id = f"{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:8]}"
-    batch_root = _quarantine_batch_root(project, batch_id)
-    manifest: list[dict[str, Any]] = []
-    prepared: list[tuple[dict[str, Any], dict[str, Any], Path, Path]] = []
-    for item in preview["items"]:
-        source = safe_relative_path(project.root, item["relative_path"], "照片路径")
-        entry: dict[str, Any] = {
-            "photo_id": int(item["id"]),
-            "relative_path": item["relative_path"],
-            "status": "pending",
-            "size": int(item["size"] or 0),
-        }
-        if not source.exists():
-            entry["status"] = "missing"
-            manifest.append(entry)
-            continue
-        stat = source.stat()
-        if stat.st_size != item["size"] or abs(stat.st_mtime - item["mtime"]) > 0.01:
-            entry["status"] = "changed"
-            manifest.append(entry)
-            continue
-        destination = safe_relative_path(batch_root, item["relative_path"], "隔离目标路径")
-        entry["quarantine_path"] = destination.relative_to(project.root.resolve()).as_posix()
-        manifest.append(entry)
-        prepared.append((entry, item, source, destination))
-
-    batch_root.mkdir(parents=True, exist_ok=False)
-    manifest_path = batch_root / "manifest.json"
-    _atomic_write_json(manifest_path, manifest)
-    _write_manifest_csv(batch_root, manifest)
-    with closing(connect_db(project.db_path)) as conn:
-        conn.execute(
-            "INSERT INTO quarantine_batches(id,created_at,manifest_path,count,total_size) VALUES(?,?,?,?,?)",
-            (batch_id, datetime.now().isoformat(timespec="seconds"), str(manifest_path), 0, 0),
-        )
-        conn.commit()
-        for entry, item, source, destination in prepared:
-            if not source.exists():
-                entry["status"] = "missing"
-                _atomic_write_json(manifest_path, manifest)
-                continue
-            stat = source.stat()
-            if stat.st_size != item["size"] or abs(stat.st_mtime - item["mtime"]) > 0.01:
-                entry["status"] = "changed"
-                _atomic_write_json(manifest_path, manifest)
-                continue
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                shutil.move(str(source), str(destination))
-            except Exception as error:
-                if not source.exists() and destination.exists():
-                    entry["status"] = "moved"
-                else:
-                    entry["status"] = "error"
-                    entry["error"] = str(error)
-                    _atomic_write_json(manifest_path, manifest)
-                    continue
-            else:
-                entry["status"] = "moved"
-            _atomic_write_json(manifest_path, manifest)
-            conn.execute("UPDATE photos SET status='quarantined' WHERE id=?", (entry["photo_id"],))
-            moved = [row for row in manifest if row["status"] == "moved"]
-            conn.execute(
-                "UPDATE quarantine_batches SET count=?,total_size=? WHERE id=?",
-                (len(moved), sum(int(row.get("size") or 0) for row in moved), batch_id),
-            )
-            conn.commit()
-    _write_manifest_csv(batch_root, manifest)
-    moved = [row for row in manifest if row["status"] == "moved"]
-    return {"batch_id": batch_id, "moved": len(moved), "skipped": len(manifest) - len(moved)}
-
-
-def restore_batch(project: Project, batch_id: str) -> dict[str, Any]:
-    batch_root = _quarantine_batch_root(project, batch_id)
-    with closing(connect_db(project.db_path)) as conn:
-        batch = conn.execute("SELECT * FROM quarantine_batches WHERE id=?", (batch_id,)).fetchone()
-        if not batch:
-            raise ValueError("隔离批次不存在")
-        raw_manifest_path = Path(batch["manifest_path"])
-        manifest_path = (
-            raw_manifest_path.resolve()
-            if raw_manifest_path.is_absolute()
-            else safe_relative_path(project.root, str(raw_manifest_path), "清单路径")
-        )
-        if manifest_path.name != "manifest.json" or not _is_within(manifest_path, batch_root):
-            raise ValueError("隔离清单路径无效")
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if not isinstance(manifest, list):
-            raise ValueError("隔离清单格式无效")
-
-        paths: dict[int, tuple[Path | None, Path, Path | None]] = {}
-        for index, item in enumerate(manifest):
-            if not isinstance(item, dict):
-                raise ValueError("隔离清单格式无效")
-            destination = safe_relative_path(project.root, item.get("relative_path", ""), "恢复目标路径")
-            source = None
-            if item.get("quarantine_path"):
-                source = safe_relative_path(project.root, item["quarantine_path"], "隔离文件路径")
-                if not _is_within(source, batch_root):
-                    raise ValueError("隔离文件路径超出当前批次")
-            restore_path = None
-            if item.get("restore_path"):
-                restore_path = safe_relative_path(project.root, item["restore_path"], "已恢复文件路径")
-            paths[index] = (source, destination, restore_path)
-
-        restored = conflicts = missing = 0
-        for index, item in enumerate(manifest):
-            status = item.get("status")
-            source, destination, recorded_restore = paths[index]
-            if status == "restored":
-                if recorded_restore and recorded_restore.exists():
-                    target_rel = recorded_restore.relative_to(project.root.resolve()).as_posix()
-                    if item.get("photo_id"):
-                        conn.execute(
-                            "UPDATE photos SET status='active',relative_path=? WHERE id=?",
-                            (target_rel, int(item["photo_id"])),
-                        )
-                    conn.commit()
-                continue
-            if status == "restoring" and recorded_restore and source is not None:
-                if not source.exists() and recorded_restore.exists():
-                    destination = recorded_restore
-                    item["status"] = "restored"
-                    _atomic_write_json(manifest_path, manifest)
-                elif source.exists():
-                    destination = recorded_restore
-                else:
-                    missing += 1
-                    continue
-            elif status not in {"moved", "pending"}:
-                continue
-            if item.get("status") != "restored":
-                if source is None or not source.exists():
-                    missing += 1
-                    continue
-                if destination.exists():
-                    suffix = f".restored-{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
-                    destination = destination.with_name(destination.stem + suffix + destination.suffix)
-                    conflicts += 1
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                item["status"] = "restoring"
-                item["restore_path"] = destination.relative_to(project.root.resolve()).as_posix()
-                _atomic_write_json(manifest_path, manifest)
-                shutil.move(str(source), str(destination))
-                item["status"] = "restored"
-                item.pop("error", None)
-                _atomic_write_json(manifest_path, manifest)
-                restored += 1
-            target_rel = destination.relative_to(project.root.resolve()).as_posix()
-            if item.get("photo_id"):
-                conn.execute(
-                    "UPDATE photos SET status='active',relative_path=? WHERE id=?",
-                    (target_rel, int(item["photo_id"])),
-                )
-            else:
-                conn.execute(
-                    "UPDATE photos SET status='active',relative_path=? WHERE relative_path=?",
-                    (target_rel, item["relative_path"]),
-                )
-            conn.commit()
-
-        remaining = False
-        for index, item in enumerate(manifest):
-            source = paths[index][0]
-            if item.get("status") in {"moved", "pending", "restoring"} and source and source.exists():
-                remaining = True
-                break
-        if not remaining:
-            conn.execute(
-                "UPDATE quarantine_batches SET restored_at=? WHERE id=?",
-                (datetime.now().isoformat(timespec="seconds"), batch_id),
-            )
-            conn.commit()
-    _write_manifest_csv(batch_root, manifest)
-    return {"restored": restored, "conflicts": conflicts, "missing": missing}

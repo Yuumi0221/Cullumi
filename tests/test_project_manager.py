@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 import cullumi.core as core
+import cullumi.project_store as project_store
 from cullumi.core import (
     ConfigStore,
     Project,
@@ -77,7 +78,9 @@ class ProjectManagerReliabilityTests(unittest.TestCase):
             project = manager.open(str(photos))
 
             with mock.patch.object(
-                core, "_backup_project_database", wraps=core._backup_project_database
+                project_store,
+                "_backup_project_database",
+                wraps=project_store._backup_project_database,
             ) as backup:
                 manager.migrate_cache(project.project_id, str(root / "cache-b"))
 
@@ -126,7 +129,7 @@ class ProjectManagerReliabilityTests(unittest.TestCase):
             manager = ProjectManager(config)
             project = manager.open(str(photos))
             (project.thumb_dir / "cover.jpg").write_bytes(b"thumbnail")
-            original_manifest = core._migration_file_manifest
+            original_manifest = project_store._migration_file_manifest
 
             def mismatched_manifest(path: Path) -> dict[Path, int]:
                 manifest = original_manifest(path)
@@ -137,7 +140,9 @@ class ProjectManagerReliabilityTests(unittest.TestCase):
 
             target = root / "cache-b"
             with mock.patch.object(
-                core, "_migration_file_manifest", side_effect=mismatched_manifest
+                project_store,
+                "_migration_file_manifest",
+                side_effect=mismatched_manifest,
             ):
                 with self.assertRaisesRegex(RuntimeError, "文件校验失败"):
                     manager.migrate_cache(project.project_id, str(target))

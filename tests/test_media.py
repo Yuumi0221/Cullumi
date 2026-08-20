@@ -24,7 +24,7 @@ class MediaPreviewTests(unittest.TestCase):
             decoded = Image.new("RGB", (1600, 900), "teal")
             decoded.copy = mock.Mock(side_effect=AssertionError("full-size copy"))
 
-            with mock.patch("cullumi.core.open_image", return_value=(decoded, "")):
+            with mock.patch("cullumi.media.open_image", return_value=(decoded, "")):
                 result = analyze_photo(source_path, root / "thumb.jpg")
 
             self.assertEqual(result["error"], "")
@@ -51,7 +51,7 @@ class MediaPreviewTests(unittest.TestCase):
                 self.assertEqual(max(preview.size), max(DISPLAY_PREVIEW_MAX_SIZE))
 
             with mock.patch(
-                "cullumi.core.open_image",
+                "cullumi.media.open_image",
                 side_effect=AssertionError("cached preview should be reused"),
             ):
                 self.assertEqual(ensure_display_preview(source, thumbnail), first)

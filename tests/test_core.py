@@ -832,7 +832,7 @@ class CullumiTests(unittest.TestCase):
                 raise OSError("simulated move failure")
             return real_move(source, destination)
 
-        with mock.patch("cullumi.core.shutil.move", side_effect=flaky_move):
+        with mock.patch("cullumi.workflows.shutil.move", side_effect=flaky_move):
             first = apply_quarantine(self.project)
         self.assertEqual((first["moved"], first["skipped"]), (1, 1))
         second = apply_quarantine(self.project)

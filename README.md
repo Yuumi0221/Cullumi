@@ -33,6 +33,21 @@
 
 需要 Python 3.12 及以上。
 
+主要代码按职责拆分：
+
+- `cullumi/core.py`：配置、规则与扫描流程编排，同时保留旧版导入入口。
+- `cullumi/project_store.py`：项目模型、SQLite 连接与迁移、缓存路径和写入一致性。
+- `cullumi/media.py`：图片解码、缩略图、高清预览、图像指标与感知哈希。
+- `cullumi/workflows.py`：决定导入导出、批量标记、隔离与恢复。
+- `cullumi/similarity.py`：相似候选索引、结构比较和分组算法。
+- `web/runtime.js`：共享状态、接口请求、提示与主题。
+- `web/session.js`：最近项目、项目打开和扫描进度。
+- `web/similar.js`：相似照片列表与分组浏览。
+- `web/settings.js`：模式、设置、确认框和更新提示。
+- `web/app.js`：图库、照片查看器及页面事件入口。
+
+前端脚本是无需构建工具的经典脚本，并按 `runtime`、`session`、`similar`、`settings`、`app` 的顺序加载。新增跨模块功能时，应把实现放入对应职责文件，并保持该依赖顺序。
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
