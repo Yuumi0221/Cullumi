@@ -12,6 +12,9 @@ env/
 coverage.xml
 .coverage
 htmlcov/
+node_modules/
+playwright-report/
+test-results/
 
 # PyInstaller and portable builds
 build/

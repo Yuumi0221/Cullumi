@@ -55,6 +55,15 @@ python -m venv .venv
 .\.venv\Scripts\python.exe app.py
 ```
 
+真实 DOM 界面测试需要 Node.js 20 及以上，并使用本机 Microsoft Edge，在隔离的临时配置与模拟接口数据下加载正式页面、样式和全部前端脚本：
+
+```powershell
+npm ci
+npm run test:dom
+```
+
+测试覆盖首页与最近项目异步渲染、项目和照片决定交互、设置窗口中的错误提示层级，以及使用中自定义模式的删除警告。失败时的截图、追踪文件和测试报告会写入 `test-results\` 与 `playwright-report\`，这些目录不会进入版本控制。
+
 构建便携目录：
 
 ```powershell
