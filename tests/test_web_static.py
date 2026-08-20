@@ -505,6 +505,26 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('$("#projectBox").ondblclick=openCurrentProjectFolder', script)
         self.assertIn('json("/api/project/open-folder",{project_id:state.project.id})', script)
 
+    def test_cache_migration_updates_current_project_state_and_reports_errors(self):
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("state.project.cache_root=migration.cache_root", script)
+        self.assertIn('$("#projectCache").value=migration.cache_root', script)
+        self.assertIn("迁移失败：${e.message}", script)
+
+    def test_default_cache_updates_ui_only_after_settings_are_saved(self):
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        request = 'const saved=await json("/api/settings",{default_cache_root:selected.path})'
+        state_update = "state.settings.default_cache_root=cacheRoot"
+        self.assertLess(script.index(request), script.index(state_update))
+        self.assertIn("const cacheRoot=saved.settings.default_cache_root", script)
+        self.assertIn("保存失败：${e.message}", script)
+
+    def test_toast_moves_inside_the_topmost_open_dialog(self):
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('dialogs=$$("dialog[open]")', script)
+        self.assertIn("host=dialogs.at(-1)||document.body", script)
+        self.assertIn("host.appendChild(t)", script)
+
 
 if __name__ == "__main__":
     unittest.main()

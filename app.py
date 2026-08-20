@@ -42,6 +42,7 @@ from cullumi.core import (
     PHOTO_AI_FILTERS,
     PHOTO_DECISION_FILTERS,
     project_id_for,
+    project_thumbnail_path,
     quarantine_preview,
     restore_batch,
     safe_relative_path,
@@ -250,7 +251,7 @@ def recent_project_payload(project_id: str, stored: dict[str, Any]) -> dict[str,
                 ORDER BY CASE WHEN decision='keep' THEN 0 ELSE 1 END,
                          mtime DESC, id DESC LIMIT 1"""
         ).fetchone()
-        if cover and Path(cover["thumbnail"]).is_file():
+        if cover and project_thumbnail_path(project, cover["thumbnail"]).is_file():
             query = urllib.parse.urlencode({
                 "project_id": project_id,
                 "id": cover["id"],
@@ -426,19 +427,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": str(error)}, 500)
 
     def api_bootstrap(self) -> None:
+        config_data = CONFIG.snapshot()
         recent = []
-        for pid in CONFIG.data.get("recent_projects", []):
-            project = CONFIG.data.get("projects", {}).get(pid)
+        for pid in config_data.get("recent_projects", []):
+            project = config_data.get("projects", {}).get(pid)
             if project:
                 recent.append(recent_project_payload(pid, project))
         self._send_json({
             "version": __version__,
             "startup_warning": CONFIG.load_warning,
             "settings": {
-                "default_cache_root": CONFIG.data["default_cache_root"],
-                "auto_advance": CONFIG.data.get("auto_advance", True),
-                "auto_check_updates": CONFIG.data.get("auto_check_updates", True),
-                "theme": CONFIG.data.get("theme", "day"),
+                "default_cache_root": config_data["default_cache_root"],
+                "auto_advance": config_data.get("auto_advance", True),
+                "auto_check_updates": config_data.get("auto_check_updates", True),
+                "theme": config_data.get("theme", "day"),
             },
             "recent_projects": recent,
             "profiles": list(CONFIG.profiles().values()),
@@ -552,8 +554,8 @@ class Handler(BaseHTTPRequestHandler):
         return project, row
 
     def api_thumb(self) -> None:
-        _, row = self._photo_row()
-        self._send_file(Path(row["thumbnail"]), "image/jpeg")
+        project, row = self._photo_row()
+        self._send_file(project_thumbnail_path(project, row["thumbnail"]), "image/jpeg")
 
     def api_photo(self) -> None:
         project, row = self._photo_row()
@@ -561,7 +563,7 @@ class Handler(BaseHTTPRequestHandler):
         if path.suffix.lower() not in DISPLAY_PREVIEW_EXTENSIONS:
             self._send_file(path)
             return
-        thumbnail = Path(row["thumbnail"])
+        thumbnail = project_thumbnail_path(project, row["thumbnail"])
         try:
             preview = ensure_display_preview(path, thumbnail)
         except (OSError, RuntimeError):
@@ -657,22 +659,30 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"cancelled": True})
 
     def api_decision(self, body: dict[str, Any]) -> None:
-        project = MANAGER.from_id(body["project_id"])
+        project_id = body["project_id"]
         decision = body.get("decision", "")
         if decision not in {"", "keep", "remove"}:
             raise ValueError("无效决定")
-        with closing(connect_db(project.db_path)) as conn:
-            conn.execute("UPDATE photos SET decision=? WHERE id=?", (decision, int(body["photo_id"])))
-            conn.commit()
+        with MANAGER.data_operation(project_id):
+            project = MANAGER.from_id(project_id)
+            with closing(connect_db(project.db_path)) as conn:
+                conn.execute("UPDATE photos SET decision=? WHERE id=?", (decision, int(body["photo_id"])))
+                conn.commit()
         self._send_json({"saved": True})
 
     def api_decision_clear(self, body: dict[str, Any]) -> None:
-        project = MANAGER.from_id(body["project_id"])
-        self._send_json({"cleared": clear_decisions(project)})
+        project_id = body["project_id"]
+        with MANAGER.data_operation(project_id):
+            project = MANAGER.from_id(project_id)
+            result = clear_decisions(project)
+        self._send_json({"cleared": result})
 
     def api_decision_ai_remove(self, body: dict[str, Any]) -> None:
-        project = MANAGER.from_id(body["project_id"])
-        self._send_json({"marked": mark_ai_remove_suggestions(project)})
+        project_id = body["project_id"]
+        with MANAGER.data_operation(project_id):
+            project = MANAGER.from_id(project_id)
+            result = mark_ai_remove_suggestions(project)
+        self._send_json({"marked": result})
 
     def api_settings(self, body: dict[str, Any]) -> None:
         updates: dict[str, Any] = {}
@@ -697,7 +707,7 @@ class Handler(BaseHTTPRequestHandler):
             cache_path.mkdir(parents=True, exist_ok=True)
         with CONFIG.edit() as data:
             data.update(updates)
-        self._send_json({"saved": True, "settings": CONFIG.data})
+        self._send_json({"saved": True, "settings": CONFIG.snapshot()})
 
     def api_profile_save(self, body: dict[str, Any]) -> None:
         self._send_json(CONFIG.save_custom_profile(body["profile"]))
@@ -714,29 +724,30 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("筛选模式不存在")
         profile = profiles[profile_id]
         with SCANNER.project_operation(project.project_id, "应用筛选模式"):
-            with CONFIG.lock:
-                old_profile_id = CONFIG.data["projects"][project.project_id].get(
-                    "profile_id", "conservative"
-                )
-            with closing(connect_db(project.db_path)) as conn:
-                config_saved = False
-                try:
-                    conn.execute(
-                        "UPDATE project SET profile_id=?,updated_at=datetime('now') WHERE id=1",
-                        (profile_id,),
+            with MANAGER.data_operation(project.project_id):
+                with CONFIG.lock:
+                    old_profile_id = CONFIG.data["projects"][project.project_id].get(
+                        "profile_id", "conservative"
                     )
-                    SCANNER.reclassify(project, conn, profile, commit=False)
-                    SCANNER.rebuild_similarity(project, conn, profile, commit=False)
-                    with CONFIG.edit() as data:
-                        data["projects"][project.project_id]["profile_id"] = profile_id
-                    config_saved = True
-                    conn.commit()
-                except Exception:
-                    conn.rollback()
-                    if config_saved:
+                with closing(connect_db(project.db_path)) as conn:
+                    config_saved = False
+                    try:
+                        conn.execute(
+                            "UPDATE project SET profile_id=?,updated_at=datetime('now') WHERE id=1",
+                            (profile_id,),
+                        )
+                        SCANNER.reclassify(project, conn, profile, commit=False)
+                        SCANNER.rebuild_similarity(project, conn, profile, commit=False)
                         with CONFIG.edit() as data:
-                            data["projects"][project.project_id]["profile_id"] = old_profile_id
-                    raise
+                            data["projects"][project.project_id]["profile_id"] = profile_id
+                        config_saved = True
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
+                        if config_saved:
+                            with CONFIG.edit() as data:
+                                data["projects"][project.project_id]["profile_id"] = old_profile_id
+                        raise
         SIMILARITY_GROUPS.invalidate(project.project_id)
         self._send_json(project_summary(project.project_id))
 
@@ -777,23 +788,28 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"saved": True, "path": str(path)})
 
     def api_import(self, body: dict[str, Any]) -> None:
-        project = MANAGER.from_id(body["project_id"])
+        project_id = body["project_id"]
         csv_path = Path(body.get("path") or "")
         if not csv_path.exists():
             raise ValueError("CSV 文件不存在")
-        self._send_json(import_decisions(project, csv_path))
+        with MANAGER.data_operation(project_id):
+            project = MANAGER.from_id(project_id)
+            result = import_decisions(project, csv_path)
+        self._send_json(result)
 
     def api_quarantine_apply(self, body: dict[str, Any]) -> None:
         project_id = body["project_id"]
         with SCANNER.project_operation(project_id, "隔离照片"):
-            result = apply_quarantine(MANAGER.from_id(project_id))
+            with MANAGER.data_operation(project_id):
+                result = apply_quarantine(MANAGER.from_id(project_id))
         SIMILARITY_GROUPS.invalidate(project_id)
         self._send_json(result)
 
     def api_restore(self, body: dict[str, Any]) -> None:
         project_id = body["project_id"]
         with SCANNER.project_operation(project_id, "恢复照片"):
-            result = restore_batch(MANAGER.from_id(project_id), body["batch_id"])
+            with MANAGER.data_operation(project_id):
+                result = restore_batch(MANAGER.from_id(project_id), body["batch_id"])
         SIMILARITY_GROUPS.invalidate(project_id)
         self._send_json(result)
 

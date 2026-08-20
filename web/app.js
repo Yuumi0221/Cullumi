@@ -9,7 +9,13 @@ const api=async(path,body)=>{
 };
 const json=async(p,b)=>await (await api(p,b)).json();
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const toast=m=>{const t=$("#toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),2400)};
+let toastTimer;
+const toast=m=>{
+  const t=$("#toast"),dialogs=$$("dialog[open]"),host=dialogs.at(-1)||document.body;
+  if(t.parentElement!==host)host.appendChild(t);
+  t.textContent=m;t.classList.add("show");clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>t.classList.remove("show"),2400);
+};
 const formatSize=n=>n<1024?`${n} B`:n<1048576?`${(n/1024).toFixed(1)} KB`:`${(n/1048576).toFixed(1)} MB`;
 const stageName={starting:"准备扫描",discovering:"正在发现照片",analyzing:"正在解码与分析",hashing:"正在确认完全重复",grouping:"正在建立相似组",complete:"扫描完成",cancelled:"扫描已取消",error:"扫描出错"};
 function applyTheme(theme,persist=false){state.theme=theme;document.documentElement.dataset.theme=theme;localStorage.setItem("Cullumi-theme",theme);const night=theme==="night",button=$("#themeBtn");button.title=night?"切换日间模式":"切换夜间模式";button.setAttribute("aria-label",button.title);if(persist)json("/api/settings",{theme}).catch(e=>toast(`主题保存失败：${e.message}`))}
@@ -465,8 +471,33 @@ $$("[data-setting]").forEach(b=>b.onclick=()=>{$$("[data-setting]").forEach(x=>x
 $("#autoAdvance").onchange=async e=>{state.settings.auto_advance=e.target.checked;await json("/api/settings",{auto_advance:e.target.checked})};
 $("#autoCheckUpdates").onchange=async e=>{state.settings.auto_check_updates=e.target.checked;await json("/api/settings",{auto_check_updates:e.target.checked})};
 $("#checkUpdateBtn").onclick=()=>checkForUpdates(true);
-$("#defaultCacheBtn").onclick=async()=>{const r=await json("/api/choose-cache",{});if(r.path){$("#defaultCache").value=r.path;state.settings.default_cache_root=r.path;await json("/api/settings",{default_cache_root:r.path});toast("默认位置已保存")}};
-$("#projectCacheBtn").onclick=async()=>{if(!state.project)return;const r=await json("/api/choose-cache",{});if(!r.path)return;const m=await json("/api/project/cache",{project_id:state.project.id,cache_root:r.path});$("#projectCache").value=r.path;if(m.old_cache){$("#oldCaches").innerHTML=`<p>旧缓存已保留：${esc(m.old_cache)}</p><button id="cleanOld">确认清理旧缓存</button>`;$("#cleanOld").onclick=async()=>{await json("/api/project/cache/cleanup",{project_id:state.project.id,path:m.old_cache});$("#oldCaches").innerHTML="";toast("旧缓存已清理")}}toast("迁移完成，旧缓存仍保留")};
+$("#defaultCacheBtn").onclick=async()=>{
+  const button=$("#defaultCacheBtn");
+  try{
+    const selected=await json("/api/choose-cache",{});if(!selected.path)return;
+    button.disabled=true;
+    const saved=await json("/api/settings",{default_cache_root:selected.path});
+    const cacheRoot=saved.settings.default_cache_root;
+    state.settings.default_cache_root=cacheRoot;$("#defaultCache").value=cacheRoot;
+    toast("默认位置已保存");
+  }catch(e){toast(`保存失败：${e.message}`)}finally{button.disabled=false}
+};
+$("#projectCacheBtn").onclick=async()=>{
+  if(!state.project)return;
+  const button=$("#projectCacheBtn");
+  try{
+    const selected=await json("/api/choose-cache",{});if(!selected.path)return;
+    button.disabled=true;
+    const migration=await json("/api/project/cache",{project_id:state.project.id,cache_root:selected.path});
+    state.project.cache_root=migration.cache_root;
+    $("#projectCache").value=migration.cache_root;
+    if(migration.old_cache){
+      $("#oldCaches").innerHTML=`<p>旧缓存已保留：${esc(migration.old_cache)}</p><button id="cleanOld">确认清理旧缓存</button>`;
+      $("#cleanOld").onclick=async()=>{try{await json("/api/project/cache/cleanup",{project_id:state.project.id,path:migration.old_cache});$("#oldCaches").innerHTML="";toast("旧缓存已清理")}catch(e){toast(`清理失败：${e.message}`)}};
+    }
+    toast(migration.changed?"迁移完成，旧缓存仍保留":"当前项目已使用此存储位置");
+  }catch(e){toast(`迁移失败：${e.message}`)}finally{button.disabled=false}
+};
 $("#profileEditorSelect").onchange=e=>editorLoad(e.target.value);$("#cloneProfile").onclick=cloneProfile;$("#saveProfile").onclick=saveProfile;$("#estimateBtn").onclick=estimate;
 $("#deleteProfile").onclick=confirmDeleteProfile;
 $$(".form-grid [data-p]").forEach(el=>{const b=document.createElement("button");b.type="button";b.className="field-reset";b.textContent="↺";b.title="恢复基础模式默认值";el.parentElement.insertBefore(b,el);b.onclick=()=>{const base=state.profiles.find(x=>x.id===(state.editor?.base_mode||"balanced"))||state.profiles.find(x=>x.id==="balanced");const v=getPath(base,el.dataset.p);if(v!==undefined){setPath(state.editor,el.dataset.p,v);el.value=v}}});

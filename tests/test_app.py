@@ -4,6 +4,7 @@ import io
 import json
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
@@ -12,6 +13,35 @@ from cullumi.core import ConfigStore, ProjectManager, Scanner, connect_db
 
 
 class AppSafetyTests(unittest.TestCase):
+    def test_recent_project_thumbnail_survives_cache_migration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"
+            photos.mkdir()
+            config = ConfigStore(root / "config.json")
+            config.data["default_cache_root"] = str(root / "cache-a")
+            config.save()
+            manager = ProjectManager(config)
+            project = manager.open(str(photos))
+            thumbnail = project.thumb_dir / "cover.jpg"
+            thumbnail.write_bytes(b"thumbnail")
+            with closing(connect_db(project.db_path)) as conn:
+                conn.execute(
+                    """INSERT INTO photos(relative_path,thumbnail,error,status,mtime,decision)
+                       VALUES('cover.jpg',?,'','active',1,'keep')""",
+                    (str(thumbnail),),
+                )
+                conn.commit()
+
+            migration = manager.migrate_cache(project.project_id, str(root / "cache-b"))
+            manager.cleanup_old_cache(project.project_id, migration["old_cache"])
+            stored = config.snapshot()["projects"][project.project_id]
+
+            with mock.patch.object(app, "MANAGER", manager):
+                payload = app.recent_project_payload(project.project_id, stored)
+
+            self.assertTrue(payload["thumbnail_url"].startswith("/api/thumb?"))
+
     def test_bootstrap_exposes_configuration_recovery_warning(self):
         with tempfile.TemporaryDirectory() as temporary:
             config_path = Path(temporary) / "config.json"
@@ -33,7 +63,7 @@ class AppSafetyTests(unittest.TestCase):
             source = root / "large.tiff"
             thumbnail = root / "cache" / "thumb.jpg"
             preview = root / "cache" / "thumb.display.jpg"
-            project = mock.Mock(root=root)
+            project = mock.Mock(root=root, thumb_dir=thumbnail.parent)
             row = {"relative_path": source.name, "thumbnail": str(thumbnail)}
             handler = object.__new__(app.Handler)
             handler._photo_row = mock.Mock(return_value=(project, row))
@@ -52,7 +82,7 @@ class AppSafetyTests(unittest.TestCase):
             root = Path(temporary)
             source = root / "large.heic"
             thumbnail = root / "cache" / "thumb.jpg"
-            project = mock.Mock(root=root)
+            project = mock.Mock(root=root, thumb_dir=thumbnail.parent)
             row = {"relative_path": source.name, "thumbnail": str(thumbnail)}
             handler = object.__new__(app.Handler)
             handler._photo_row = mock.Mock(return_value=(project, row))

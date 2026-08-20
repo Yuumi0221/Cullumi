@@ -7,6 +7,7 @@ import math
 import re
 import sqlite3
 import threading
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,57 @@ from PIL import Image, ImageOps
 
 def hamming(a: str, b: str) -> int:
     return (int(a, 16) ^ int(b, 16)).bit_count() if a and b else 64
+
+
+def hamming_candidate_pairs(
+    hashes: list[str], radius: float
+) -> Iterator[tuple[int, int]]:
+    """Vectorize the exact hash prefilter while keeping memory bounded."""
+    if math.isnan(radius):
+        return
+    parsed: list[int] = []
+    valid: list[bool] = []
+    wide_hash = False
+    for raw_hash in hashes:
+        if raw_hash:
+            value = int(raw_hash, 16)
+            parsed.append(value & ((1 << 64) - 1))
+            valid.append(True)
+            wide_hash = wide_hash or value < 0 or value.bit_length() > 64
+        else:
+            parsed.append(0)
+            valid.append(False)
+
+    if wide_hash:
+        for left in range(len(hashes)):
+            for right in range(left + 1, len(hashes)):
+                if hamming(hashes[left], hashes[right]) <= radius:
+                    yield left, right
+        return
+
+    values = np.asarray(parsed, dtype=np.uint64)
+    valid_mask = np.asarray(valid, dtype=np.bool_)
+    count = len(values)
+    target_elements = 1_000_000
+    block_size = max(1, min(256, target_elements // max(1, count)))
+    for start in range(0, max(0, count - 1), block_size):
+        end = min(count - 1, start + block_size)
+        right_start = start + 1
+        distances = np.bitwise_count(
+            np.bitwise_xor(values[start:end, None], values[None, right_start:])
+        )
+        matches = distances <= radius
+        if radius < 64:
+            matches &= valid_mask[start:end, None]
+            matches &= valid_mask[None, right_start:]
+        else:
+            matches |= ~valid_mask[start:end, None]
+            matches |= ~valid_mask[None, right_start:]
+        for local_left, row_matches in enumerate(matches):
+            row_matches[:local_left] = False
+            left = start + local_left
+            for offset in np.flatnonzero(row_matches):
+                yield left, right_start + int(offset)
 
 
 def _structure_vector(path: Path) -> tuple[np.ndarray, float] | None:
@@ -301,6 +353,7 @@ __all__ = [
     "build_similarity_groups",
     "filename_sequence",
     "hamming",
+    "hamming_candidate_pairs",
     "image_structure",
     "parse_taken",
     "photo_shooting_key",

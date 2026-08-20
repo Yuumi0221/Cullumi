@@ -76,7 +76,7 @@ class CullumiTests(unittest.TestCase):
         self.assertEqual(progress["stage"], "complete", progress)
 
     def test_profile_validation(self):
-        self.assertEqual(__version__, "1.0.0")
+        self.assertEqual(__version__, "1.0.1")
         self.assertEqual(self.config.data["theme"], "day")
         self.assertTrue(self.config.data["auto_check_updates"])
         validate_profile(BUILTIN_PROFILES["balanced"])
@@ -872,8 +872,19 @@ class CullumiTests(unittest.TestCase):
         old = self.project.project_dir
         result = self.manager.migrate_cache(self.project.project_id, str(self.base / "cache2"))
         self.assertTrue(result["changed"])
+        self.assertEqual(result["cache_root"], str((self.base / "cache2").resolve()))
         self.assertTrue(old.exists())
         self.assertTrue(Path(result["path"]).exists())
+        self.assertEqual(
+            self.manager.from_id(self.project.project_id).cache_root,
+            (self.base / "cache2").resolve(),
+        )
+        migrated = self.manager.from_id(self.project.project_id)
+        conn = connect_db(migrated.db_path)
+        thumbnail = Path(conn.execute("SELECT thumbnail FROM photos").fetchone()[0])
+        conn.close()
+        self.assertEqual(thumbnail.parent, migrated.thumb_dir)
+        self.assertTrue(thumbnail.is_file())
         cleaned = self.manager.cleanup_old_cache(self.project.project_id, str(old))
         self.assertTrue(cleaned["cleaned"])
         self.assertFalse(old.exists())
@@ -884,6 +895,13 @@ class CullumiTests(unittest.TestCase):
         result = self.manager.migrate_cache(self.project.project_id, str(target_root))
         self.assertTrue(result["changed"])
         self.assertTrue(Path(result["path"]).is_dir())
+
+    def test_cache_migration_to_current_location_returns_canonical_cache_root(self):
+        result = self.manager.migrate_cache(
+            self.project.project_id, str(self.project.cache_root / ".")
+        )
+        self.assertFalse(result["changed"])
+        self.assertEqual(result["cache_root"], str(self.project.cache_root.resolve()))
 
 
 if __name__ == "__main__":
