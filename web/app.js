@@ -38,6 +38,7 @@ async function boot(){
   $("#appVersion").textContent=`v${b.version}`;
   renderProfiles();$("#autoAdvance").checked=!!b.settings.auto_advance;$("#autoCheckUpdates").checked=!!b.settings.auto_check_updates;$("#defaultCache").value=b.settings.default_cache_root;
   renderRecentProjects();
+  if(b.startup_warning&&!$("#startupWarning").dataset.shown){$("#startupWarning").dataset.shown="1";$("#startupWarningBody").textContent=b.startup_warning;$("#startupWarning").showModal()}
   if(b.settings.auto_check_updates&&!state.updateChecked){state.updateChecked=true;setTimeout(()=>checkForUpdates(false),450)}
 }
 function renderProfiles(){
@@ -68,7 +69,7 @@ function pollProgress(){
   state.poll=setInterval(async()=>{const p=await json(`/api/progress?project_id=${state.project.id}`);
     $("#progressTitle").textContent=stageName[p.stage]||p.stage;$("#progressDetail").textContent=p.file||`${p.current||0} / ${p.total||0}`;
     $("#progressBar").style.width=p.total?`${Math.round(100*(p.current||0)/p.total)}%`:(p.done?"100%":"5%");
-    if(p.done){clearInterval(state.poll);state.lastScan=p;if(p.error)toast(p.error);else if(!p.total&&p.video_count)toast(`未发现照片；发现 ${p.video_count} 个视频，当前版本不支持视频`);else if(!p.total)toast("未发现支持的照片文件");else toast(stageName[p.stage]||"扫描结束");await refreshProject();await loadView();setTimeout(()=>$("#progressPanel").classList.add("hidden"),2500)}
+    if(p.done){clearInterval(state.poll);state.lastScan=p;if(p.error)toast(p.error);else if(!p.total&&p.video_count)toast(`未发现照片；发现 ${p.video_count} 个视频，当前版本不支持视频`);else if(!p.total)toast("未发现支持的照片文件");else if(p.unavailable_count)toast(`扫描完成，${p.unavailable_count} 张照片在扫描期间不可用，已安全跳过`);else toast(stageName[p.stage]||"扫描结束");await refreshProject();await loadView();setTimeout(()=>$("#progressPanel").classList.add("hidden"),2500)}
   },700);
 }
 const setEquals=(set,values)=>set.size===values.length&&values.every(value=>set.has(value));
@@ -332,6 +333,11 @@ function closeFilterMenus(){
   $$(".multi-filter-trigger").forEach(button=>button.setAttribute("aria-expanded","false"));
 }
 function closeDialogs(e){const d=e.target.closest("dialog");if(d)d.close()}
+function closeNoticeOnBackdrop(event){
+  const dialog=event.currentTarget,box=dialog.getBoundingClientRect();
+  const outside=event.clientX<box.left||event.clientX>box.right||event.clientY<box.top||event.clientY>box.bottom;
+  if(outside)dialog.close();
+}
 function closeRecentMenu(){state.recentMenuId="";$("#recentMenu").classList.add("hidden")}
 function openRecentMenu(event,projectId){
   event.preventDefault();event.stopPropagation();state.recentMenuId=projectId;
@@ -374,7 +380,19 @@ function confirmRemoveRecent(){
   $("#confirmOk").onclick=async()=>{const deleteCache=$("#deleteProjectCache").checked;try{await json("/api/project/remove-recent",{project_id:id,delete_cache:deleteCache});$("#confirm").close();toast(deleteCache?"项目数据库和缩略图已删除":"已从最近项目中移除");await boot()}catch(e){toast(e.message)}};
   $("#confirm").showModal();
 }
-function confirmDeleteProfile(){const profile=state.editor;if(!profile||profile.builtin)return;$("#confirmTitle").textContent="删除自定义模式？";$("#confirmBody").textContent=`“${profile.name}”将从本机配置中删除，此操作无法撤销。`;$("#confirmOk").textContent="确认删除";$("#confirmOk").onclick=async()=>{try{await json("/api/profile/delete",{profile_id:profile.id});$("#confirm").close();state.profiles=state.profiles.filter(x=>x.id!==profile.id);renderProfiles();editorLoad(state.profiles[0].id);toast("自定义模式已删除")}catch(e){toast(e.message)}};$("#confirm").showModal()}
+function projectsUsingProfile(profileId){
+  const projects=[],seen=new Set();
+  [state.project,...state.recentProjects].filter(Boolean).forEach(project=>{if(project.id===state.project?.id&&project!==state.project)return;if(project.profile_id===profileId&&!seen.has(project.id)){seen.add(project.id);projects.push(project)}});
+  return projects;
+}
+function showProfileInUseWarning(profile,projects=[]){
+  const current=projects.some(project=>project.id===state.project?.id);
+  let message=`“${profile.name}”仍被某个项目使用，暂时不能删除。请先将使用该模式的项目切换到其他分析模式，再删除此模式。`;
+  if(current)message=`“${profile.name}”正在被当前项目使用，暂时不能删除。请先在窗口顶部切换到其他分析模式，再删除此模式。`;
+  else if(projects.length){const names=projects.map(recentProjectName).join("”、“");message=`“${profile.name}”仍被项目“${names}”使用，暂时不能删除。请先打开该项目并切换到其他分析模式，再删除此模式。`}
+  $("#profileInUseWarningBody").textContent=message;$("#profileInUseWarning").showModal();
+}
+function confirmDeleteProfile(){const profile=state.editor;if(!profile||profile.builtin)return;const projects=projectsUsingProfile(profile.id);if(projects.length){showProfileInUseWarning(profile,projects);return}$("#confirmTitle").textContent="删除自定义模式？";$("#confirmBody").textContent=`“${profile.name}”将从本机配置中删除，此操作无法撤销。`;$("#confirmOk").textContent="确认删除";$("#confirmOk").onclick=async()=>{try{await json("/api/profile/delete",{profile_id:profile.id});$("#confirm").close();state.profiles=state.profiles.filter(x=>x.id!==profile.id);renderProfiles();editorLoad(state.profiles[0].id);toast("自定义模式已删除")}catch(e){if(e.message.includes("被项目使用")||e.message.includes("切换项目模式")){$("#confirm").close();showProfileInUseWarning(profile)}else toast(e.message)}};$("#confirm").showModal()}
 function confirmClearDecisions(){const count=Object.values(state.project?.decisions||{}).reduce((a,b)=>a+b,0);if(!count){toast("没有需要清空的选择");return}$("#confirmTitle").textContent="清空所有选择？";$("#confirmBody").textContent=`将清除当前项目中 ${count} 张照片的“保留/移除”选择，照片文件不会被移动或删除。`;$("#confirmOk").textContent="确认清空";$("#confirmOk").onclick=async()=>{try{const r=await json("/api/decision/clear",{project_id:state.project.id});$("#confirm").close();toast(`已清空 ${r.cleared} 张照片的选择`);await refreshProject();loadView()}catch(e){toast(e.message)}};$("#confirm").showModal()}
 function confirmAiRemoveSuggestions(){
   const count=state.project?.library_counts?.ai_remove_pending??0;if(!count){toast("没有未决定的 AI 建议移除照片");return}
@@ -392,6 +410,7 @@ $("#themeBtn").onclick=()=>applyTheme(state.theme==="night"?"day":"night",true);
 $("#projectBox").ondblclick=openCurrentProjectFolder;$("#projectBox").onkeydown=event=>{if(event.key!=="Enter")return;event.preventDefault();openCurrentProjectFolder()};
 $("#recentOpenFolder").onclick=openRecentFolder;$("#recentRemove").onclick=confirmRemoveRecent;
 $$("[data-close]").forEach(x=>x.onclick=closeDialogs);
+$$("dialog[data-backdrop-close]").forEach(dialog=>dialog.addEventListener("click",closeNoticeOnBackdrop));
 $("#nav").onclick=e=>{
   const button=e.target.closest("[data-nav]");if(!button)return;
   if(button.dataset.preset){applyLibraryPreset(button.dataset.preset);return}

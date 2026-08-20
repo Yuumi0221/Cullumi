@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Cullumi</title>
   <link rel="icon" href="/static/brand-icon.png" type="image/png">
-  <link rel="stylesheet" href="/static/app.css?v=1.0.0-ui15-window-icon">
+  <link rel="stylesheet" href="/static/app.css?v=1.0.0-ui17-primary-keep">
 </head>
 <body>
   <header class="topbar">
@@ -213,6 +213,8 @@
   </dialog>
 
   <dialog id="confirm" class="confirm"><h2 id="confirmTitle"></h2><div id="confirmBody"></div><footer><button data-close>取消</button><button id="confirmOk" class="danger">确认</button></footer></dialog>
+  <dialog id="startupWarning" class="confirm" data-backdrop-close><h2>配置已安全恢复</h2><div id="startupWarningBody"></div><footer><button class="primary" data-close>知道了</button></footer></dialog>
+  <dialog id="profileInUseWarning" class="confirm" data-backdrop-close><h2>此模式正在使用中</h2><div id="profileInUseWarningBody"></div><footer><button class="primary" data-close>知道了</button></footer></dialog>
   <dialog id="updateDialog" class="confirm"><h2 id="updateTitle">发现新版本</h2><div id="updateBody"></div><footer><button data-close>以后再说</button><button id="updateDownload" class="primary">下载更新</button></footer></dialog>
   <div id="recentMenu" class="context-menu hidden" role="menu">
     <button id="recentOpenFolder" role="menuitem">在文件管理器中打开</button>
@@ -220,6 +222,6 @@
   </div>
   <div id="toast"></div>
   <script>window.APP_TOKEN="__APP_TOKEN__"</script>
-  <script src="/static/app.js?v=1.0.0-ui13-theme-layout"></script>
+  <script src="/static/app.js?v=1.0.0-ui18-notice-backdrop"></script>
 </body>
 </html>

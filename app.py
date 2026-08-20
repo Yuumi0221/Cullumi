@@ -5,12 +5,14 @@ import mimetypes
 import os
 import secrets
 import sqlite3
+import stat
 import subprocess
 import sys
 import threading
 import traceback
 import urllib.parse
 import webbrowser
+from contextlib import closing
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,8 +21,8 @@ from typing import Any
 
 from cullumi import __version__
 from cullumi.core import (
-    BUILTIN_PROFILES,
     ConfigStore,
+    DISPLAY_PREVIEW_EXTENSIONS,
     ProjectManager,
     Scanner,
     SimilarityGroupCache,
@@ -30,8 +32,8 @@ from cullumi.core import (
     classification_percentiles,
     clear_decisions,
     connect_db,
+    ensure_display_preview,
     export_decisions,
-    HEIF_EXTENSIONS,
     import_decisions,
     mark_ai_remove_suggestions,
     parse_photo_filter,
@@ -39,8 +41,10 @@ from cullumi.core import (
     photo_library_counts,
     PHOTO_AI_FILTERS,
     PHOTO_DECISION_FILTERS,
+    project_id_for,
     quarantine_preview,
     restore_batch,
+    safe_relative_path,
     validate_profile,
     app_data_dir,
 )
@@ -63,6 +67,7 @@ SCANNER = Scanner(CONFIG, MANAGER, SIMILARITY_GROUPS)
 TOKEN = secrets.token_urlsafe(24)
 WEB_ROOT = resource_path("web")
 APP_ICON = WEB_ROOT / "brand-icon.ico"
+FILE_RESPONSE_CHUNK_SIZE = 256 * 1024
 
 
 def apply_native_window_icon(window: Any) -> None:
@@ -182,25 +187,24 @@ def photo_payload(project_id: str, row: Any) -> dict[str, Any]:
 
 def project_summary(project_id: str) -> dict[str, Any]:
     project = MANAGER.from_id(project_id)
-    conn = connect_db(project.db_path)
-    counts = {
-        row["suggestion"]: row["count"]
-        for row in conn.execute(
-            "SELECT suggestion,COUNT(*) count FROM photos WHERE status='active' GROUP BY suggestion"
-        )
-    }
-    decisions = {
-        row["decision"]: row["count"]
-        for row in conn.execute(
-            "SELECT decision,COUNT(*) count FROM photos WHERE status='active' AND decision<>'' GROUP BY decision"
-        )
-    }
-    total = conn.execute("SELECT COUNT(*) FROM photos WHERE status='active'").fetchone()[0]
-    library_counts = photo_library_counts(conn)
-    pairs = conn.execute("SELECT COUNT(*) FROM similar_pairs").fetchone()[0]
-    profile = CONFIG.profiles().get(project.profile_id, BUILTIN_PROFILES["balanced"])
-    similar_groups = SIMILARITY_GROUPS.count(project_id, conn, profile)
-    conn.close()
+    with closing(connect_db(project.db_path)) as conn:
+        counts = {
+            row["suggestion"]: row["count"]
+            for row in conn.execute(
+                "SELECT suggestion,COUNT(*) count FROM photos WHERE status='active' GROUP BY suggestion"
+            )
+        }
+        decisions = {
+            row["decision"]: row["count"]
+            for row in conn.execute(
+                "SELECT decision,COUNT(*) count FROM photos WHERE status='active' AND decision<>'' GROUP BY decision"
+            )
+        }
+        total = conn.execute("SELECT COUNT(*) FROM photos WHERE status='active'").fetchone()[0]
+        library_counts = photo_library_counts(conn)
+        pairs = conn.execute("SELECT COUNT(*) FROM similar_pairs").fetchone()[0]
+        profile = CONFIG.get_profile(project.profile_id)
+        similar_groups = SIMILARITY_GROUPS.count(project_id, conn, profile)
     return {
         "id": project_id,
         "root": str(project.root),
@@ -275,7 +279,8 @@ class Handler(BaseHTTPRequestHandler):
         return urllib.parse.parse_qs(self._parsed().query, keep_blank_values=True)
 
     def _authorized(self) -> bool:
-        if not self._parsed().path.startswith("/api/"):
+        path = self._parsed().path
+        if path != "/" and not path.startswith("/api/"):
             return True
         query_token = self._query().get("token", [""])[0]
         header_token = self.headers.get("X-App-Token", "")
@@ -291,16 +296,40 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _send_file(self, path: Path, content_type: str | None = None) -> None:
-        if not path.exists() or not path.is_file():
+        try:
+            source = path.open("rb")
+        except (FileNotFoundError, IsADirectoryError, PermissionError):
             self.send_error(404)
             return
-        data = path.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", content_type or mimetypes.guess_type(path.name)[0] or "application/octet-stream")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "private, max-age=3600")
-        self.end_headers()
-        self.wfile.write(data)
+
+        with source:
+            file_stat = os.fstat(source.fileno())
+            if not stat.S_ISREG(file_stat.st_mode):
+                self.send_error(404)
+                return
+
+            self.send_response(200)
+            self.send_header(
+                "Content-Type",
+                content_type
+                or mimetypes.guess_type(path.name)[0]
+                or "application/octet-stream",
+            )
+            self.send_header("Content-Length", str(file_stat.st_size))
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.end_headers()
+
+            remaining = file_stat.st_size
+            try:
+                while remaining:
+                    chunk = source.read(min(FILE_RESPONSE_CHUNK_SIZE, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+            except ConnectionError:
+                # The client closed the connection while a large file was streaming.
+                return
 
     def _body(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
@@ -404,6 +433,7 @@ class Handler(BaseHTTPRequestHandler):
                 recent.append(recent_project_payload(pid, project))
         self._send_json({
             "version": __version__,
+            "startup_warning": CONFIG.load_warning,
             "settings": {
                 "default_cache_root": CONFIG.data["default_cache_root"],
                 "auto_advance": CONFIG.data.get("auto_advance", True),
@@ -420,7 +450,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_progress(self) -> None:
         pid = self._query().get("project_id", [""])[0]
-        self._send_json(SCANNER.progress.get(pid, {"stage": "idle", "done": True}))
+        self._send_json(SCANNER.get_progress(pid))
 
     def api_photos(self) -> None:
         query = self._query()
@@ -442,15 +472,14 @@ class Handler(BaseHTTPRequestHandler):
         if search:
             where += " AND relative_path LIKE ?"
             params.append(f"%{search}%")
-        conn = connect_db(project.db_path)
-        total = conn.execute(f"SELECT COUNT(*) FROM photos WHERE {where}", params).fetchone()[0]
-        rows = conn.execute(
-            f"""SELECT * FROM photos WHERE {where}
-                ORDER BY CASE suggestion WHEN 'remove' THEN 0 WHEN 'review' THEN 1 WHEN 'unreadable' THEN 2 ELSE 3 END,
-                relative_path LIMIT ? OFFSET ?""",
-            [*params, limit, offset],
-        ).fetchall()
-        conn.close()
+        with closing(connect_db(project.db_path)) as conn:
+            total = conn.execute(f"SELECT COUNT(*) FROM photos WHERE {where}", params).fetchone()[0]
+            rows = conn.execute(
+                f"""SELECT * FROM photos WHERE {where}
+                    ORDER BY CASE suggestion WHEN 'remove' THEN 0 WHEN 'review' THEN 1 WHEN 'unreadable' THEN 2 ELSE 3 END,
+                    relative_path LIMIT ? OFFSET ?""",
+                [*params, limit, offset],
+            ).fetchall()
         self._send_json({"total": total, "items": [photo_payload(pid, row) for row in rows]})
 
     def api_similar_groups(self) -> None:
@@ -458,9 +487,9 @@ class Handler(BaseHTTPRequestHandler):
         pid = query.get("project_id", [""])[0]
         search = query.get("search", [""])[0].casefold()
         project = MANAGER.from_id(pid)
-        profile = CONFIG.profiles().get(project.profile_id, BUILTIN_PROFILES["balanced"])
-        conn = connect_db(project.db_path)
-        groups = SIMILARITY_GROUPS.get(pid, conn, profile)
+        profile = CONFIG.get_profile(project.profile_id)
+        with closing(connect_db(project.db_path)) as conn:
+            groups = SIMILARITY_GROUPS.get(pid, conn, profile)
         items = []
         for group in groups:
             if search and not any(
@@ -478,7 +507,6 @@ class Handler(BaseHTTPRequestHandler):
                     "face_safe": group["face_safe"],
                 }
             )
-        conn.close()
         self._send_json({"total": len(items), "items": items})
 
     def api_similar_group(self) -> None:
@@ -487,14 +515,13 @@ class Handler(BaseHTTPRequestHandler):
         group_id = query.get("group_id", [""])[0]
         search = query.get("search", [""])[0].casefold()
         project = MANAGER.from_id(pid)
-        profile = CONFIG.profiles().get(project.profile_id, BUILTIN_PROFILES["balanced"])
-        conn = connect_db(project.db_path)
-        group = next(
-            (item for item in SIMILARITY_GROUPS.get(pid, conn, profile) if item["id"] == group_id),
-            None,
-        )
+        profile = CONFIG.get_profile(project.profile_id)
+        with closing(connect_db(project.db_path)) as conn:
+            group = next(
+                (item for item in SIMILARITY_GROUPS.get(pid, conn, profile) if item["id"] == group_id),
+                None,
+            )
         if not group:
-            conn.close()
             raise ValueError("相似照片组不存在或已发生变化")
         members = []
         for row in group["members"]:
@@ -511,7 +538,6 @@ class Handler(BaseHTTPRequestHandler):
             "face_safe": group["face_safe"],
             "members": members,
         }
-        conn.close()
         self._send_json(result)
 
     def _photo_row(self):
@@ -519,9 +545,8 @@ class Handler(BaseHTTPRequestHandler):
         pid = query.get("project_id", [""])[0]
         photo_id = int(query.get("id", ["0"])[0])
         project = MANAGER.from_id(pid)
-        conn = connect_db(project.db_path)
-        row = conn.execute("SELECT * FROM photos WHERE id=?", (photo_id,)).fetchone()
-        conn.close()
+        with closing(connect_db(project.db_path)) as conn:
+            row = conn.execute("SELECT * FROM photos WHERE id=?", (photo_id,)).fetchone()
         if not row:
             raise ValueError("照片不存在")
         return project, row
@@ -532,11 +557,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_photo(self) -> None:
         project, row = self._photo_row()
-        path = project.root / row["relative_path"]
-        if path.suffix.lower() in HEIF_EXTENSIONS | {".dng", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".orf", ".rw2", ".pef"}:
-            self._send_file(Path(row["thumbnail"]), "image/jpeg")
-        else:
+        path = safe_relative_path(project.root, row["relative_path"], "照片路径")
+        if path.suffix.lower() not in DISPLAY_PREVIEW_EXTENSIONS:
             self._send_file(path)
+            return
+        thumbnail = Path(row["thumbnail"])
+        try:
+            preview = ensure_display_preview(path, thumbnail)
+        except (OSError, RuntimeError):
+            # A previously generated thumbnail is still more useful than a
+            # broken viewer if the source becomes temporarily unavailable.
+            preview = thumbnail
+        self._send_file(preview, "image/jpeg")
 
     def api_quarantine_preview(self) -> None:
         pid = self._query().get("project_id", [""])[0]
@@ -545,9 +577,8 @@ class Handler(BaseHTTPRequestHandler):
     def api_batches(self) -> None:
         pid = self._query().get("project_id", [""])[0]
         project = MANAGER.from_id(pid)
-        conn = connect_db(project.db_path)
-        rows = conn.execute("SELECT * FROM quarantine_batches ORDER BY created_at DESC").fetchall()
-        conn.close()
+        with closing(connect_db(project.db_path)) as conn:
+            rows = conn.execute("SELECT * FROM quarantine_batches ORDER BY created_at DESC").fetchall()
         self._send_json({"items": [json_safe_row(row) for row in rows]})
 
     def api_choose_folder(self, body: dict[str, Any]) -> None:
@@ -560,18 +591,24 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"path": choose_csv("选择筛选结果 CSV")})
 
     def api_open_project(self, body: dict[str, Any]) -> None:
-        project = MANAGER.open(body["root"], body.get("cache_root"))
+        project_id = project_id_for(Path(body["root"]).resolve())
+        with SCANNER.project_operation(project_id, "打开项目"):
+            project = MANAGER.open(body["root"], body.get("cache_root"))
         SIMILARITY_GROUPS.invalidate(project.project_id)
         self._send_json(project_summary(project.project_id))
 
     def api_project_cache(self, body: dict[str, Any]) -> None:
         project_id = body["project_id"]
-        result = MANAGER.migrate_cache(project_id, body["cache_root"])
+        with SCANNER.project_operation(project_id, "迁移缓存"):
+            result = MANAGER.migrate_cache(project_id, body["cache_root"])
         SIMILARITY_GROUPS.invalidate(project_id)
         self._send_json(result)
 
     def api_cache_cleanup(self, body: dict[str, Any]) -> None:
-        self._send_json(MANAGER.cleanup_old_cache(body["project_id"], body["path"]))
+        project_id = body["project_id"]
+        with SCANNER.project_operation(project_id, "清理缓存"):
+            result = MANAGER.cleanup_old_cache(project_id, body["path"])
+        self._send_json(result)
 
     def api_project_open_folder(self, body: dict[str, Any]) -> None:
         root = MANAGER.project_root(body["project_id"])
@@ -583,10 +620,11 @@ class Handler(BaseHTTPRequestHandler):
     def api_project_remove_recent(self, body: dict[str, Any]) -> None:
         project_id = body["project_id"]
         delete_cache = bool(body.get("delete_cache", False))
-        progress = SCANNER.progress.get(project_id, {})
-        if delete_cache and progress and not progress.get("done", False):
-            raise ValueError("项目仍在扫描，请等待扫描结束后再删除数据库和缩略图")
-        result = MANAGER.remove_from_recent(project_id, delete_cache)
+        if delete_cache:
+            with SCANNER.project_operation(project_id, "删除项目缓存"):
+                result = MANAGER.remove_from_recent(project_id, True)
+        else:
+            result = MANAGER.remove_from_recent(project_id, False)
         SIMILARITY_GROUPS.invalidate(project_id)
         self._send_json(result)
 
@@ -611,8 +649,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"opened": True})
 
     def api_scan(self, body: dict[str, Any]) -> None:
-        SCANNER.start(body["project_id"])
-        self._send_json({"started": True})
+        started = SCANNER.start(body["project_id"])
+        self._send_json({"started": started})
 
     def api_scan_cancel(self, body: dict[str, Any]) -> None:
         SCANNER.cancel(body["project_id"])
@@ -623,10 +661,9 @@ class Handler(BaseHTTPRequestHandler):
         decision = body.get("decision", "")
         if decision not in {"", "keep", "remove"}:
             raise ValueError("无效决定")
-        conn = connect_db(project.db_path)
-        conn.execute("UPDATE photos SET decision=? WHERE id=?", (decision, int(body["photo_id"])))
-        conn.commit()
-        conn.close()
+        with closing(connect_db(project.db_path)) as conn:
+            conn.execute("UPDATE photos SET decision=? WHERE id=?", (decision, int(body["photo_id"])))
+            conn.commit()
         self._send_json({"saved": True})
 
     def api_decision_clear(self, body: dict[str, Any]) -> None:
@@ -638,20 +675,28 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"marked": mark_ai_remove_suggestions(project)})
 
     def api_settings(self, body: dict[str, Any]) -> None:
-        if "default_cache_root" in body:
-            path = Path(body["default_cache_root"]).resolve()
-            path.mkdir(parents=True, exist_ok=True)
-            CONFIG.data["default_cache_root"] = str(path)
-        if "auto_advance" in body:
-            CONFIG.data["auto_advance"] = bool(body["auto_advance"])
-        if "auto_check_updates" in body:
-            CONFIG.data["auto_check_updates"] = bool(body["auto_check_updates"])
+        updates: dict[str, Any] = {}
         if "theme" in body:
             theme = str(body["theme"])
             if theme not in {"day", "night"}:
                 raise ValueError("主题必须为 day 或 night")
-            CONFIG.data["theme"] = theme
-        CONFIG.save()
+            updates["theme"] = theme
+        for key in ("auto_advance", "auto_check_updates"):
+            if key in body:
+                if not isinstance(body[key], bool):
+                    raise ValueError(f"{key} 必须为布尔值")
+                updates[key] = body[key]
+        cache_path = None
+        if "default_cache_root" in body:
+            raw_path = body["default_cache_root"]
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                raise ValueError("默认缓存位置不能为空")
+            cache_path = Path(raw_path).resolve()
+            updates["default_cache_root"] = str(cache_path)
+        if cache_path:
+            cache_path.mkdir(parents=True, exist_ok=True)
+        with CONFIG.edit() as data:
+            data.update(updates)
         self._send_json({"saved": True, "settings": CONFIG.data})
 
     def api_profile_save(self, body: dict[str, Any]) -> None:
@@ -664,14 +709,34 @@ class Handler(BaseHTTPRequestHandler):
     def api_profile_apply(self, body: dict[str, Any]) -> None:
         project = MANAGER.from_id(body["project_id"])
         profile_id = body["profile_id"]
-        profile = CONFIG.get_profile(profile_id)
-        CONFIG.data["projects"][project.project_id]["profile_id"] = profile_id
-        CONFIG.save()
-        conn = connect_db(project.db_path)
-        conn.execute("UPDATE project SET profile_id=?,updated_at=datetime('now') WHERE id=1", (profile_id,))
-        SCANNER.reclassify(project, conn, profile)
-        SCANNER.rebuild_similarity(project, conn, profile)
-        conn.close()
+        profiles = CONFIG.profiles()
+        if profile_id not in profiles:
+            raise ValueError("筛选模式不存在")
+        profile = profiles[profile_id]
+        with SCANNER.project_operation(project.project_id, "应用筛选模式"):
+            with CONFIG.lock:
+                old_profile_id = CONFIG.data["projects"][project.project_id].get(
+                    "profile_id", "conservative"
+                )
+            with closing(connect_db(project.db_path)) as conn:
+                config_saved = False
+                try:
+                    conn.execute(
+                        "UPDATE project SET profile_id=?,updated_at=datetime('now') WHERE id=1",
+                        (profile_id,),
+                    )
+                    SCANNER.reclassify(project, conn, profile, commit=False)
+                    SCANNER.rebuild_similarity(project, conn, profile, commit=False)
+                    with CONFIG.edit() as data:
+                        data["projects"][project.project_id]["profile_id"] = profile_id
+                    config_saved = True
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    if config_saved:
+                        with CONFIG.edit() as data:
+                            data["projects"][project.project_id]["profile_id"] = old_profile_id
+                    raise
         SIMILARITY_GROUPS.invalidate(project.project_id)
         self._send_json(project_summary(project.project_id))
 
@@ -679,21 +744,19 @@ class Handler(BaseHTTPRequestHandler):
         profile = body["profile"]
         validate_profile(profile)
         project = MANAGER.from_id(body["project_id"])
-        conn = connect_db(project.db_path)
-        rows = conn.execute("SELECT * FROM photos WHERE status='active'").fetchall()
-        percentiles = classification_percentiles(rows, profile)
-        counts = {"remove": 0, "review": 0, "keep": 0, "unreadable": 0}
-        for row in rows:
-            suggestion, _ = classify(row, profile, percentiles)
-            counts[suggestion] = counts.get(suggestion, 0) + 1
-        estimate_conn = sqlite3.connect(":memory:")
-        estimate_conn.row_factory = sqlite3.Row
-        conn.backup(estimate_conn)
-        conn.close()
-        SCANNER.rebuild_similarity(project, estimate_conn, profile)
-        estimated_pairs = estimate_conn.execute("SELECT COUNT(*) FROM similar_pairs").fetchone()[0]
-        estimated_groups = len(build_similarity_groups(estimate_conn, profile))
-        estimate_conn.close()
+        with closing(connect_db(project.db_path)) as conn:
+            rows = conn.execute("SELECT * FROM photos WHERE status='active'").fetchall()
+            percentiles = classification_percentiles(rows, profile)
+            counts = {"remove": 0, "review": 0, "keep": 0, "unreadable": 0}
+            for row in rows:
+                suggestion, _ = classify(row, profile, percentiles)
+                counts[suggestion] = counts.get(suggestion, 0) + 1
+            with closing(sqlite3.connect(":memory:")) as estimate_conn:
+                estimate_conn.row_factory = sqlite3.Row
+                conn.backup(estimate_conn)
+                SCANNER.rebuild_similarity(project, estimate_conn, profile)
+                estimated_pairs = estimate_conn.execute("SELECT COUNT(*) FROM similar_pairs").fetchone()[0]
+                estimated_groups = len(build_similarity_groups(estimate_conn, profile))
         self._send_json({
             "counts": counts,
             "estimated_pairs": estimated_pairs,
@@ -722,13 +785,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_quarantine_apply(self, body: dict[str, Any]) -> None:
         project_id = body["project_id"]
-        result = apply_quarantine(MANAGER.from_id(project_id))
+        with SCANNER.project_operation(project_id, "隔离照片"):
+            result = apply_quarantine(MANAGER.from_id(project_id))
         SIMILARITY_GROUPS.invalidate(project_id)
         self._send_json(result)
 
     def api_restore(self, body: dict[str, Any]) -> None:
         project_id = body["project_id"]
-        result = restore_batch(MANAGER.from_id(project_id), body["batch_id"])
+        with SCANNER.project_operation(project_id, "恢复照片"):
+            result = restore_batch(MANAGER.from_id(project_id), body["batch_id"])
         SIMILARITY_GROUPS.invalidate(project_id)
         self._send_json(result)
 

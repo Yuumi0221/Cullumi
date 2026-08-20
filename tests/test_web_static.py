@@ -4,6 +4,20 @@ import unittest
 
 
 class WebStaticTests(unittest.TestCase):
+    def test_configuration_recovery_warning_is_visible_once(self):
+        root = Path(__file__).parents[1]
+        markup = (root / "web" / "index.html").read_text(encoding="utf-8")
+        script = (root / "web" / "app.js").read_text(encoding="utf-8")
+        server = (root / "app.py").read_text(encoding="utf-8")
+        self.assertIn('id="startupWarning"', markup)
+        self.assertIn('b.startup_warning&&!$("#startupWarning").dataset.shown', script)
+        self.assertIn('"startup_warning": CONFIG.load_warning', server)
+
+    def test_scan_reports_files_that_become_unavailable(self):
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("p.unavailable_count", script)
+        self.assertIn("张照片在扫描期间不可用，已安全跳过", script)
+
     def test_project_removal_can_delete_cache_without_touching_photos(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
         script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
@@ -234,6 +248,43 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('$("#confirmOk").textContent="确认删除"', script)
         self.assertIn('$("#confirmOk").textContent="确认清空"', script)
 
+    def test_active_custom_profile_delete_shows_switch_warning(self):
+        root = Path(__file__).parents[1]
+        markup = (root / "web" / "index.html").read_text(encoding="utf-8")
+        script = (root / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('id="profileInUseWarning"', markup)
+        self.assertIn("projectsUsingProfile(profile.id)", script)
+        self.assertIn("project.profile_id===profileId", script)
+        self.assertIn("project.id===state.project?.id&&project!==state.project", script)
+        self.assertIn("正在被当前项目使用，暂时不能删除", script)
+        self.assertIn("请先在窗口顶部切换到其他分析模式", script)
+        self.assertIn('e.message.includes("被项目使用")', script)
+
+    def test_notice_only_dialogs_close_when_the_backdrop_is_clicked(self):
+        root = Path(__file__).parents[1]
+        markup = (root / "web" / "index.html").read_text(encoding="utf-8")
+        script = (root / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertEqual(markup.count("data-backdrop-close"), 2)
+        self.assertIn(
+            'id="startupWarning" class="confirm" data-backdrop-close', markup
+        )
+        self.assertIn(
+            'id="profileInUseWarning" class="confirm" data-backdrop-close', markup
+        )
+        self.assertNotIn(
+            'id="confirm" class="confirm" data-backdrop-close', markup
+        )
+        self.assertNotIn(
+            'id="updateDialog" class="confirm" data-backdrop-close', markup
+        )
+        self.assertIn("function closeNoticeOnBackdrop(event)", script)
+        self.assertIn("dialog.getBoundingClientRect()", script)
+        self.assertIn("if(outside)dialog.close()", script)
+        self.assertIn(
+            '$$("dialog[data-backdrop-close]").forEach(dialog=>dialog.addEventListener("click",closeNoticeOnBackdrop))',
+            script,
+        )
+
     def test_export_uses_native_save_route_and_restored_batches_have_no_button(self):
         script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
         server = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
@@ -300,6 +351,10 @@ class WebStaticTests(unittest.TestCase):
 
     def test_primary_danger_and_top_controls_have_explicit_theme_hover_states(self):
         styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        self.assertIn("button.primary:hover:not(:disabled),", styles)
+        self.assertIn(
+            '[data-theme="night"] button.primary:hover:not(:disabled),', styles
+        )
         for selector in (
             "#chooseBtn:hover:not(:disabled)",
             "#saveProfile:hover:not(:disabled)",

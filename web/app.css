@@ -727,6 +727,12 @@ nav button.active em {
   font-size:25px
 }
 
+#startupWarningBody {
+  max-width:680px;
+  overflow-wrap:anywhere;
+  white-space:pre-wrap
+}
+
 .confirm footer {
   display:flex;
   justify-content:flex-end;
@@ -1144,13 +1150,13 @@ button:hover:not(:disabled):not(.active) {
   background: var(--surface-hover);
 }
 
+button.primary:hover:not(:disabled),
 #saveProfile:hover:not(:disabled) {
   background:var(--keep-hover-dark);
   color:#fff;
   border-color:var(--keep-hover-dark)
 }
 
-.primary:hover:not(:disabled),
 #scanBtn:hover:not(:disabled) {
   border-color: var(--pink-hover);
   background: var(--pink-hover);
@@ -1994,6 +2000,7 @@ body.similar-side-open .similar-browser {
   border-color: var(--keep);
 }
 
+[data-theme="night"] button.primary:hover:not(:disabled),
 [data-theme="night"] #saveProfile:hover:not(:disabled) {
   background:var(--keep-hover);
   color:#fff;
@@ -2001,7 +2008,6 @@ body.similar-side-open .similar-browser {
 }
 
 [data-theme="night"] #scanBtn:hover:not(:disabled),
-[data-theme="night"] .primary:hover:not(:disabled),
 [data-theme="night"] #chooseBtn:hover:not(:disabled) {
   background: var(--pink-hover);
   border-color: var(--pink-hover);
