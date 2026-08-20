@@ -356,6 +356,8 @@ class CullumiTests(unittest.TestCase):
         self.scan()
         conn = connect_db(self.project.db_path)
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM photos WHERE status='active'").fetchone()[0], 3)
+        thumbnails = [row[0] for row in conn.execute("SELECT thumbnail FROM photos")]
+        self.assertTrue(all(path.startswith("thumbs/") for path in thumbnails))
         self.assertGreaterEqual(conn.execute("SELECT COUNT(*) FROM similar_pairs WHERE kind='exact'").fetchone()[0], 1)
         groups = build_similarity_groups(conn, BUILTIN_PROFILES["balanced"])
         exact = next(group for group in groups if group["kind"] == "exact")
@@ -501,10 +503,11 @@ class CullumiTests(unittest.TestCase):
         self.make_photo("ATOMIC.jpg")
         self.scan()
         conn = connect_db(self.project.db_path)
-        thumb_path = Path(
+        thumb_path = core.project_thumbnail_path(
+            self.project,
             conn.execute(
                 "SELECT thumbnail FROM photos WHERE relative_path='ATOMIC.jpg'"
-            ).fetchone()[0]
+            ).fetchone()[0],
         )
         conn.close()
         original_thumbnail = thumb_path.read_bytes()
@@ -752,8 +755,12 @@ class CullumiTests(unittest.TestCase):
             for row in conn.execute("SELECT id,thumbnail FROM photos")
         }
         for pair in pairs:
-            left_path = Path(photos[int(pair["a_id"])]["thumbnail"])
-            right_path = Path(photos[int(pair["b_id"])]["thumbnail"])
+            left_path = core.project_thumbnail_path(
+                self.project, photos[int(pair["a_id"])]["thumbnail"]
+            )
+            right_path = core.project_thumbnail_path(
+                self.project, photos[int(pair["b_id"])]["thumbnail"]
+            )
             with Image.open(left_path) as left, Image.open(right_path) as right:
                 left_vector = core.np.asarray(
                     ImageOps.grayscale(left).resize((64, 64)), dtype=core.np.float32
@@ -881,9 +888,10 @@ class CullumiTests(unittest.TestCase):
         )
         migrated = self.manager.from_id(self.project.project_id)
         conn = connect_db(migrated.db_path)
-        thumbnail = Path(conn.execute("SELECT thumbnail FROM photos").fetchone()[0])
+        stored_thumbnail = conn.execute("SELECT thumbnail FROM photos").fetchone()[0]
         conn.close()
-        self.assertEqual(thumbnail.parent, migrated.thumb_dir)
+        self.assertTrue(stored_thumbnail.startswith("thumbs/"))
+        thumbnail = core.project_thumbnail_path(migrated, stored_thumbnail)
         self.assertTrue(thumbnail.is_file())
         cleaned = self.manager.cleanup_old_cache(self.project.project_id, str(old))
         self.assertTrue(cleaned["cleaned"])

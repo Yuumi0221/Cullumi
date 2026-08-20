@@ -220,22 +220,30 @@ def project_summary(project_id: str) -> dict[str, Any]:
     }
 
 
-def recent_project_payload(project_id: str, stored: dict[str, Any]) -> dict[str, Any]:
+def recent_project_stub(project_id: str, stored: dict[str, Any]) -> dict[str, Any]:
     available = Path(stored["root"]).is_dir()
-    payload = {
+    return {
         "id": project_id,
         **stored,
         "available": available,
         "total": 0,
         "kept": 0,
         "thumbnail_url": "",
+        "stats_loaded": not available,
+        "load_error": "",
     }
+
+
+def recent_project_payload(project_id: str, stored: dict[str, Any]) -> dict[str, Any]:
+    payload = recent_project_stub(project_id, stored)
+    available = payload["available"]
     if not available:
         return payload
     conn = None
     try:
         project = MANAGER.from_id(project_id)
         if not project.db_path.is_file():
+            payload["stats_loaded"] = True
             return payload
         conn = connect_db(project.db_path)
         counts = conn.execute(
@@ -258,11 +266,12 @@ def recent_project_payload(project_id: str, stored: dict[str, Any]) -> dict[str,
                 "token": TOKEN,
             })
             payload["thumbnail_url"] = f"/api/thumb?{query}"
-    except Exception:
-        pass
+    except Exception as error:
+        payload["load_error"] = str(error) or error.__class__.__name__
     finally:
         if conn is not None:
             conn.close()
+    payload["stats_loaded"] = True
     return payload
 
 
@@ -363,6 +372,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             routes = {
                 "/api/bootstrap": self.api_bootstrap,
+                "/api/recent-project": self.api_recent_project,
                 "/api/project": self.api_project,
                 "/api/progress": self.api_progress,
                 "/api/photos": self.api_photos,
@@ -432,7 +442,7 @@ class Handler(BaseHTTPRequestHandler):
         for pid in config_data.get("recent_projects", []):
             project = config_data.get("projects", {}).get(pid)
             if project:
-                recent.append(recent_project_payload(pid, project))
+                recent.append(recent_project_stub(pid, project))
         self._send_json({
             "version": __version__,
             "startup_warning": CONFIG.load_warning,
@@ -445,6 +455,13 @@ class Handler(BaseHTTPRequestHandler):
             "recent_projects": recent,
             "profiles": list(CONFIG.profiles().values()),
         })
+
+    def api_recent_project(self) -> None:
+        project_id = self._query().get("project_id", [""])[0]
+        stored = CONFIG.snapshot().get("projects", {}).get(project_id)
+        if not stored:
+            raise ValueError("项目不存在")
+        self._send_json(recent_project_payload(project_id, stored))
 
     def api_project(self) -> None:
         pid = self._query().get("project_id", [""])[0]

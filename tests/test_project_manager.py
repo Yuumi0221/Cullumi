@@ -13,6 +13,7 @@ from cullumi.core import (
     ProjectManager,
     connect_db,
     project_thumbnail_path,
+    project_thumbnail_storage_path,
 )
 
 
@@ -60,6 +61,9 @@ class ProjectManagerReliabilityTests(unittest.TestCase):
         )
 
         self.assertEqual(resolved, project.thumb_dir / "cover.jpg")
+        self.assertEqual(
+            project_thumbnail_storage_path(resolved), "thumbs/cover.jpg"
+        )
 
     def test_cache_migration_uses_sqlite_backup_api(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

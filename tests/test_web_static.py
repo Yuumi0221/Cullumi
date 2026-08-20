@@ -525,6 +525,23 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("host=dialogs.at(-1)||document.body", script)
         self.assertIn("host.appendChild(t)", script)
 
+    def test_recent_project_details_load_after_bootstrap_with_bounded_workers(self):
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        server = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
+        self.assertIn("recent_project_stub(pid, project)", server)
+        self.assertIn('"/api/recent-project": self.api_recent_project', server)
+        self.assertIn("hydrateRecentProjects(generation)", script)
+        self.assertIn("Math.min(3,queue.length)", script)
+        self.assertIn("正在读取项目信息", script)
+        self.assertIn("项目数据暂时无法读取", script)
+
+    def test_scan_progress_polling_waits_for_each_request_before_repeating(self):
+        script = (Path(__file__).parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("while(generation===state.poll", script)
+        self.assertIn("await wait(700)", script)
+        self.assertNotIn("setInterval(async", script)
+        self.assertNotIn("clearInterval(state.poll)", script)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,32 @@ from cullumi.core import ConfigStore, ProjectManager, Scanner, connect_db
 
 
 class AppSafetyTests(unittest.TestCase):
+    def test_bootstrap_defers_recent_project_database_reads(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"
+            photos.mkdir()
+            config = ConfigStore(root / "config.json")
+            manager = ProjectManager(config)
+            project = manager.open(str(photos))
+            handler = object.__new__(app.Handler)
+            handler._send_json = mock.Mock()
+
+            with (
+                mock.patch.object(app, "CONFIG", config),
+                mock.patch.object(
+                    app,
+                    "recent_project_payload",
+                    side_effect=AssertionError("bootstrap must not open project databases"),
+                ),
+            ):
+                handler.api_bootstrap()
+
+            recent = handler._send_json.call_args.args[0]["recent_projects"]
+            self.assertEqual(len(recent), 1)
+            self.assertEqual(recent[0]["id"], project.project_id)
+            self.assertFalse(recent[0]["stats_loaded"])
+
     def test_recent_project_thumbnail_survives_cache_migration(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -41,6 +67,7 @@ class AppSafetyTests(unittest.TestCase):
                 payload = app.recent_project_payload(project.project_id, stored)
 
             self.assertTrue(payload["thumbnail_url"].startswith("/api/thumb?"))
+            self.assertTrue(payload["stats_loaded"])
 
     def test_bootstrap_exposes_configuration_recovery_warning(self):
         with tempfile.TemporaryDirectory() as temporary:

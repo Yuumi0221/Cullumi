@@ -812,11 +812,17 @@ class Project:
 
 
 def project_thumbnail_path(project: Project, stored_path: str | Path) -> Path:
-    """Resolve legacy absolute thumbnail paths against the current cache."""
+    """Resolve relative or legacy absolute thumbnail paths in the current cache."""
     raw = str(stored_path or "").strip()
     if not raw:
         return Path()
     return project.thumb_dir / Path(raw).name
+
+
+def project_thumbnail_storage_path(path: str | Path) -> str:
+    """Store thumbnails relocatably while accepting legacy absolute inputs."""
+    raw = str(path or "").strip()
+    return (Path("thumbs") / Path(raw).name).as_posix() if raw else ""
 
 
 def _rewrite_project_thumbnail_paths(project: Project) -> None:
@@ -826,7 +832,7 @@ def _rewrite_project_thumbnail_paths(project: Project) -> None:
             "SELECT id,thumbnail FROM photos WHERE thumbnail<>''"
         ).fetchall()
         updates = [
-            (str(project_thumbnail_path(project, row["thumbnail"])), row["id"])
+            (project_thumbnail_storage_path(row["thumbnail"]), row["id"])
             for row in rows
         ]
         if updates:
@@ -1533,6 +1539,10 @@ class Scanner:
                         )
                         continue
                     suggestion, reason = classify(metrics, profile)
+                    if metrics.get("thumbnail"):
+                        metrics["thumbnail"] = project_thumbnail_storage_path(
+                            metrics["thumbnail"]
+                        )
                     values = {
                         "relative_path": rel, **metrics, "suggestion": suggestion, "reason": reason,
                         "status": "active",
