@@ -129,6 +129,26 @@ class ConfigRecoveryTests(unittest.TestCase):
         self.assertEqual(len(self.damaged_backups()), 1)
         self.assertEqual(json.loads(self.path.read_text(encoding="utf-8")), config.data)
 
+    def test_motion_cover_writeback_setting_is_normalized(self) -> None:
+        self.path.write_text(
+            json.dumps({"motion_cover_writeback": "always"}), encoding="utf-8"
+        )
+        self.assertEqual(
+            ConfigStore(self.path).data["motion_cover_writeback"], "always"
+        )
+
+        self.path.write_text(
+            json.dumps({"motion_cover_writeback": "invalid"}), encoding="utf-8"
+        )
+        repaired = ConfigStore(self.path)
+        self.assertEqual(repaired.data["motion_cover_writeback"], "ask")
+
+        self.path.write_text(
+            json.dumps({"motion_cover_writeback": []}), encoding="utf-8"
+        )
+        repaired = ConfigStore(self.path)
+        self.assertEqual(repaired.data["motion_cover_writeback"], "ask")
+
     def test_valid_residual_temp_is_recovered_when_main_file_is_missing(self) -> None:
         temp_path = self.path.with_suffix(".tmp")
         temp_path.write_text('{"theme": "night"}', encoding="utf-8")

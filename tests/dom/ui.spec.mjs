@@ -72,7 +72,7 @@ function photoPayload(decision = "", id = 1) {
   };
 }
 
-function motionPhotoPayload(decision = "", id = 1) {
+function motionPhotoPayload(decision = "", id = 1, stillTime = 0) {
   return {
     ...photoPayload(decision, id),
     media_type: "motion_photo",
@@ -82,6 +82,7 @@ function motionPhotoPayload(decision = "", id = 1) {
       duration_ms: 1200,
       fps: 30,
       frame_count: 36,
+      still_time_ms: stillTime,
       cover_source: "still",
       cover_time_ms: 0,
       cover_frame_index: 0,
@@ -93,6 +94,7 @@ function motionPhotoPayload(decision = "", id = 1) {
 
 async function installApi(page, options = {}) {
   let decision = "";
+  let writebackMode = options.writebackMode || "never";
   const decisions = new Map();
   const requests = [];
   await page.route("**/api/**", async route => {
@@ -115,6 +117,7 @@ async function installApi(page, options = {}) {
           theme: "day",
           auto_advance: false,
           auto_check_updates: false,
+          motion_cover_writeback: writebackMode,
           default_cache_root: "C:\\Cullumi缓存",
         },
         recent_projects: [recentPayload(false)],
@@ -131,7 +134,7 @@ async function installApi(page, options = {}) {
       const matching = Array.from({ length: photoCount }, (_, index) => {
         const id = index + 1;
         return options.motionPhoto
-          ? motionPhotoPayload(decisions.get(id) || "", id)
+          ? motionPhotoPayload(decisions.get(id) || "", id, options.motionStillTime || 0)
           : photoPayload(decisions.get(id) || "", id);
       }).filter(photo => {
         const current = photo.decision || "undecided";
@@ -153,16 +156,29 @@ async function installApi(page, options = {}) {
       });
     }
     if (url.pathname === "/api/motion/cover") {
-      const photo = motionPhotoPayload(decisions.get(body.photo_id) || "", body.photo_id);
+      const photo = motionPhotoPayload(decisions.get(body.photo_id) || "", body.photo_id, options.motionStillTime || 0);
       photo.motion.cover_source = body.source;
       photo.motion.cover_time_ms = body.time_ms || 0;
-      return fulfill({ saved: true, photo, project_counts: projectPayload("", options.photoCount || 2, decisions) });
+      if (body.write_source) {
+        photo.motion.cover_source = "still";
+        photo.motion.cover_time_ms = 0;
+        photo.motion.still_time_ms = body.time_ms || 0;
+      }
+      if (options.motionCoverSuggestion) {
+        photo.suggestion = options.motionCoverSuggestion;
+        photo.reason = options.motionCoverSuggestion === "remove" ? "严重失焦" : "建议人工复查";
+      }
+      return fulfill({ saved: true, source_written: !!body.write_source, source_backup: body.write_source ? "C:\\backup\\photo.jpg" : "", photo, project_counts: projectPayload("", options.photoCount || 2, decisions) });
+    }
+    if (url.pathname === "/api/motion/locate") {
+      return fulfill({ still_time_ms: options.locatedMotionStillTime || 0 });
     }
     if (url.pathname === "/api/motion/recommend") {
       return fulfill({ recommended: { time_ms: 600, frame_index: 18, quality_score: 91.2 }, candidates: [] });
     }
     if (url.pathname === "/api/settings") {
-      return fulfill({ saved: true, settings: { theme: body.theme || "day" } });
+      if (body.motion_cover_writeback) writebackMode = body.motion_cover_writeback;
+      return fulfill({ saved: true, settings: { theme: body.theme || "day", motion_cover_writeback: writebackMode } });
     }
     if (url.pathname === "/api/choose-cache") {
       return fulfill({ path: "D:\\新缓存" });
@@ -272,15 +288,15 @@ test("项目照片可以通过真实卡片交互标记为移除", async ({ page 
   await openProject(page);
 
   const decisionFilter = page.locator('[data-filter-menu="decisions"] .multi-filter-trigger');
+  const decisionChevron = decisionFilter.locator(".filter-chevron");
   await expect(decisionFilter.locator(".filter-chevron-down")).toBeVisible();
-  await expect(decisionFilter.locator(".filter-chevron-up")).toBeHidden();
   await expect(decisionFilter.locator(".filter-chevron-down")).toHaveAttribute("href", "/static/assets/icons.svg?v=1#chevron-down");
+  await expect(decisionChevron).toHaveCSS("transform", "none");
   await decisionFilter.click();
   await expect(decisionFilter).toHaveAttribute("aria-expanded", "true");
-  await expect(decisionFilter.locator(".filter-chevron-down")).toBeHidden();
-  await expect(decisionFilter.locator(".filter-chevron-up")).toBeVisible();
-  await expect(decisionFilter.locator(".filter-chevron-up")).toHaveAttribute("href", "/static/assets/icons.svg?v=1#chevron-up");
+  await expect(decisionChevron).toHaveCSS("transform", "matrix(-1, 0, 0, -1, 0, 0)");
   await decisionFilter.click();
+  await expect(decisionChevron).toHaveCSS("transform", "none");
 
   await page.locator('[data-photo-id="1"] [data-decision="remove"]').click();
   await expect(page.locator('[data-photo-id="1"]')).toHaveClass(/decision-remove/);
@@ -292,6 +308,30 @@ test("项目照片可以通过真实卡片交互标记为移除", async ({ page 
     photo_id: 1,
     decision: "remove",
   });
+});
+
+test("自定义模式恢复按钮使用统一图标并停留在字段标题行", async ({ page }) => {
+  await openApp(page);
+  await openProject(page);
+  await page.locator("#settingsBtn").click();
+  await page.locator('[data-setting="profiles"]').click();
+
+  const fields = page.locator(".form-grid [data-p]");
+  const resets = page.locator(".form-grid .field-reset");
+  expect(await resets.count()).toBe(await fields.count());
+  await expect(resets.first().locator("svg use")).toHaveAttribute(
+    "href",
+    "/static/assets/icons.svg?v=1#motion-reset",
+  );
+  await expect(resets.first().locator("svg")).toHaveCSS("width", "14px");
+
+  const selectLabel = page.locator(".form-grid label:has(select[data-p])").first();
+  const positions = await selectLabel.evaluate(label => {
+    const reset = label.querySelector(".field-reset").getBoundingClientRect();
+    const field = label.querySelector(".form-select").getBoundingClientRect();
+    return { resetBottom: reset.bottom, fieldTop: field.top };
+  });
+  expect(positions.resetBottom).toBeLessThanOrEqual(positions.fieldTop);
 });
 
 test("放大预览中的决定局部同步到图库且不刷新完整项目", async ({ page }) => {
@@ -676,6 +716,123 @@ test("动态照片使用 SVG 控件并支持播放、缩放和末帧封面", asy
     source: "motion",
     time_ms: 1166,
   });
+});
+
+test("动态照片当前封面标志使用真实帧位置并按需升级旧项目", async ({ page }) => {
+  const requests = await openApp(page, {
+    motionPhoto: true,
+    motionStillTime: -1,
+    locatedMotionStillTime: 400,
+    photoCount: 1,
+  });
+  await openProject(page);
+  await page.locator('[data-photo-id="1"] [data-open-id]').click();
+
+  await expect(page.locator("#motionTimeline")).toHaveValue("400");
+  await expect(page.locator("#motionCoverMarker")).toHaveAttribute("title", "当前封面 · 0:00");
+  const coverPosition = await page.locator("#motionTimelineWrap").evaluate(
+    wrap => getComputedStyle(wrap).getPropertyValue("--motion-cover-percent").trim(),
+  );
+  expect(Number.parseFloat(coverPosition)).toBeCloseTo(400 / 1166 * 100, 4);
+  await expect(page.locator("#motionOriginalMarker")).toBeHidden();
+  expect(requests.find(request => request.path === "/api/motion/locate")?.body).toMatchObject({
+    project_id: "project-1",
+    photo_id: 1,
+  });
+});
+
+test("动态照片打开时定格当前封面并在修改后同步分析标识", async ({ page }) => {
+  await openApp(page, {
+    motionPhoto: true,
+    motionStillTime: 400,
+    motionCoverSuggestion: "remove",
+    photoCount: 1,
+  });
+  await openProject(page);
+  await page.locator("#viewerVideo").evaluate(video => {
+    video.dataset.testCurrent = "0";
+    video.dataset.testPlaying = "0";
+    Object.defineProperty(video, "readyState", { configurable: true, get() { return 1; } });
+    Object.defineProperty(video, "currentTime", {
+      configurable: true,
+      get() { return Number(this.dataset.testCurrent || 0); },
+      set(value) { this.dataset.testCurrent = String(value); },
+    });
+    Object.defineProperty(video, "paused", {
+      configurable: true,
+      get() { return this.dataset.testPlaying !== "1"; },
+    });
+    video.pause = function pause() {
+      this.dataset.testPlaying = "0";
+      this.dispatchEvent(new Event("pause"));
+    };
+  });
+
+  await expect(page.locator('[data-photo-id="1"] [data-analysis-badge]')).toHaveText("人工复查");
+  await page.locator('[data-photo-id="1"] [data-open-id]').click();
+  await expect(page.locator("#viewerVideo")).toHaveAttribute("data-test-current", "0.4");
+  await expect(page.locator("#motionPlay")).toHaveAttribute("aria-label", "播放");
+  await expect(page.locator("#viewerAnalysisBadge.badge-review")).toHaveText("人工复查");
+
+  await page.locator("#viewerVideo").evaluate(video => { video.currentTime = 0.8; });
+  await page.locator("#motionSetCover").click();
+
+  await expect(page.locator('[data-photo-id="1"] [data-analysis-badge].badge-remove')).toHaveText("建议移除");
+  await expect(page.locator("#viewerAnalysisBadge.badge-remove")).toHaveText("建议移除");
+  await expect(page.locator("#viewerMeta")).toContainText("严重失焦");
+});
+
+test("动态封面写回提醒可以记住确认修改", async ({ page }) => {
+  const requests = await openApp(page, {
+    motionPhoto: true,
+    writebackMode: "ask",
+    photoCount: 1,
+  });
+  await openProject(page);
+  await page.locator('[data-photo-id="1"] [data-open-id]').click();
+  await page.locator("#motionSetCover").click();
+
+  await expect(page.locator("#motionWritebackConfirm")).toBeVisible();
+  await expect(page.locator("#motionWritebackYes")).toHaveText("确认修改");
+  await expect(page.locator("#motionWritebackNo")).toHaveText("不修改");
+  await page.locator("#motionWritebackDontAsk").check();
+  await page.locator("#motionWritebackYes").click();
+
+  await expect(page.locator("#toast")).toContainText("源文件已备份并写回");
+  expect(requests.find(request => request.path === "/api/settings" && request.body?.motion_cover_writeback)?.body).toMatchObject({
+    motion_cover_writeback: "always",
+  });
+  expect(requests.find(request => request.path === "/api/motion/cover")?.body).toMatchObject({
+    write_source: true,
+  });
+  await expect(page.locator("#motionCoverWriteback")).toHaveValue("always");
+
+  const before = requests.filter(request => request.path === "/api/motion/cover").length;
+  await page.locator("#motionSetCover").click();
+  await expect.poll(() => requests.filter(request => request.path === "/api/motion/cover").length).toBe(before + 1);
+  await expect(page.locator("#motionWritebackConfirm")).toBeHidden();
+});
+
+test("动态封面写回提醒可以记住不修改", async ({ page }) => {
+  const requests = await openApp(page, {
+    motionPhoto: true,
+    writebackMode: "ask",
+    photoCount: 1,
+  });
+  await openProject(page);
+  await page.locator('[data-photo-id="1"] [data-open-id]').click();
+  await page.locator("#motionSetCover").click();
+  await page.locator("#motionWritebackDontAsk").check();
+  await page.locator("#motionWritebackNo").click();
+
+  await expect.poll(() => requests.some(request => request.path === "/api/motion/cover")).toBe(true);
+  expect(requests.find(request => request.path === "/api/settings" && request.body?.motion_cover_writeback)?.body).toMatchObject({
+    motion_cover_writeback: "never",
+  });
+  expect(requests.find(request => request.path === "/api/motion/cover")?.body).toMatchObject({
+    write_source: false,
+  });
+  await expect(page.locator("#motionCoverWriteback")).toHaveValue("never");
 });
 
 test("隔离历史可以通过委托事件恢复批次", async ({ page }) => {

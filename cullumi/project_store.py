@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-DATABASE_SCHEMA_VERSION = 2
+DATABASE_SCHEMA_VERSION = 3
 _WAL_CONFIGURED_DATABASES: dict[Path, tuple[int, int]] = {}
 _INITIALIZED_DATABASES: dict[Path, tuple[int, int, int, int]] = {}
 _DATABASE_CONFIGURATION_LOCK = threading.RLock()
@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS photos (
   motion_duration_ms INTEGER NOT NULL DEFAULT 0, motion_fps REAL NOT NULL DEFAULT 0,
   motion_frame_count INTEGER NOT NULL DEFAULT 0,
   motion_width INTEGER NOT NULL DEFAULT 0, motion_height INTEGER NOT NULL DEFAULT 0,
-  motion_sha256 TEXT NOT NULL DEFAULT '',
+  motion_sha256 TEXT NOT NULL DEFAULT '', motion_still_time_ms INTEGER NOT NULL DEFAULT -1,
   cover_source TEXT NOT NULL DEFAULT 'still', cover_time_ms INTEGER NOT NULL DEFAULT 0,
   cover_frame_index INTEGER NOT NULL DEFAULT 0, cover_revision INTEGER NOT NULL DEFAULT 0,
   quality_score REAL NOT NULL DEFAULT 0
@@ -123,7 +123,7 @@ CREATE TABLE IF NOT EXISTS quarantine_batches (
 );
 """
 
-PHOTO_V2_COLUMNS = {
+PHOTO_SCHEMA_COLUMNS = {
     "media_type": "TEXT NOT NULL DEFAULT 'image'",
     "motion_kind": "TEXT NOT NULL DEFAULT ''",
     "motion_relative_path": "TEXT NOT NULL DEFAULT ''",
@@ -139,6 +139,7 @@ PHOTO_V2_COLUMNS = {
     "motion_width": "INTEGER NOT NULL DEFAULT 0",
     "motion_height": "INTEGER NOT NULL DEFAULT 0",
     "motion_sha256": "TEXT NOT NULL DEFAULT ''",
+    "motion_still_time_ms": "INTEGER NOT NULL DEFAULT -1",
     "cover_source": "TEXT NOT NULL DEFAULT 'still'",
     "cover_time_ms": "INTEGER NOT NULL DEFAULT 0",
     "cover_frame_index": "INTEGER NOT NULL DEFAULT 0",
@@ -198,7 +199,7 @@ def _initialize_database(
     if existing_columns:
         additions = "\n".join(
             f"ALTER TABLE photos ADD COLUMN {name} {declaration};"
-            for name, declaration in PHOTO_V2_COLUMNS.items()
+            for name, declaration in PHOTO_SCHEMA_COLUMNS.items()
             if name not in existing_columns
         )
     try:

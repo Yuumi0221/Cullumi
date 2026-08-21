@@ -26,6 +26,7 @@ from .media import (
     analyze_photo,
     ensure_motion_video,
     extract_motion_frame,
+    locate_motion_still_time,
     motion_asset_from_row,
     motion_fingerprint,
     paired_motion_asset,
@@ -304,6 +305,14 @@ class Scanner:
                         and not old["motion_error"]
                         and thumbnail is not None
                         and thumbnail.is_file()
+                        and (
+                            old["media_type"] != "motion_photo"
+                            or int(
+                                old["motion_still_time_ms"]
+                                if old["motion_still_time_ms"] is not None
+                                else -1
+                            ) >= 0
+                        )
                     ):
                         if old["status"] != "active":
                             conn.execute("UPDATE photos SET status='active' WHERE id=?", (old["id"],))
@@ -316,12 +325,25 @@ class Scanner:
                         "motion_fps": 0, "motion_frame_count": 0,
                         "motion_width": 0, "motion_height": 0,
                         "motion_sha256": old["motion_sha256"] if old and motion_same else "",
+                        "motion_still_time_ms": -1 if asset else 0,
                     }
                     if asset:
                         try:
                             motion_values.update(probe_motion(asset))
                         except (OSError, RuntimeError, subprocess.SubprocessError) as error:
                             motion_values["motion_error"] = str(error)
+                        if not motion_values["motion_error"]:
+                            try:
+                                motion_values["motion_still_time_ms"] = locate_motion_still_time(
+                                    path,
+                                    asset,
+                                    int(motion_values["motion_duration_ms"]),
+                                    float(motion_values["motion_fps"]),
+                                )
+                            except (OSError, RuntimeError, subprocess.SubprocessError):
+                                # The motion track remains playable even when a
+                                # damaged still cannot be matched to a frame.
+                                motion_values["motion_still_time_ms"] = 0
                     cover_source = "still"
                     cover_time_ms = 0
                     cover_frame_index = 0

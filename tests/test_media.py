@@ -17,19 +17,115 @@ from cullumi.media import (
     ensure_display_preview,
     ensure_motion_video,
     extract_motion_frame,
+    locate_motion_still_time,
+    open_image,
     paired_motion_asset,
     probe_motion,
+    write_motion_cover_source,
 )
 
 
 class MediaPreviewTests(unittest.TestCase):
+    def test_paired_jpeg_cover_writeback_replaces_pixels_and_keeps_backup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photo = root / "IMG_0001.JPG"
+            frame = root / "frame.jpg"
+            video = root / "IMG_0001.MOV"
+            with Image.new("RGB", (80, 60), "navy") as image:
+                image.save(photo, "JPEG")
+            original = photo.read_bytes()
+            with Image.new("RGB", (40, 30), "tomato") as image:
+                image.save(frame, "JPEG")
+            video.write_bytes(b"paired-video")
+
+            result = write_motion_cover_source(
+                photo,
+                frame,
+                MotionAsset("apple_sidecar", video),
+                400,
+                root / "backups",
+                1,
+            )
+
+            with Image.open(photo) as image:
+                self.assertEqual(image.size, (40, 30))
+            self.assertEqual(result["backup"].read_bytes(), original)
+            self.assertEqual(result["asset"].path, video)
+
+    def test_embedded_motion_photo_writeback_keeps_video_and_updates_timestamp(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photo = root / "motion.jpg"
+            frame = root / "frame.jpg"
+            with Image.new("RGB", (80, 60), "navy") as image:
+                image.save(photo, "JPEG")
+            base = photo.read_bytes()
+            video = b"video-payload"
+            xmp = (
+                b'<rdf:Description GCamera:MotionPhoto="1" '
+                b'GCamera:MicroVideoOffset="13" '
+                b'GCamera:MotionPhotoPresentationTimestampUs="0"/>'
+            )
+            app1 = b"\xff\xe1" + (len(xmp) + 2).to_bytes(2, "big") + xmp
+            photo.write_bytes(base[:2] + app1 + base[2:] + video)
+            original = photo.read_bytes()
+            asset = embedded_motion_asset(photo)
+            self.assertIsNotNone(asset)
+            with Image.new("RGB", (40, 30), "tomato") as image:
+                image.save(frame, "JPEG")
+
+            result = write_motion_cover_source(
+                photo, frame, asset, 375, root / "backups", 2
+            )
+
+            updated = embedded_motion_asset(photo)
+            self.assertIsNotNone(updated)
+            self.assertEqual(updated.presentation_timestamp_us, 375000)
+            self.assertEqual(photo.read_bytes()[updated.offset :], video)
+            self.assertEqual(result["backup"].read_bytes(), original)
+            with Image.open(photo) as image:
+                self.assertEqual(image.size, (40, 30))
+
+    def test_paired_heic_cover_writeback_preserves_live_photo_container(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            from pillow_heif import from_pillow
+
+            root = Path(temporary)
+            photo = root / "IMG_0002.HEIC"
+            frame = root / "frame.jpg"
+            video = root / "IMG_0002.MOV"
+            with Image.new("RGB", (80, 60), "navy") as image:
+                from_pillow(image).save(photo, quality=90)
+            original = photo.read_bytes()
+            with Image.new("RGB", (40, 30), "tomato") as image:
+                image.save(frame, "JPEG")
+            video.write_bytes(b"paired-video")
+
+            result = write_motion_cover_source(
+                photo,
+                frame,
+                MotionAsset("apple_sidecar", video),
+                500,
+                root / "backups",
+                1,
+            )
+
+            image, _ = open_image(photo)
+            try:
+                self.assertEqual(image.size, (40, 30))
+            finally:
+                image.close()
+            self.assertEqual(result["backup"].read_bytes(), original)
+
     def test_standard_android_motion_photo_xmp_locates_appended_video(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "motion.jpg"
             video = b"video-payload"
             xmp = (
                 b'<rdf:Description GCamera:MotionPhoto="1" '
-                b'GCamera:MicroVideoOffset="13"/>'
+                b'GCamera:MicroVideoOffset="13" '
+                b'GCamera:MotionPhotoPresentationTimestampUs="240000"/>'
             )
             path.write_bytes(b"jpeg" + xmp + video)
 
@@ -39,6 +135,7 @@ class MediaPreviewTests(unittest.TestCase):
             self.assertEqual(asset.kind, "android_embedded")
             self.assertEqual(asset.length, len(video))
             self.assertEqual(path.read_bytes()[asset.offset :], video)
+            self.assertEqual(asset.presentation_timestamp_us, 240000)
 
     def test_ordinary_jpeg_with_mp4_bytes_is_not_guessed_as_motion_photo(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -73,7 +170,9 @@ class MediaPreviewTests(unittest.TestCase):
                 [
                     ffmpeg_executable(), "-y", "-hide_banner", "-loglevel", "error",
                     "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=10",
+                    "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000",
                     "-t", "0.5", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-shortest",
                     str(source),
                 ],
                 check=True,
@@ -88,8 +187,55 @@ class MediaPreviewTests(unittest.TestCase):
             self.assertEqual(metadata["motion_height"], 120)
             self.assertGreater(metadata["motion_frame_count"], 1)
             self.assertTrue(video.is_file())
+            cached_probe = subprocess.run(
+                [ffmpeg_executable(), "-hide_banner", "-i", str(video)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            self.assertIn("Audio: opus", cached_probe.stderr)
             with Image.open(frame) as image:
                 self.assertEqual(image.size, (160, 120))
+
+    def test_motion_still_frame_is_located_by_visual_match(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "sample.mov"
+            still = root / "sample.jpg"
+            from cullumi.media import ffmpeg_executable
+
+            subprocess.run(
+                [
+                    ffmpeg_executable(), "-y", "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=10",
+                    "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    str(source),
+                ],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    ffmpeg_executable(), "-y", "-hide_banner", "-loglevel", "error",
+                    "-ss", "0.4", "-i", str(source), "-frames:v", "1", str(still),
+                ],
+                check=True,
+            )
+            asset = MotionAsset("apple_sidecar", source)
+
+            time_ms = locate_motion_still_time(still, asset, 1000, 10)
+
+            self.assertLessEqual(abs(time_ms - 400), 100)
+
+    def test_android_presentation_timestamp_is_used_without_frame_matching(self):
+        asset = MotionAsset(
+            "android_embedded", Path("unused.jpg"), presentation_timestamp_us=750000
+        )
+
+        time_ms = locate_motion_still_time(Path("unused.jpg"), asset, 1000, 10)
+
+        self.assertEqual(time_ms, 750)
 
     def test_analysis_reuses_the_decoded_image_instead_of_copying_it(self):
         with tempfile.TemporaryDirectory() as temporary:

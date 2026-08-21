@@ -162,7 +162,7 @@
 }
 
 [data-theme="night"] .field-reset:hover:not(:disabled) {
-  background: var(--surface-hover) !important;
+  background:transparent !important;
 }
 
 [data-theme="night"] .context-menu button {

@@ -5,6 +5,7 @@ import io
 import math
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import uuid
@@ -16,10 +17,11 @@ import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 try:
-    from pillow_heif import open_heif, register_heif_opener
+    from pillow_heif import from_pillow, open_heif, register_heif_opener
 
     register_heif_opener()
 except Exception:
+    from_pillow = None
     open_heif = None
 
 try:
@@ -51,6 +53,7 @@ class MotionAsset:
     offset: int = 0
     length: int = 0
     asset_id: str = ""
+    presentation_timestamp_us: int = -1
 
     def storage_values(self, root: Path) -> dict[str, Any]:
         stat = self.path.stat()
@@ -101,7 +104,17 @@ def embedded_motion_asset(path: Path) -> MotionAsset | None:
         size = path.stat().st_size
         if length <= 0 or length >= size:
             return None
-        return MotionAsset("android_embedded", path, size - length, length)
+        timestamp_match = re.search(
+            r"(?:GCamera|Camera):(?:MotionPhoto|MicroVideo)PresentationTimestampUs"
+            r"\s*=\s*[\"'](-?\d+)[\"']",
+            xmp,
+            re.IGNORECASE,
+        )
+        timestamp_us = int(timestamp_match.group(1)) if timestamp_match else -1
+        return MotionAsset(
+            "android_embedded", path, size - length, length,
+            presentation_timestamp_us=timestamp_us,
+        )
     except (OSError, ValueError):
         return None
 
@@ -210,7 +223,9 @@ def motion_fingerprint(asset: MotionAsset) -> str:
 
 def ensure_motion_video(asset: MotionAsset, motion_dir: Path) -> Path:
     motion_dir.mkdir(parents=True, exist_ok=True)
-    target = motion_dir / f"{motion_fingerprint(asset)}.webm"
+    # Keep the cache version in the filename so previously generated, silent
+    # WebM files are never reused after audio support is added.
+    target = motion_dir / f"{motion_fingerprint(asset)}.av.webm"
     if target.is_file() and target.stat().st_size:
         return target
     temporary_source, input_path = _motion_input(asset)
@@ -218,8 +233,10 @@ def ensure_motion_video(asset: MotionAsset, motion_dir: Path) -> Path:
     try:
         command = [
             ffmpeg_executable(), "-y", "-hide_banner", "-loglevel", "error",
-            "-i", str(input_path), "-map", "0:v:0", "-an", "-c:v", "libvpx-vp9",
+            "-i", str(input_path), "-map", "0:v:0", "-map", "0:a:0?",
+            "-c:v", "libvpx-vp9",
             "-crf", "34", "-b:v", "0", "-deadline", "good", "-cpu-used", "4",
+            "-c:a", "libopus", "-b:a", "96k",
             str(temporary_target),
         ]
         completed = subprocess.run(
@@ -236,6 +253,76 @@ def ensure_motion_video(asset: MotionAsset, motion_dir: Path) -> Path:
         return target
     finally:
         temporary_target.unlink(missing_ok=True)
+        if temporary_source:
+            temporary_source.unlink(missing_ok=True)
+
+
+def _cover_match_image(image: Image.Image, size: int = 64) -> np.ndarray:
+    gray = image.convert("L")
+    try:
+        fitted = ImageOps.fit(
+            gray, (size, size), method=Image.Resampling.LANCZOS
+        )
+        try:
+            pixels = np.asarray(fitted, dtype=np.float32)
+            return (pixels - pixels.mean()) / max(1.0, float(pixels.std()))
+        finally:
+            fitted.close()
+    finally:
+        gray.close()
+
+
+def locate_motion_still_time(
+    photo: Path,
+    asset: MotionAsset,
+    duration_ms: int,
+    fps: float,
+) -> int:
+    """Locate the still image in the motion track, using metadata or pixels."""
+    frame_duration_ms = max(1, math.ceil(1000 / fps)) if fps > 0 else 1
+    last_frame_ms = max(0, int(duration_ms) - frame_duration_ms)
+    if asset.presentation_timestamp_us >= 0:
+        return min(last_frame_ms, round(asset.presentation_timestamp_us / 1000))
+    if duration_ms <= 0 or fps <= 0:
+        return 0
+
+    still: Image.Image | None = None
+    temporary_source: Path | None = None
+    try:
+        still, _ = open_image(photo)
+        reference = _cover_match_image(still)
+        temporary_source, input_path = _motion_input(asset)
+        size = reference.shape[0]
+        completed = subprocess.run(
+            [
+                ffmpeg_executable(), "-hide_banner", "-loglevel", "error",
+                "-i", str(input_path), "-map", "0:v:0",
+                "-vf",
+                f"scale={size}:{size}:force_original_aspect_ratio=increase,"
+                f"crop={size}:{size},format=gray",
+                "-vsync", "0", "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1",
+            ],
+            capture_output=True,
+            timeout=45,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        frame_size = size * size
+        frame_count = len(completed.stdout) // frame_size
+        if completed.returncode or frame_count <= 0:
+            return 0
+        frames = np.frombuffer(
+            completed.stdout[: frame_count * frame_size], dtype=np.uint8
+        ).reshape(frame_count, size, size).astype(np.float32)
+        means = frames.mean(axis=(1, 2), keepdims=True)
+        deviations = np.maximum(1.0, frames.std(axis=(1, 2), keepdims=True))
+        normalized = (frames - means) / deviations
+        scores = np.mean((normalized - reference) ** 2, axis=(1, 2))
+        best_index = int(np.argmin(scores))
+        return min(last_frame_ms, max(0, round(best_index * 1000 / fps)))
+    finally:
+        if still is not None:
+            still.close()
         if temporary_source:
             temporary_source.unlink(missing_ok=True)
 
@@ -260,6 +347,185 @@ def extract_motion_frame(video: Path, time_ms: int, target: Path) -> Path:
             raise RuntimeError(message or "无法提取动态照片封面")
         temporary.replace(target)
         return target
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def extract_motion_asset_frame(
+    asset: MotionAsset, time_ms: int, target: Path
+) -> Path:
+    temporary_source, input_path = _motion_input(asset)
+    try:
+        return extract_motion_frame(input_path, time_ms, target)
+    finally:
+        if temporary_source:
+            temporary_source.unlink(missing_ok=True)
+
+
+def _jpeg_metadata_and_image(data: bytes) -> tuple[list[bytes], bytes]:
+    if not data.startswith(b"\xff\xd8"):
+        raise ValueError("源文件不是有效的 JPEG")
+    position = 2
+    metadata: list[bytes] = []
+    while position + 4 <= len(data) and data[position] == 0xFF:
+        start = position
+        while position < len(data) and data[position] == 0xFF:
+            position += 1
+        if position >= len(data):
+            break
+        marker = data[position]
+        position += 1
+        if marker in {0xD9, 0xDA}:
+            return metadata, data[start:]
+        if marker in {0x01, *range(0xD0, 0xD8)}:
+            return metadata, data[start:]
+        if position + 2 > len(data):
+            break
+        length = int.from_bytes(data[position : position + 2], "big")
+        end = position + length
+        if length < 2 or end > len(data):
+            break
+        segment = data[start:end]
+        if 0xE0 <= marker <= 0xEF or marker == 0xFE:
+            metadata.append(segment)
+            position = end
+            continue
+        return metadata, data[start:]
+    raise ValueError("JPEG 段结构损坏")
+
+
+def _motion_xmp_timestamp(segment: bytes, time_ms: int) -> bytes:
+    if b"MotionPhoto" not in segment and b"MicroVideo" not in segment:
+        return segment
+    timestamp = str(max(0, int(time_ms)) * 1000).encode("ascii")
+    pattern = re.compile(
+        rb"((?:MotionPhoto|MicroVideo)PresentationTimestampUs\s*=\s*[\"'])"
+        rb"-?\d+([\"'])",
+        re.IGNORECASE,
+    )
+    updated, count = pattern.subn(rb"\g<1>" + timestamp + rb"\g<2>", segment)
+    if count:
+        result = updated
+    else:
+        prefix_match = re.search(
+            rb"([A-Za-z][A-Za-z0-9_-]*):(?:MotionPhoto|MicroVideo)\s*=",
+            segment,
+            re.IGNORECASE,
+        )
+        prefix = prefix_match.group(1) if prefix_match else b"GCamera"
+        attribute = (
+            b" " + prefix + b':MotionPhotoPresentationTimestampUs="' + timestamp + b'"'
+        )
+        result = re.sub(
+            rb"(<rdf:Description\b)", rb"\1" + attribute, segment, count=1
+        )
+    declared_length = len(result) - 2
+    if declared_length > 0xFFFF:
+        raise ValueError("Motion Photo XMP 段过大，无法安全写回")
+    return result[:2] + declared_length.to_bytes(2, "big") + result[4:]
+
+
+def _write_jpeg_motion_cover(
+    photo: Path,
+    frame: Path,
+    asset: MotionAsset,
+    time_ms: int,
+    target: Path,
+) -> None:
+    source_data = photo.read_bytes()
+    still_end = asset.offset if asset.kind == "android_embedded" else len(source_data)
+    original_metadata, _ = _jpeg_metadata_and_image(source_data[:still_end])
+    _, frame_image = _jpeg_metadata_and_image(frame.read_bytes())
+    metadata = [
+        _motion_xmp_timestamp(segment, time_ms)
+        if asset.kind == "android_embedded"
+        else segment
+        for segment in original_metadata
+    ]
+    payload = b"\xff\xd8" + b"".join(metadata) + frame_image
+    if asset.kind == "android_embedded":
+        payload += source_data[asset.offset : asset.offset + asset.length]
+    target.write_bytes(payload)
+
+
+def _write_heif_motion_cover(photo: Path, frame: Path, target: Path) -> None:
+    if open_heif is None or from_pillow is None:
+        raise RuntimeError("HEIC/HEIF 写回组件未安装")
+    original = open_heif(photo, convert_hdr_to_8bit=True, reload_size=True)
+    original_info = dict(original[original.primary_index].info)
+    with Image.open(frame) as source:
+        source.load()
+        converted = source.convert("RGB")
+        try:
+            encoded = from_pillow(converted)
+        finally:
+            converted.close()
+    for key in ("exif", "xmp", "metadata", "icc_profile"):
+        value = original_info.get(key)
+        if value:
+            encoded.info[key] = value
+    encoded.save(target, quality=92)
+
+
+def restore_motion_source(backup: Path, photo: Path) -> None:
+    temporary = photo.with_name(
+        f".{photo.name}.cullumi-restore-{uuid.uuid4().hex}.tmp{photo.suffix}"
+    )
+    try:
+        shutil.copy2(backup, temporary)
+        temporary.replace(photo)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def write_motion_cover_source(
+    photo: Path,
+    frame: Path,
+    asset: MotionAsset,
+    time_ms: int,
+    backup_root: Path,
+    revision: int,
+) -> dict[str, Any]:
+    """Safely replace the source still while retaining Live/Motion metadata."""
+    suffix = photo.suffix.lower()
+    if suffix not in {".jpg", ".jpeg", *HEIF_EXTENSIONS}:
+        raise ValueError("原片写回目前仅支持 JPEG、HEIC 和 HEIF 动态照片")
+    temporary = photo.with_name(
+        f".{photo.name}.cullumi-{uuid.uuid4().hex}.tmp{photo.suffix}"
+    )
+    backup_dir = backup_root / hashlib.sha1(
+        str(photo.resolve()).casefold().encode("utf-8")
+    ).hexdigest()[:16]
+    backup = backup_dir / f"cover-{revision}-{uuid.uuid4().hex[:8]}-{photo.name}"
+    replaced = False
+    try:
+        if suffix in {".jpg", ".jpeg"}:
+            _write_jpeg_motion_cover(photo, frame, asset, time_ms, temporary)
+        else:
+            if asset.kind == "android_embedded":
+                raise ValueError("内嵌式 Motion Photo 必须使用 JPEG 容器")
+            _write_heif_motion_cover(photo, frame, temporary)
+        image, _ = open_image(temporary)
+        image.close()
+        embedded = embedded_motion_asset(temporary) if asset.kind == "android_embedded" else None
+        if asset.kind == "android_embedded" and (
+            embedded is None or embedded.length != asset.length
+        ):
+            raise RuntimeError("写回后的 Motion Photo 视频结构校验失败")
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(photo, backup)
+        temporary.replace(photo)
+        replaced = True
+        written_asset = embedded_motion_asset(photo) if asset.kind == "android_embedded" else asset
+        return {
+            "backup": backup,
+            "asset": written_asset or asset,
+            "stat": photo.stat(),
+        }
+    except Exception:
+        if replaced and backup.is_file():
+            restore_motion_source(backup, photo)
+        raise
     finally:
         temporary.unlink(missing_ok=True)
 

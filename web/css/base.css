@@ -326,6 +326,13 @@ nav button.active em {
   color:var(--ink)
 }
 
+.search > svg {
+  width:18px;
+  height:18px;
+  flex:0 0 auto;
+  fill:var(--muted)
+}
+
 .progress-panel {
   background:var(--card);
   border:1px solid var(--line);
@@ -647,6 +654,37 @@ nav button.active em {
   border-radius:9px;
   padding:9px 10px;
   background:var(--card)
+}
+
+.settings-choice {
+  display:block;
+}
+
+.settings-choice > small {
+  display:block;
+  margin-top:6px;
+  color:var(--muted);
+  font-size:11px;
+}
+
+.settings-select {
+  display:flex;
+  width:min(220px,100%);
+  margin-top:7px;
+}
+
+.settings-select select {
+  width:100%;
+  padding-right:34px;
+  appearance:none;
+  -webkit-appearance:none;
+  cursor:pointer;
+  transition:border-color .16s ease,background-color .16s ease;
+}
+
+.settings-select select:hover {
+  border-color:var(--border-hover);
+  background:var(--surface-hover);
 }
 
 .toggle {

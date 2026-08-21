@@ -34,9 +34,13 @@ from .media import (
     analyze_photo,
     ensure_display_preview,
     ensure_motion_video,
+    extract_motion_asset_frame,
     extract_motion_frame,
+    locate_motion_still_time,
     motion_asset_from_row,
     motion_fingerprint,
+    restore_motion_source,
+    write_motion_cover_source,
 )
 from .native_dialogs import choose_csv, choose_directory, choose_save_csv
 from .project_store import (
@@ -100,6 +104,7 @@ POST_ROUTES = {
     "/api/decision/ai-remove": "api_decision_ai_remove",
     "/api/decision/clear": "api_decision_clear",
     "/api/motion/cover": "api_motion_cover",
+    "/api/motion/locate": "api_motion_locate",
     "/api/motion/recommend": "api_motion_recommend",
     "/api/settings": "api_settings",
     "/api/profile/save": "api_profile_save",
@@ -134,9 +139,20 @@ def json_safe_row(row: Any) -> dict[str, Any]:
     return {key: row[key] for key in row.keys()}
 
 
-def photo_payload(project_id: str, row: Any) -> dict[str, Any]:
+def photo_payload(
+    project_id: str, row: Any, profile: dict[str, Any] | None = None
+) -> dict[str, Any]:
     data = json_safe_row(row)
     data["project_id"] = project_id
+    if not str(row["error"] or ""):
+        if profile is None:
+            project = MANAGER.from_id(project_id)
+            profile = CONFIG.get_profile(project.profile_id)
+        data["quality_score"] = round(
+            max(0.0, min(1.0, quality_score(row, profile))) * 100, 1
+        )
+    else:
+        data["quality_score"] = None
     revision = int(row["cover_revision"] or 0)
     suffix = f"&v={revision}"
     data["thumb_url"] = f"/api/thumb?project_id={project_id}&id={row['id']}&token={TOKEN}{suffix}"
@@ -149,6 +165,7 @@ def photo_payload(project_id: str, row: Any) -> dict[str, Any]:
             "frame_count": int(row["motion_frame_count"] or 0),
             "width": int(row["motion_width"] or 0),
             "height": int(row["motion_height"] or 0),
+            "still_time_ms": int(row["motion_still_time_ms"] or 0),
             "cover_source": row["cover_source"],
             "cover_time_ms": int(row["cover_time_ms"] or 0),
             "cover_frame_index": int(row["cover_frame_index"] or 0),
@@ -429,6 +446,9 @@ class Handler(BaseHTTPRequestHandler):
                 "default_cache_root": config_data["default_cache_root"],
                 "auto_advance": config_data.get("auto_advance", True),
                 "auto_check_updates": config_data.get("auto_check_updates", True),
+                "motion_cover_writeback": config_data.get(
+                    "motion_cover_writeback", "ask"
+                ),
                 "theme": config_data.get("theme", "day"),
             },
             "recent_projects": recent,
@@ -457,6 +477,7 @@ class Handler(BaseHTTPRequestHandler):
         limit = min(500, max(1, int(query.get("limit", ["200"])[0])))
         offset = max(0, int(query.get("offset", ["0"])[0]))
         project = MANAGER.from_id(pid)
+        profile = CONFIG.get_profile(project.profile_id)
 
         file_state = query.get("file", ["readable"])[0]
         raw_decisions = query.get("decisions", [None])[0]
@@ -478,7 +499,10 @@ class Handler(BaseHTTPRequestHandler):
                     relative_path LIMIT ? OFFSET ?""",
                 [*params, limit, offset],
             ).fetchall()
-        self._send_json({"total": total, "items": [photo_payload(pid, row) for row in rows]})
+        self._send_json({
+            "total": total,
+            "items": [photo_payload(pid, row, profile) for row in rows],
+        })
 
     def api_similar_groups(self) -> None:
         query = self._query()
@@ -500,8 +524,10 @@ class Handler(BaseHTTPRequestHandler):
                     "count": len(group["members"]),
                     "kind": group["kind"],
                     "recommended_id": group["recommended_id"],
-                    "recommended": photo_payload(pid, group["recommended"]),
-                    "covers": [photo_payload(pid, row) for row in group["covers"]],
+                    "recommended": photo_payload(pid, group["recommended"], profile),
+                    "covers": [
+                        photo_payload(pid, row, profile) for row in group["covers"]
+                    ],
                     "face_safe": group["face_safe"],
                 }
             )
@@ -525,7 +551,7 @@ class Handler(BaseHTTPRequestHandler):
         for row in group["members"]:
             if search and search not in str(row["relative_path"]).casefold():
                 continue
-            item = photo_payload(pid, row)
+            item = photo_payload(pid, row, profile)
             item["group_similarity"] = group["confidence"].get(int(row["id"]), 0.0)
             members.append(item)
         result = {
@@ -594,12 +620,49 @@ class Handler(BaseHTTPRequestHandler):
         video = ensure_motion_video(asset, motion_dir)
         self._send_range_file(video, "video/webm")
 
+    def api_motion_locate(self, body: dict[str, Any]) -> None:
+        pid = str(body["project_id"])
+        photo_id = int(body["photo_id"])
+        project = MANAGER.from_id(pid)
+        with MANAGER.data_operation(pid), SCANNER.project_operation(
+            pid, "定位动态照片封面"
+        ):
+            with closing(connect_db(project.db_path)) as conn:
+                row = conn.execute(
+                    "SELECT * FROM photos WHERE id=? AND status='active'", (photo_id,)
+                ).fetchone()
+                if not row or row["media_type"] != "motion_photo":
+                    raise ValueError("动态照片不存在")
+                still_time_ms = int(row["motion_still_time_ms"] or 0)
+                if still_time_ms < 0:
+                    photo = safe_relative_path(
+                        project.root, row["relative_path"], "照片路径"
+                    )
+                    asset = motion_asset_from_row(project.root, row)
+                    still_time_ms = locate_motion_still_time(
+                        photo,
+                        asset,
+                        int(row["motion_duration_ms"] or 0),
+                        float(row["motion_fps"] or 0),
+                    )
+                    conn.execute(
+                        "UPDATE photos SET motion_still_time_ms=? WHERE id=?",
+                        (still_time_ms, photo_id),
+                    )
+                    conn.commit()
+        self._send_json({"still_time_ms": max(0, still_time_ms)})
+
     def api_motion_cover(self, body: dict[str, Any]) -> None:
         pid = str(body["project_id"])
         photo_id = int(body["photo_id"])
         source = str(body.get("source", "motion"))
+        write_source = body.get("write_source", False)
+        if not isinstance(write_source, bool):
+            raise ValueError("write_source 必须为布尔值")
         if source not in {"still", "motion"}:
             raise ValueError("封面来源无效")
+        if write_source and source != "motion":
+            raise ValueError("只有动态帧可以写回源文件")
         project = MANAGER.from_id(pid)
         profile = CONFIG.get_profile(project.profile_id)
         with MANAGER.data_operation(pid), SCANNER.project_operation(pid, "修改动态照片封面"):
@@ -617,6 +680,7 @@ class Handler(BaseHTTPRequestHandler):
                 new_thumb = project.thumb_dir / thumb_name
                 time_ms = 0
                 frame_index = 0
+                writeback_result = None
                 if source == "motion":
                     time_ms = int(body.get("time_ms", -1))
                     duration = int(row["motion_duration_ms"] or 0)
@@ -631,7 +695,10 @@ class Handler(BaseHTTPRequestHandler):
                     frame = motion_dir / (
                         f"{motion_fingerprint(asset)}.motion-cover-{time_ms}.jpg"
                     )
-                    extract_motion_frame(video, time_ms, frame)
+                    if write_source:
+                        extract_motion_asset_frame(asset, time_ms, frame)
+                    else:
+                        extract_motion_frame(video, time_ms, frame)
                     metrics = analyze_photo(frame, new_thumb)
                     frame_index = round(time_ms * fps / 1000)
                 else:
@@ -642,26 +709,70 @@ class Handler(BaseHTTPRequestHandler):
                 if metrics["error"]:
                     new_thumb.unlink(missing_ok=True)
                     raise RuntimeError(metrics["error"])
-                values = dict(metrics)
-                values.update({
-                    "extension": row["extension"], "size": row["size"],
-                    "mtime": row["mtime"], "taken": row["taken"],
-                    "cover_source": source, "cover_time_ms": time_ms,
-                    "cover_frame_index": frame_index,
-                    "thumbnail": project_thumbnail_storage_path(new_thumb),
-                    "quality_score": 0,
-                })
-                values["quality_score"] = round(
-                    max(0.0, min(1.0, quality_score(values, profile))) * 100, 1
-                )
-                values["suggestion"], values["reason"] = classify(values, profile)
-                metric_columns = (
-                    "width", "height", "megapixels", "luminance", "contrast",
-                    "dark_clip", "bright_clip", "sharpness", "entropy", "phash",
-                    "dhash", "thumbnail", "suggestion", "reason", "quality_score",
-                    "cover_source", "cover_time_ms", "cover_frame_index",
-                )
-                assignments = ",".join(f"{column}=?" for column in metric_columns)
+                if write_source:
+                    original = safe_relative_path(
+                        project.root, row["relative_path"], "照片路径"
+                    )
+                    writeback_result = write_motion_cover_source(
+                        original,
+                        frame,
+                        asset,
+                        time_ms,
+                        project.project_dir / "source-backups",
+                        revision,
+                    )
+                try:
+                    stored_source = "still" if writeback_result else source
+                    stored_time_ms = 0 if writeback_result else time_ms
+                    stored_frame_index = 0 if writeback_result else frame_index
+                    values = dict(metrics)
+                    values.update({
+                        "extension": row["extension"], "size": row["size"],
+                        "mtime": row["mtime"], "taken": row["taken"],
+                        "sha256": row["sha256"],
+                        "motion_offset": row["motion_offset"],
+                        "motion_length": row["motion_length"],
+                        "motion_size": row["motion_size"],
+                        "motion_mtime": row["motion_mtime"],
+                        "motion_still_time_ms": row["motion_still_time_ms"],
+                        "cover_source": stored_source,
+                        "cover_time_ms": stored_time_ms,
+                        "cover_frame_index": stored_frame_index,
+                        "thumbnail": project_thumbnail_storage_path(new_thumb),
+                        "quality_score": 0,
+                    })
+                    if writeback_result:
+                        source_stat = writeback_result["stat"]
+                        written_asset = writeback_result["asset"]
+                        asset_values = written_asset.storage_values(project.root)
+                        values.update({
+                            "size": source_stat.st_size,
+                            "mtime": source_stat.st_mtime,
+                            "sha256": "",
+                            "motion_offset": asset_values["motion_offset"],
+                            "motion_length": asset_values["motion_length"],
+                            "motion_size": asset_values["motion_size"],
+                            "motion_mtime": asset_values["motion_mtime"],
+                            "motion_still_time_ms": time_ms,
+                        })
+                    values["quality_score"] = round(
+                        max(0.0, min(1.0, quality_score(values, profile))) * 100, 1
+                    )
+                    values["suggestion"], values["reason"] = classify(values, profile)
+                    metric_columns = (
+                        "width", "height", "megapixels", "luminance", "contrast",
+                        "dark_clip", "bright_clip", "sharpness", "entropy", "phash",
+                        "dhash", "thumbnail", "suggestion", "reason", "quality_score",
+                        "size", "mtime", "sha256", "motion_offset", "motion_length",
+                        "motion_size", "motion_mtime", "motion_still_time_ms",
+                        "cover_source", "cover_time_ms", "cover_frame_index",
+                    )
+                    assignments = ",".join(f"{column}=?" for column in metric_columns)
+                except Exception:
+                    new_thumb.unlink(missing_ok=True)
+                    if writeback_result:
+                        restore_motion_source(writeback_result["backup"], original)
+                    raise
                 try:
                     conn.execute("BEGIN IMMEDIATE")
                     conn.execute(
@@ -679,6 +790,8 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     conn.rollback()
                     new_thumb.unlink(missing_ok=True)
+                    if writeback_result:
+                        restore_motion_source(writeback_result["backup"], original)
                     raise
                 updated = conn.execute(
                     "SELECT * FROM photos WHERE id=?", (photo_id,)
@@ -687,7 +800,9 @@ class Handler(BaseHTTPRequestHandler):
         SIMILARITY_GROUPS.invalidate(pid)
         self._send_json({
             "saved": True,
-            "photo": photo_payload(pid, updated),
+            "source_written": bool(writeback_result),
+            "source_backup": str(writeback_result["backup"]) if writeback_result else "",
+            "photo": photo_payload(pid, updated, profile),
             "project_counts": project_counts,
         })
 
@@ -872,6 +987,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(body[key], bool):
                     raise ValueError(f"{key} 必须为布尔值")
                 updates[key] = body[key]
+        if "motion_cover_writeback" in body:
+            writeback = str(body["motion_cover_writeback"])
+            if writeback not in {"never", "ask", "always"}:
+                raise ValueError("动态照片封面写回设置无效")
+            updates["motion_cover_writeback"] = writeback
         cache_path = None
         if "default_cache_root" in body:
             raw_path = body["default_cache_root"]

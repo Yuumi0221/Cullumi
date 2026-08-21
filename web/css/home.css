@@ -253,10 +253,7 @@ body:not(.project-open) .icon-button {
   width:18px;
   height:18px;
   flex:0 0 auto;
-  fill:none;
-  stroke:var(--home-muted);
-  stroke-width:1.8;
-  stroke-linecap:round;
+  fill:var(--home-muted);
 }
 
 .recent-search input,

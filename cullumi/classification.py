@@ -15,7 +15,8 @@ PHOTO_ANALYSIS_COLUMNS = (
     "media_type", "motion_kind", "motion_relative_path", "motion_offset",
     "motion_length", "motion_size", "motion_mtime", "motion_asset_id",
     "motion_error", "motion_duration_ms", "motion_fps", "motion_frame_count",
-    "motion_width", "motion_height", "motion_sha256", "cover_source",
+    "motion_width", "motion_height", "motion_sha256", "motion_still_time_ms",
+    "cover_source",
     "cover_time_ms", "cover_frame_index", "cover_revision", "quality_score",
 )
 PHOTO_UPSERT_SQL = f"""INSERT INTO photos({','.join(PHOTO_ANALYSIS_COLUMNS)})

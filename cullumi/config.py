@@ -156,6 +156,7 @@ class ConfigStore:
             "default_cache_root": str(default_cache),
             "auto_advance": True,
             "auto_check_updates": True,
+            "motion_cover_writeback": "ask",
             "theme": "day",
             "projects": {},
             "recent_projects": [],
@@ -201,6 +202,15 @@ class ConfigStore:
             if key in loaded and not isinstance(loaded[key], bool):
                 normalized[key] = defaults[key]
                 issues.append(f"{key} 类型无效")
+
+        writeback = loaded.get(
+            "motion_cover_writeback", defaults["motion_cover_writeback"]
+        )
+        if isinstance(writeback, str) and writeback in {"never", "ask", "always"}:
+            normalized["motion_cover_writeback"] = writeback
+        else:
+            normalized["motion_cover_writeback"] = defaults["motion_cover_writeback"]
+            issues.append("动态照片封面写回设置无效")
 
         theme = loaded.get("theme", defaults["theme"])
         if isinstance(theme, str) and theme.strip().lower() in {"day", "night"}:

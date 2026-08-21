@@ -1,9 +1,41 @@
 .field-reset {
-  float: right;
+  width:20px;
+  height:20px;
+  display:inline-grid;
+  place-items:center;
   border: 0 !important;
+  border-radius:5px;
   background: transparent !important;
-  padding: 0 3px !important;
+  padding:0 !important;
   color: var(--pink) !important;
+}
+
+.field-reset svg {
+  display:block;
+  width:14px;
+  height:14px;
+  border-radius:4px;
+  fill:currentColor;
+  pointer-events:auto;
+  transition:background-color .16s ease;
+}
+
+.form-grid .field-reset-label {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 20px;
+  align-items:center;
+  column-gap:6px;
+}
+
+.field-reset-label > .field-reset {
+  grid-column:2;
+  grid-row:1;
+  justify-self:end;
+}
+
+.field-reset-label > input[data-p],
+.field-reset-label > .form-select {
+  grid-column:1 / -1;
 }
 
 .logo {
@@ -151,15 +183,12 @@
   height:18px;
   color: var(--muted);
   fill:currentColor;
+  transform-origin:center;
+  transition:transform .2s cubic-bezier(.4,0,.2,1);
 }
 
-.multi-filter-trigger .filter-chevron-up,
-.multi-filter-trigger[aria-expanded="true"] .filter-chevron-down {
-  display: none;
-}
-
-.multi-filter-trigger[aria-expanded="true"] .filter-chevron-up {
-  display: block;
+.multi-filter-trigger[aria-expanded="true"] .filter-chevron {
+  transform:rotate(180deg);
 }
 
 .multi-filter-trigger.empty-selection {
@@ -298,10 +327,55 @@ body > main {
   border-radius: 9px;
   padding: 0 34px 0 13px;
   cursor: pointer;
-  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
-  background-position: calc(100% - 16px) 18px, calc(100% - 11px) 18px;
-  background-size: 5px 5px, 5px 5px;
-  background-repeat: no-repeat;
+  background-image: none;
+}
+
+.select-field {
+  position:relative;
+  display:inline-flex;
+  align-items:center;
+  min-width:0;
+}
+
+.select-field select {
+  width:100%;
+}
+
+.select-chevron {
+  position:absolute;
+  right:11px;
+  width:14px;
+  height:14px;
+  fill:var(--muted);
+  pointer-events:none;
+  transform-origin:center;
+  transition:transform .2s cubic-bezier(.4,0,.2,1);
+}
+
+.select-field select:open + .select-chevron {
+  transform:rotate(180deg);
+}
+
+.top-actions > .topbar-select {
+  height:39px;
+}
+
+.topbar-select #profileSelect {
+  height:100%;
+}
+
+.profile-toolbar .profile-editor-select {
+  flex:1;
+}
+
+.form-grid .form-select {
+  display:flex;
+  width:100%;
+  margin-top:4px;
+}
+
+.form-grid .form-select select {
+  margin-top:0;
 }
 
 #profileEditorSelect,
@@ -404,13 +478,16 @@ button.primary:hover:not(:disabled),
 nav button:hover:not(:disabled),
 .settings-tabs button:hover:not(:disabled),
 .dialog-head button:hover:not(:disabled),
-.field-reset:hover:not(:disabled),
 .context-menu button:hover:not(:disabled) {
   background: var(--surface-hover);
 }
 
 .field-reset:hover:not(:disabled) {
-  background: var(--surface-hover) !important;
+  background:transparent !important;
+}
+
+.field-reset svg:hover {
+  background:var(--surface-hover);
 }
 
 .photo-card.decision-keep {
@@ -1081,7 +1158,7 @@ body.similar-side-open .similar-browser {
 }
 
 .motion-original-marker {
-  left: 6px;
+  left: var(--motion-original-position, 6px);
   background: var(--motion-original-marker);
 }
 

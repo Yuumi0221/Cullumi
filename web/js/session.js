@@ -38,7 +38,7 @@ async function boot(){
   const generation=++state.recentGeneration,b=await json("/api/bootstrap");if(generation!==state.recentGeneration)return;state.profiles=b.profiles;state.settings=b.settings;state.recentProjects=b.recent_projects;
   applyTheme(b.settings.theme||state.theme);
   $("#appVersion").textContent=`v${b.version}`;
-  renderProfiles();$("#autoAdvance").checked=!!b.settings.auto_advance;$("#autoCheckUpdates").checked=!!b.settings.auto_check_updates;$("#defaultCache").value=b.settings.default_cache_root;
+  renderProfiles();$("#autoAdvance").checked=!!b.settings.auto_advance;$("#autoCheckUpdates").checked=!!b.settings.auto_check_updates;$("#motionCoverWriteback").value=b.settings.motion_cover_writeback||"ask";$("#defaultCache").value=b.settings.default_cache_root;
   renderRecentProjects();
   hydrateRecentProjects(generation);
   if(b.startup_warning&&!$("#startupWarning").dataset.shown){$("#startupWarning").dataset.shown="1";$("#startupWarningBody").textContent=b.startup_warning;$("#startupWarning").showModal()}

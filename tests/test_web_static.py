@@ -140,6 +140,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_mode_selects_are_rounded_and_csv_actions_share_a_row(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
+        script = web_script()
         styles = web_styles()
         self.assertIn('class="csv-actions"', markup)
         self.assertIn(".csv-actions {", styles)
@@ -147,6 +148,61 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("#profileEditorSelect {", styles)
         self.assertIn(".form-grid select[data-p] {", styles)
         self.assertIn("appearance: none;", styles)
+        self.assertIn('href="/static/assets/icons.svg?v=1#motion-reset"', script)
+        self.assertNotIn('b.textContent="↺"', script)
+        self.assertIn("label.insertBefore(b,field)", script)
+        self.assertIn(".form-grid .field-reset-label {", styles)
+        self.assertIn("grid-template-columns:minmax(0,1fr) 20px;", styles)
+        self.assertIn(".field-reset-label > .form-select {", styles)
+        self.assertIn("width:14px;", styles)
+        self.assertIn(".field-reset svg:hover {", styles)
+        self.assertIn("background:transparent !important;", styles)
+        self.assertIn("pointer-events:auto;", styles)
+
+    def test_requested_toolbar_and_search_icons_use_the_sprite(self):
+        markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(
+            encoding="utf-8"
+        )
+        styles = web_styles()
+        self.assertEqual(markup.count("#box-search"), 2)
+        self.assertIn('id="settingsBtn" class="icon-button ghost project-only-action"', markup)
+        self.assertIn("#topbar-setting", markup)
+        self.assertEqual(markup.count('class="select-chevron"'), 5)
+        self.assertGreaterEqual(markup.count("#chevron-down"), 7)
+        self.assertNotIn("filter-chevron-up", markup)
+        self.assertIn(
+            '.multi-filter-trigger[aria-expanded="true"] .filter-chevron', styles
+        )
+        self.assertIn(".select-field select:open + .select-chevron", styles)
+        self.assertIn("transition:transform .2s", styles)
+        self.assertIn("width:min(220px,100%);", styles)
+        self.assertIn(".settings-select select:hover {", styles)
+
+    def test_motion_cover_writeback_has_three_settings_and_confirmation(self):
+        root = Path(__file__).parents[1]
+        markup = (root / "web" / "index.html").read_text(encoding="utf-8")
+        script = web_script()
+        self.assertIn('id="motionCoverWriteback"', markup)
+        for value in ("never", "ask", "always"):
+            self.assertIn(f'<option value="{value}">', markup)
+        self.assertIn('id="motionWritebackConfirm"', markup)
+        self.assertIn("是否修改源文件", markup)
+        self.assertIn("不再提醒，可以在设置中重新修改", markup)
+        self.assertIn("function chooseMotionSourceWriteback()", script)
+        self.assertIn("write_source:writeSource", script)
+
+    def test_motion_viewer_freezes_on_cover_and_keeps_analysis_badges(self):
+        root = Path(__file__).parents[1]
+        markup = (root / "web" / "index.html").read_text(encoding="utf-8")
+        gallery = (root / "web" / "js" / "gallery.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('id="viewerAnalysisBadge"', markup)
+        self.assertIn("function freezeMotionAtCover(p)", gallery)
+        self.assertIn("video.currentTime=motionCoverTime(p)/1000", gallery)
+        self.assertNotIn('video.play().catch(syncMotionTime)', gallery)
+        self.assertIn('data-analysis-badge', gallery)
+        self.assertIn("syncCardAnalysis(result.photo)", gallery)
 
     def test_sidebar_uses_library_presets_instead_of_duplicate_pages(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")

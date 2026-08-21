@@ -20,6 +20,42 @@ from cullumi.similarity import SimilarityGroupCache
 
 
 class AppSafetyTests(unittest.TestCase):
+    def test_photo_payload_recomputes_legacy_zero_quality_score(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"
+            photos.mkdir()
+            config = ConfigStore(root / "config.json")
+            config.data["default_cache_root"] = str(root / "cache")
+            config.save()
+            manager = ProjectManager(config)
+            project = manager.open(str(photos))
+            with closing(connect_db(project.db_path)) as conn:
+                conn.execute(
+                    """INSERT INTO photos(
+                       relative_path,status,error,media_type,cover_revision,
+                       sharpness,luminance,dark_clip,bright_clip,contrast,
+                       entropy,megapixels,quality_score
+                       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        "ordinary.jpg", "active", "", "image", 0,
+                        900.0, 110.0, 0.01, 0.01, 60.0, 7.0, 12.0, 0.0,
+                    ),
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT * FROM photos WHERE relative_path='ordinary.jpg'"
+                ).fetchone()
+
+            with (
+                mock.patch.object(app, "CONFIG", config, create=True),
+                mock.patch.object(app, "MANAGER", manager, create=True),
+            ):
+                payload = app.photo_payload(project.project_id, row)
+
+            self.assertGreater(payload["quality_score"], 0)
+            self.assertNotEqual(payload["quality_score"], row["quality_score"])
+
     def test_motion_cover_at_video_end_uses_the_last_real_frame(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -47,6 +83,10 @@ class AppSafetyTests(unittest.TestCase):
             scanner.threads[project.project_id].join(20)
             with closing(connect_db(project.db_path)) as conn:
                 photo_id = int(conn.execute("SELECT id FROM photos").fetchone()[0])
+                conn.execute(
+                    "UPDATE photos SET motion_still_time_ms=-1 WHERE id=?", (photo_id,)
+                )
+                conn.commit()
             handler = object.__new__(app.Handler)
             handler._send_json = mock.Mock()
 
@@ -56,6 +96,17 @@ class AppSafetyTests(unittest.TestCase):
                 mock.patch.object(app, "SCANNER", scanner, create=True),
                 mock.patch.object(app, "SIMILARITY_GROUPS", groups, create=True),
             ):
+                with mock.patch.object(
+                    app, "locate_motion_still_time", return_value=300
+                ) as locate:
+                    handler.api_motion_locate({
+                        "project_id": project.project_id,
+                        "photo_id": photo_id,
+                    })
+                self.assertEqual(
+                    handler._send_json.call_args.args[0]["still_time_ms"], 300
+                )
+                locate.assert_called_once()
                 handler.api_motion_cover({
                     "project_id": project.project_id,
                     "photo_id": photo_id,
@@ -67,9 +118,76 @@ class AppSafetyTests(unittest.TestCase):
             self.assertEqual(payload["motion"]["cover_source"], "motion")
             self.assertEqual(payload["motion"]["cover_time_ms"], 400)
             self.assertEqual(payload["motion"]["cover_frame_index"], 4)
+            self.assertEqual(payload["motion"]["still_time_ms"], 300)
             self.assertEqual((payload["width"], payload["height"]), (160, 120))
             self.assertGreaterEqual(payload["quality_score"], 0)
             self.assertIn(".cover-1.jpg", payload["thumbnail"])
+
+            with (
+                mock.patch.object(app, "CONFIG", config, create=True),
+                mock.patch.object(app, "MANAGER", manager, create=True),
+                mock.patch.object(app, "SCANNER", scanner, create=True),
+                mock.patch.object(app, "SIMILARITY_GROUPS", groups, create=True),
+            ):
+                handler.api_motion_cover({
+                    "project_id": project.project_id,
+                    "photo_id": photo_id,
+                    "source": "motion",
+                    "time_ms": 200,
+                    "write_source": True,
+                })
+
+            written = handler._send_json.call_args.args[0]
+            self.assertTrue(written["source_written"])
+            self.assertTrue(Path(written["source_backup"]).is_file())
+            self.assertEqual(written["photo"]["motion"]["cover_source"], "still")
+            self.assertEqual(written["photo"]["motion"]["still_time_ms"], 200)
+            with Image.open(photos / "IMG_0010.JPG") as image:
+                self.assertEqual(image.size, (160, 120))
+
+            before_failed_write = (photos / "IMG_0010.JPG").read_bytes()
+            with (
+                mock.patch.object(app, "CONFIG", config, create=True),
+                mock.patch.object(app, "MANAGER", manager, create=True),
+                mock.patch.object(app, "SCANNER", scanner, create=True),
+                mock.patch.object(app, "SIMILARITY_GROUPS", groups, create=True),
+                mock.patch.object(
+                    scanner, "reclassify", side_effect=RuntimeError("reclassify failed")
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "reclassify failed"):
+                    handler.api_motion_cover({
+                        "project_id": project.project_id,
+                        "photo_id": photo_id,
+                        "source": "motion",
+                        "time_ms": 300,
+                        "write_source": True,
+                    })
+            self.assertEqual(
+                (photos / "IMG_0010.JPG").read_bytes(), before_failed_write
+            )
+
+            before_failed_analysis = (photos / "IMG_0010.JPG").read_bytes()
+            with (
+                mock.patch.object(app, "CONFIG", config, create=True),
+                mock.patch.object(app, "MANAGER", manager, create=True),
+                mock.patch.object(app, "SCANNER", scanner, create=True),
+                mock.patch.object(app, "SIMILARITY_GROUPS", groups, create=True),
+                mock.patch.object(
+                    app, "quality_score", side_effect=RuntimeError("scoring failed")
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "scoring failed"):
+                    handler.api_motion_cover({
+                        "project_id": project.project_id,
+                        "photo_id": photo_id,
+                        "source": "motion",
+                        "time_ms": 100,
+                        "write_source": True,
+                    })
+            self.assertEqual(
+                (photos / "IMG_0010.JPG").read_bytes(), before_failed_analysis
+            )
 
     def test_route_tables_reference_handler_methods(self):
         for routes in (app.GET_ROUTES, app.POST_ROUTES):
@@ -355,12 +473,20 @@ class AppSafetyTests(unittest.TestCase):
                     handler.api_settings({"auto_advance": "false"})
                 self.assertEqual(config.data, before)
 
+                with self.assertRaisesRegex(ValueError, "写回设置"):
+                    handler.api_settings({"motion_cover_writeback": "sometimes"})
+                self.assertEqual(config.data, before)
+
+                handler.api_settings({"motion_cover_writeback": "always"})
+                self.assertEqual(config.data["motion_cover_writeback"], "always")
+                after_writeback_setting = json.loads(json.dumps(config.data))
+
                 with mock.patch.object(
                     config, "save", side_effect=OSError("disk full")
                 ):
                     with self.assertRaisesRegex(OSError, "disk full"):
                         handler.api_settings({"theme": "night"})
-                self.assertEqual(config.data, before)
+                self.assertEqual(config.data, after_writeback_setting)
 
     def test_failed_profile_apply_rolls_back_database_and_config(self):
         with tempfile.TemporaryDirectory() as temporary:
