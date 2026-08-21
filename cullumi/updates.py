@@ -10,7 +10,6 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
-
 RELEASES_API_URL = "https://api.github.com/repos/Yuumi0221/Cullumi/releases/latest"
 RELEASES_PAGE_URL = "https://github.com/Yuumi0221/Cullumi/releases"
 _VERSION_PATTERN = re.compile(r"(?<!\d)(\d+)(?:\.(\d+))?(?:\.(\d+))?")

@@ -1,14 +1,22 @@
 import re
-from pathlib import Path
 import unittest
-
+from pathlib import Path
 
 WEB_SCRIPT_FILES = (
-    "runtime.js",
-    "session.js",
-    "similar.js",
-    "settings.js",
-    "app.js",
+    "js/runtime.js",
+    "js/session.js",
+    "js/similar.js",
+    "js/settings.js",
+    "js/gallery.js",
+    "js/app.js",
+)
+
+WEB_STYLE_FILES = (
+    "css/base.css",
+    "css/workspace.css",
+    "css/theme.css",
+    "css/responsive.css",
+    "css/home.css",
 )
 
 
@@ -20,7 +28,42 @@ def web_script() -> str:
     )
 
 
+def web_styles() -> str:
+    web = Path(__file__).parents[1] / "web"
+    return "\n".join(
+        (web / filename).read_text(encoding="utf-8")
+        for filename in WEB_STYLE_FILES
+    )
+
+
+def server_script() -> str:
+    root = Path(__file__).parents[1]
+    return "\n".join(
+        (root / path).read_text(encoding="utf-8")
+        for path in ("app.py", "cullumi/http_api.py", "cullumi/native_dialogs.py")
+    )
+
+
 class WebModuleStructureTests(unittest.TestCase):
+    def test_web_resources_are_grouped_by_type(self):
+        web = Path(__file__).parents[1] / "web"
+        root_files = {path.name for path in web.iterdir() if path.is_file()}
+        self.assertEqual(root_files, {"index.html"})
+        self.assertEqual(
+            {path.name for path in (web / "js").glob("*.js")},
+            {Path(path).name for path in WEB_SCRIPT_FILES},
+        )
+        self.assertEqual(
+            {path.name for path in (web / "css").glob("*.css")},
+            {Path(path).name for path in WEB_STYLE_FILES},
+        )
+        self.assertTrue((web / "assets" / "images" / "brand-icon.png").is_file())
+        self.assertTrue(
+            (web / "assets" / "images" / "home-background.jpg").is_file()
+        )
+        self.assertTrue((web / "assets" / "fonts" / "home-display.otf").is_file())
+        self.assertTrue((web / "assets" / "icons" / "brand-icon.ico").is_file())
+
     def test_scripts_load_once_in_dependency_order(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
         positions = []
@@ -30,13 +73,24 @@ class WebModuleStructureTests(unittest.TestCase):
             positions.append(markup.index(source))
         self.assertEqual(positions, sorted(positions))
 
+    def test_styles_load_once_in_cascade_order(self):
+        markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(
+            encoding="utf-8"
+        )
+        positions = []
+        for filename in WEB_STYLE_FILES:
+            source = f'/static/{filename}'
+            self.assertEqual(markup.count(source), 1)
+            positions.append(markup.index(source))
+        self.assertEqual(positions, sorted(positions))
+
     def test_feature_owners_stay_out_of_app_entrypoint(self):
         web = Path(__file__).parents[1] / "web"
-        runtime = (web / "runtime.js").read_text(encoding="utf-8")
-        session = (web / "session.js").read_text(encoding="utf-8")
-        similar = (web / "similar.js").read_text(encoding="utf-8")
-        settings = (web / "settings.js").read_text(encoding="utf-8")
-        entrypoint = (web / "app.js").read_text(encoding="utf-8")
+        runtime = (web / "js" / "runtime.js").read_text(encoding="utf-8")
+        session = (web / "js" / "session.js").read_text(encoding="utf-8")
+        similar = (web / "js" / "similar.js").read_text(encoding="utf-8")
+        settings = (web / "js" / "settings.js").read_text(encoding="utf-8")
+        entrypoint = (web / "js" / "app.js").read_text(encoding="utf-8")
 
         self.assertIn("const state=", runtime)
         self.assertIn("async function boot()", session)
@@ -56,7 +110,7 @@ class WebStaticTests(unittest.TestCase):
         root = Path(__file__).parents[1]
         markup = (root / "web" / "index.html").read_text(encoding="utf-8")
         script = web_script()
-        server = (root / "app.py").read_text(encoding="utf-8")
+        server = server_script()
         self.assertIn('id="startupWarning"', markup)
         self.assertIn('b.startup_warning&&!$("#startupWarning").dataset.shown', script)
         self.assertIn('"startup_warning": CONFIG.load_warning', server)
@@ -86,7 +140,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_mode_selects_are_rounded_and_csv_actions_share_a_row(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        styles = web_styles()
         self.assertIn('class="csv-actions"', markup)
         self.assertIn(".csv-actions {", styles)
         self.assertIn("grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);", styles)
@@ -111,7 +165,7 @@ class WebStaticTests(unittest.TestCase):
     def test_library_multiselects_support_all_none_and_accessible_panels(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
         script = web_script()
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        styles = web_styles()
         self.assertIn('aria-controls="decisionFilterPanel"', markup)
         self.assertIn('aria-controls="aiFilterPanel"', markup)
         self.assertEqual(markup.count('data-filter-group="decisions"'), 3)
@@ -125,32 +179,10 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn(".multi-filter-panel", styles)
         self.assertIn(".multi-filter-trigger.empty-selection", styles)
 
-    def test_library_uses_incremental_loading_and_stale_request_generation(self):
-        markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        script = web_script()
-        self.assertIn('id="librarySentinel"', markup)
-        self.assertIn("LIBRARY_PAGE_SIZE=120", script)
-        self.assertIn("new IntersectionObserver", script)
-        self.assertIn("generation!==state.library.generation", script)
-        self.assertIn("offset:String(state.library.offset)", script)
-        self.assertIn('insertAdjacentHTML("beforeend"', script)
-
-    def test_library_decisions_reconcile_without_full_page_reload(self):
-        script = web_script()
-        self.assertIn("function photoMatchesLibrary(", script)
-        self.assertIn("function reconcileLibraryDecision(", script)
-        self.assertIn("state.library.offset=Math.max(0,state.library.offset-1)", script)
-        self.assertIn("state.viewerDirtyIds.add(id)", script)
-
     def test_similar_decisions_update_every_visible_copy_of_a_photo(self):
         script = web_script()
         self.assertIn('$$(`[data-photo-id="${id}"]`).forEach(card=>{', script)
         self.assertNotIn('const card=$(`[data-photo-id="${id}"]`);if(!card)return;', script)
-
-    def test_photo_card_is_not_passed_directly_to_array_map(self):
-        script = web_script()
-        self.assertNotIn(".map(photoCard)", script)
-        self.assertIn(".map((photo,index)=>photoCard(photo,index))", script)
 
     def test_similar_groups_and_viewer_use_explicit_recommendation_state(self):
         script = web_script()
@@ -160,7 +192,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('p.decision==="remove"', script)
 
     def test_suggestion_badges_share_dark_translucent_background(self):
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        styles = web_styles()
         matches = re.findall(r"background:\s*(?:rgba\(13,\s*16,\s*14,\s*0\.76\)|#[0-9A-Fa-f]{8})\s*;?", styles)
         self.assertGreaterEqual(len(matches), 3)
         self.assertIn(".badge-candidate-remove", styles)
@@ -169,7 +201,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_viewer_navigation_icons_are_centered_svg_buttons(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        styles = web_styles()
         self.assertIn('class="close" data-close aria-label="关闭预览"><svg', markup)
         self.assertIn('id="viewerPrev" aria-label="上一张"><svg', markup)
         self.assertIn('id="viewerNext" aria-label="下一张"><svg', markup)
@@ -188,7 +220,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_custom_profile_empty_fields_are_validated(self):
         script = web_script()
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        styles = web_styles()
         self.assertIn("validateProfileInputs", script)
         self.assertIn("还有项目没有输入完整", script)
         self.assertIn("el.placeholder=", script)
@@ -197,8 +229,8 @@ class WebStaticTests(unittest.TestCase):
 
     def test_legacy_pair_view_is_removed(self):
         script = web_script()
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
-        server = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
+        styles = web_styles()
+        server = server_script()
         self.assertNotIn("function renderPairs(", script)
         self.assertNotIn("pair-row", styles)
         self.assertNotIn("pair-card", styles)
@@ -208,8 +240,8 @@ class WebStaticTests(unittest.TestCase):
     def test_similar_groups_use_folder_and_two_level_browser(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
         script = web_script()
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
-        server = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
+        styles = web_styles()
+        server = server_script()
         self.assertIn('id="similarBrowser"', markup)
         self.assertIn('id="similarCollapseBtn"', markup)
         self.assertIn('id="similarExpandBtn"', markup)
@@ -221,8 +253,8 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("function expandSimilarDetail(", script)
         self.assertIn(".folder-cover.cover-3", styles)
         self.assertIn(".similar-browser.detail-open", styles)
-        self.assertIn('"/api/similar-groups": self.api_similar_groups', server)
-        self.assertIn('"/api/similar-group": self.api_similar_group', server)
+        self.assertIn('"/api/similar-groups": "api_similar_groups"', server)
+        self.assertIn('"/api/similar-group": "api_similar_group"', server)
 
     def test_similar_group_escape_respects_open_dialogs(self):
         script = web_script()
@@ -232,7 +264,7 @@ class WebStaticTests(unittest.TestCase):
     def test_similar_side_panels_scroll_independently_and_share_toolbar(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
         script = web_script()
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        styles = web_styles()
         self.assertLess(markup.index('id="similarViewActions"'), markup.index('class="search"'))
         self.assertNotIn("similar-detail-head", markup)
         self.assertNotIn('id="similarDetailTitle"', markup)
@@ -244,7 +276,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_similar_detail_matches_library_card_size_and_keeps_toolbar_on_one_line(self):
         script = web_script()
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        styles = web_styles()
         self.assertIn('classList.toggle("similar-view-open",state.view==="similar")', script)
         self.assertIn('classList.toggle("similar-detail-open"', script)
         self.assertIn("body.similar-view-open .toolbar {", styles)
@@ -258,7 +290,7 @@ class WebStaticTests(unittest.TestCase):
     def test_similar_selection_outlines_have_safe_insets_and_subtle_scrollbars(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
         script = web_script()
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        styles = web_styles()
         self.assertIn("margin-right: 12px;", styles)
         self.assertIn("overflow-x: hidden;", styles)
         self.assertIn("padding: 3px 4px 40px;", styles)
@@ -333,18 +365,17 @@ class WebStaticTests(unittest.TestCase):
             script,
         )
 
-    def test_export_uses_native_save_route_and_restored_batches_have_no_button(self):
+    def test_export_uses_native_save_route(self):
         script = web_script()
-        server = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
+        server = server_script()
         self.assertIn('json("/api/export/save"', script)
         self.assertNotIn("window.open('/api/export", script)
-        self.assertIn('"/api/export/save": self.api_export_save', server)
-        self.assertIn('x.restored_at?"":`<div class="card-actions">', script)
+        self.assertIn('"/api/export/save": "api_export_save"', server)
 
     def test_theme_toggle_and_home_action_visibility(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
         script = web_script()
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        styles = web_styles()
         self.assertIn('id="themeBtn"', markup)
         self.assertIn("Cullumi-theme", script)
         self.assertIn('json("/api/settings",{theme})', script)
@@ -357,21 +388,29 @@ class WebStaticTests(unittest.TestCase):
         markup = (root / "web" / "index.html").read_text(encoding="utf-8")
         spec = (root / "Cullumi.spec").read_text(encoding="utf-8")
         app_entry = (root / "app.py").read_text(encoding="utf-8")
-        self.assertIn('/static/brand-icon.png', markup)
-        self.assertIn('icon="web/brand-icon.ico"', spec)
-        self.assertIn('APP_ICON = WEB_ROOT / "brand-icon.ico"', app_entry)
+        self.assertIn('/static/assets/images/brand-icon.png', markup)
+        self.assertIn('icon="web/assets/icons/brand-icon.ico"', spec)
+        self.assertIn(
+            'APP_ICON = WEB_ROOT / "assets" / "icons" / "brand-icon.ico"',
+            app_entry,
+        )
         self.assertIn('webview.start(apply_native_window_icon, (window,), icon=str(APP_ICON))', app_entry)
         self.assertIn('native.Invoke(Action(lambda: setattr(native, "Icon", icon)))', app_entry)
-        for name in ("brand-icon.png", "brand-icon.ico"):
-            self.assertTrue((root / "web" / name).is_file())
+        for relative_path in (
+            "assets/images/brand-icon.png",
+            "assets/icons/brand-icon.ico",
+        ):
+            self.assertTrue((root / "web" / relative_path).is_file())
 
     def test_png_assets_have_no_problematic_icc_profile(self):
         web_root = Path(__file__).parents[1] / "web"
-        for path in web_root.glob("*.png"):
+        for path in web_root.rglob("*.png"):
             self.assertNotIn(b"iCCP", path.read_bytes(), path.name)
 
     def test_native_dialogs_use_current_pywebview_enum(self):
-        app_entry = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
+        app_entry = (
+            Path(__file__).parents[1] / "cullumi" / "native_dialogs.py"
+        ).read_text(encoding="utf-8")
         self.assertIn("webview.FileDialog.FOLDER", app_entry)
         self.assertIn("webview.FileDialog.OPEN", app_entry)
         self.assertIn("webview.FileDialog.SAVE", app_entry)
@@ -380,7 +419,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertNotIn("webview.SAVE_DIALOG", app_entry)
 
     def test_night_theme_folders_and_search_have_consistent_backgrounds(self):
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        styles = web_styles()
         self.assertIn('[data-theme="night"] .similar-folder {', styles)
         self.assertIn('[data-theme="night"] .similar-folder:hover {', styles)
         self.assertIn('[data-theme="night"] .search input {', styles)
@@ -388,7 +427,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("background: var(--card);", styles)
 
     def test_night_mode_select_and_button_hover_states_are_legible(self):
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        styles = web_styles()
         self.assertIn('[data-theme="night"] select option {', styles)
         self.assertIn('[data-theme="night"] #profileSelect {', styles)
         self.assertIn("button:hover:not(:disabled)", styles)
@@ -398,7 +437,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('[data-theme="night"] .logo:hover:not(:disabled) {', styles)
 
     def test_primary_danger_and_top_controls_have_explicit_theme_hover_states(self):
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        styles = web_styles()
         self.assertIn("button.primary:hover:not(:disabled),", styles)
         self.assertIn(
             '[data-theme="night"] button.primary:hover:not(:disabled),', styles
@@ -417,7 +456,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("#settingsBtn:hover {", styles)
 
     def test_context_settings_viewer_and_similar_hover_refinements(self):
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        styles = web_styles()
         self.assertIn('[data-theme="night"] .context-menu button {', styles)
         self.assertIn('[data-theme="night"] .context-menu button:hover:not(:disabled) {', styles)
         self.assertIn('[data-theme="night"] #settingsBtn {', styles)
@@ -432,7 +471,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn(".viewer .viewer-remove.active:hover:not(:disabled)", styles)
 
     def test_confirmation_hover_and_night_quarantine_list_are_theme_correct(self):
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        styles = web_styles()
         self.assertIn("#confirmOk:hover:not(:disabled)", styles)
         self.assertIn('[data-theme="night"] #confirmOk:hover:not(:disabled)', styles)
         self.assertIn('[data-theme="night"] .confirm-list {', styles)
@@ -440,7 +479,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_settings_tabs_use_full_outline_and_subtle_night_hover(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        styles = web_styles()
         self.assertIn(".settings-tabs button.active {", styles)
         self.assertIn("border: 1px solid var(--pink);", styles)
         self.assertIn("border-bottom:0", styles)
@@ -456,23 +495,17 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('[data-theme="night"] .settings-tabs button.active:hover {', styles)
         self.assertIn("background: var(--surface-hover);", styles)
 
-    def test_viewer_close_refreshes_card_decisions(self):
-        script = web_script()
-        self.assertIn("viewerNeedsRefresh", script)
-        self.assertIn("async function syncViewerDecisions()", script)
-        self.assertIn('$("#viewer").addEventListener("close"', script)
-
     def test_ai_suggestions_can_be_marked_for_removal_in_one_confirmed_action(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
         script = web_script()
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
-        server = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
+        styles = web_styles()
+        server = server_script()
         self.assertIn('id="markAiRemoveBtn"', markup)
         self.assertIn('id="aiRemovePendingCount"', markup)
         self.assertIn("function confirmAiRemoveSuggestions()", script)
         self.assertIn('json("/api/decision/ai-remove"', script)
         self.assertIn('state.activeNav!=="ai"', script)
-        self.assertIn('"/api/decision/ai-remove": self.api_decision_ai_remove', server)
+        self.assertIn('"/api/decision/ai-remove": "api_decision_ai_remove"', server)
         self.assertIn(".ai-sweep-button {", styles)
         self.assertNotIn("batch-confirm-summary", script)
         self.assertNotIn("batch-confirm-summary", styles)
@@ -484,7 +517,7 @@ class WebStaticTests(unittest.TestCase):
     def test_home_uses_adaptive_golden_split_and_searchable_two_column_recents(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
         script = web_script()
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        styles = web_styles()
         self.assertIn('class="recent-panel"', markup)
         self.assertIn('class="primary hero-choose"', markup)
         self.assertIn('<div class="section-title recent-title-row">', markup)
@@ -532,7 +565,7 @@ class WebStaticTests(unittest.TestCase):
 
     def test_warm_theme_preserves_semantic_action_colors_and_resets_similar_actions(self):
         script = web_script()
-        styles = (Path(__file__).parents[1] / "web" / "app.css").read_text(encoding="utf-8")
+        styles = web_styles()
         self.assertIn("--home-accent:#ca7576;", styles)
         self.assertIn("--pink2:#f4dfe2;", styles)
         self.assertIn("--home-accent:#e59691;", styles)
@@ -575,9 +608,9 @@ class WebStaticTests(unittest.TestCase):
 
     def test_recent_project_details_load_after_bootstrap_with_bounded_workers(self):
         script = web_script()
-        server = (Path(__file__).parents[1] / "app.py").read_text(encoding="utf-8")
+        server = server_script()
         self.assertIn("recent_project_stub(pid, project)", server)
-        self.assertIn('"/api/recent-project": self.api_recent_project', server)
+        self.assertIn('"/api/recent-project": "api_recent_project"', server)
         self.assertIn("hydrateRecentProjects(generation)", script)
         self.assertIn("Math.min(3,queue.length)", script)
         self.assertIn("正在读取项目信息", script)

@@ -6,10 +6,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import cullumi.core as core
 import cullumi.project_store as project_store
-from cullumi.core import (
-    ConfigStore,
+from cullumi.config import ConfigStore
+from cullumi.project_store import (
     Project,
     ProjectManager,
     connect_db,

@@ -8,11 +8,54 @@ from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
-import app
-from cullumi.core import ConfigStore, ProjectManager, Scanner, connect_db
+from cullumi import http_api as app
+from cullumi.config import ConfigStore
+from cullumi.project_store import ProjectManager, connect_db
+from cullumi.scanner import Scanner
 
 
 class AppSafetyTests(unittest.TestCase):
+    def test_route_tables_reference_handler_methods(self):
+        for routes in (app.GET_ROUTES, app.POST_ROUTES):
+            for path, method_name in routes.items():
+                self.assertTrue(path.startswith("/api/"))
+                self.assertTrue(callable(getattr(app.Handler, method_name)))
+
+    def test_static_route_table_dispatches_to_the_registered_handler(self):
+        handler = object.__new__(app.Handler)
+        handler.path = "/api/bootstrap"
+        handler.api_bootstrap = mock.Mock()
+
+        handler._dispatch(app.GET_ROUTES)
+
+        handler.api_bootstrap.assert_called_once_with()
+
+    def test_post_rejects_a_json_value_that_is_not_an_object(self):
+        handler = object.__new__(app.Handler)
+        handler.path = f"/api/project/open?token={app.TOKEN}"
+        handler.headers = {"Content-Length": "2"}
+        handler.rfile = io.BytesIO(b"[]")
+        handler._send_json = mock.Mock()
+
+        handler.do_POST()
+
+        handler._send_json.assert_called_once_with(
+            {"error": "请求正文必须是 JSON 对象"}, 400
+        )
+
+    def test_post_reports_a_missing_required_field(self):
+        handler = object.__new__(app.Handler)
+        handler.path = f"/api/project/open?token={app.TOKEN}"
+        handler.headers = {"Content-Length": "2"}
+        handler.rfile = io.BytesIO(b"{}")
+        handler._send_json = mock.Mock()
+
+        handler.do_POST()
+
+        handler._send_json.assert_called_once_with(
+            {"error": "缺少请求字段：root"}, 400
+        )
+
     def test_bootstrap_defers_recent_project_database_reads(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -25,7 +68,7 @@ class AppSafetyTests(unittest.TestCase):
             handler._send_json = mock.Mock()
 
             with (
-                mock.patch.object(app, "CONFIG", config),
+                mock.patch.object(app, "CONFIG", config, create=True),
                 mock.patch.object(
                     app,
                     "recent_project_payload",
@@ -63,7 +106,7 @@ class AppSafetyTests(unittest.TestCase):
             manager.cleanup_old_cache(project.project_id, migration["old_cache"])
             stored = config.snapshot()["projects"][project.project_id]
 
-            with mock.patch.object(app, "MANAGER", manager):
+            with mock.patch.object(app, "MANAGER", manager, create=True):
                 payload = app.recent_project_payload(project.project_id, stored)
 
             self.assertTrue(payload["thumbnail_url"].startswith("/api/thumb?"))
@@ -77,7 +120,7 @@ class AppSafetyTests(unittest.TestCase):
             handler = object.__new__(app.Handler)
             handler._send_json = mock.Mock()
 
-            with mock.patch.object(app, "CONFIG", config):
+            with mock.patch.object(app, "CONFIG", config, create=True):
                 handler.api_bootstrap()
 
             payload = handler._send_json.call_args.args[0]
@@ -208,7 +251,7 @@ class AppSafetyTests(unittest.TestCase):
         self.assertFalse(handler._authorized())
         handler.path = f"/api/bootstrap?token={app.TOKEN}"
         self.assertTrue(handler._authorized())
-        handler.path = "/static/app.js"
+        handler.path = "/static/js/app.js"
         self.assertTrue(handler._authorized())
 
     def test_invalid_settings_do_not_partially_mutate_configuration(self):
@@ -220,7 +263,7 @@ class AppSafetyTests(unittest.TestCase):
             handler = object.__new__(app.Handler)
             handler._send_json = mock.Mock()
 
-            with mock.patch.object(app, "CONFIG", config):
+            with mock.patch.object(app, "CONFIG", config, create=True):
                 with self.assertRaisesRegex(ValueError, "主题"):
                     handler.api_settings(
                         {"default_cache_root": str(cache), "theme": "invalid"}
@@ -254,9 +297,9 @@ class AppSafetyTests(unittest.TestCase):
             handler._send_json = mock.Mock()
 
             with (
-                mock.patch.object(app, "CONFIG", config),
-                mock.patch.object(app, "MANAGER", manager),
-                mock.patch.object(app, "SCANNER", scanner),
+                mock.patch.object(app, "CONFIG", config, create=True),
+                mock.patch.object(app, "MANAGER", manager, create=True),
+                mock.patch.object(app, "SCANNER", scanner, create=True),
                 mock.patch.object(
                     scanner, "rebuild_similarity", side_effect=RuntimeError("failed")
                 ),
@@ -289,9 +332,9 @@ class AppSafetyTests(unittest.TestCase):
             handler._send_json = mock.Mock()
 
             with (
-                mock.patch.object(app, "CONFIG", config),
-                mock.patch.object(app, "MANAGER", manager),
-                mock.patch.object(app, "SCANNER", scanner),
+                mock.patch.object(app, "CONFIG", config, create=True),
+                mock.patch.object(app, "MANAGER", manager, create=True),
+                mock.patch.object(app, "SCANNER", scanner, create=True),
                 mock.patch.object(config, "save", side_effect=OSError("disk full")),
             ):
                 with self.assertRaisesRegex(OSError, "disk full"):
@@ -306,6 +349,64 @@ class AppSafetyTests(unittest.TestCase):
             conn = connect_db(project.db_path)
             self.assertEqual(conn.execute("SELECT profile_id FROM project").fetchone()[0], "conservative")
             conn.close()
+
+    def test_decision_response_returns_canonical_state_and_counts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"
+            photos.mkdir()
+            config = ConfigStore(root / "config.json")
+            config.data["default_cache_root"] = str(root / "cache")
+            config.save()
+            manager = ProjectManager(config)
+            project = manager.open(str(photos))
+            with closing(connect_db(project.db_path)) as conn:
+                conn.execute(
+                    """INSERT INTO photos(relative_path,status,error,suggestion,decision)
+                       VALUES('photo.jpg','active','','review','')"""
+                )
+                photo_id = int(conn.execute("SELECT id FROM photos").fetchone()[0])
+                conn.commit()
+
+            handler = object.__new__(app.Handler)
+            handler._send_json = mock.Mock()
+            with mock.patch.object(app, "MANAGER", manager, create=True):
+                handler.api_decision({
+                    "project_id": project.project_id,
+                    "photo_id": photo_id,
+                    "decision": "remove",
+                })
+
+            payload = handler._send_json.call_args.args[0]
+            self.assertEqual(payload["photo_id"], photo_id)
+            self.assertEqual(payload["decision"], "remove")
+            self.assertEqual(payload["project_counts"]["decisions"], {"remove": 1})
+            self.assertEqual(payload["project_counts"]["library_counts"]["remove"], 1)
+            with closing(connect_db(project.db_path)) as conn:
+                self.assertEqual(
+                    conn.execute("SELECT decision FROM photos WHERE id=?", (photo_id,)).fetchone()[0],
+                    "remove",
+                )
+
+    def test_decision_rejects_a_missing_photo_without_reporting_success(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"
+            photos.mkdir()
+            config = ConfigStore(root / "config.json")
+            manager = ProjectManager(config)
+            project = manager.open(str(photos))
+            handler = object.__new__(app.Handler)
+            handler._send_json = mock.Mock()
+
+            with mock.patch.object(app, "MANAGER", manager, create=True):
+                with self.assertRaisesRegex(ValueError, "不存在或当前不可用"):
+                    handler.api_decision({
+                        "project_id": project.project_id,
+                        "photo_id": 999,
+                        "decision": "keep",
+                    })
+            handler._send_json.assert_not_called()
 
 
 if __name__ == "__main__":

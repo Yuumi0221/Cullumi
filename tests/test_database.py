@@ -3,12 +3,74 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
-from cullumi.core import DATABASE_SCHEMA_VERSION, connect_db
+from cullumi import project_store
+from cullumi.project_store import DATABASE_SCHEMA_VERSION, connect_db
 
 
 class DatabaseMigrationTests(unittest.TestCase):
+    def test_wal_configuration_is_reused_for_the_same_database_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "project.db"
+            project_store._WAL_CONFIGURED_DATABASES.pop(path.resolve(), None)
+            project_store._INITIALIZED_DATABASES.pop(path.resolve(), None)
+            with mock.patch.object(
+                project_store,
+                "_ensure_wal",
+                wraps=project_store._ensure_wal,
+            ) as ensure_wal:
+                first = connect_db(path)
+                first.close()
+                identity = project_store._WAL_CONFIGURED_DATABASES[path.resolve()]
+
+                second = connect_db(path)
+                second.close()
+            ensure_wal.assert_called_once()
+            self.assertEqual(
+                project_store._WAL_CONFIGURED_DATABASES[path.resolve()], identity
+            )
+
+    def test_concurrent_connections_share_initialized_database_safely(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "project.db"
+
+            def read_version(_: int) -> int:
+                connection = connect_db(path)
+                try:
+                    return int(connection.execute("PRAGMA user_version").fetchone()[0])
+                finally:
+                    connection.close()
+
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                versions = list(pool.map(read_version, range(32)))
+
+            self.assertEqual(versions, [DATABASE_SCHEMA_VERSION] * 32)
+
+    def test_replaced_database_at_the_same_path_is_configured_again(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "project.db"
+            replacement = root / "replacement.db"
+            connect_db(path).close()
+            replacement_conn = connect_db(replacement)
+            replacement_conn.execute("PRAGMA journal_mode=DELETE")
+            replacement_conn.close()
+            previous_identity = project_store._WAL_CONFIGURED_DATABASES[path.resolve()]
+            path.unlink()
+            replacement.replace(path)
+
+            reopened = connect_db(path)
+            mode = reopened.execute("PRAGMA journal_mode").fetchone()[0]
+            reopened.close()
+            self.assertEqual(mode.lower(), "wal")
+            self.assertNotEqual(
+                project_store._WAL_CONFIGURED_DATABASES[path.resolve()],
+                previous_identity,
+            )
+
     def test_new_database_gets_current_schema_without_backup(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "project.db"

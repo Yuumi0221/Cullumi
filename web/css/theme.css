@@ -1,0 +1,327 @@
+[data-theme="night"] {
+  color-scheme: dark;
+  --bg: #1a1819;
+  --card: #282526;
+  --ink: #fff7f8;
+  --muted: #b8adb0;
+  --line: #51464a;
+  --pink: #e26780;
+  --pink2: #42363c;
+  --pink-hover: #f88199;
+  --red: #ae431e;
+  --remove-hover:#cb552d;
+  --remove-hover-dark:#913a32;
+  --soft:#332d2f;
+  --surface-hover:#3a3235;
+  --surface-hover-strong:#44383c;
+  --border-hover:#7c696f;
+  --image-surface:#171416;
+  --scrollbar-thumb:rgba(184,173,176,.30);
+  --scrollbar-thumb-hover:rgba(184,173,176,.48);
+  --keep:#5e7a47;
+  --keep-soft:#e1ece3;
+  --keep-hover:#7c9b63;
+  --keep-hover-dark:#294f3a;
+  --shadow: 0 18px 50px #0008;
+}
+
+[data-theme="night"] body,
+[data-theme="night"] body > main {
+  background: var(--bg);
+}
+
+[data-theme="night"] .topbar,
+[data-theme="night"] aside,
+[data-theme="night"] .photo-card,
+[data-theme="night"] .progress-panel,
+[data-theme="night"] .search,
+[data-theme="night"] .panel-dialog,
+[data-theme="night"] .confirm,
+[data-theme="night"] .context-menu {
+  background: var(--card);
+  color: var(--ink);
+}
+
+[data-theme="night"] button,
+[data-theme="night"] input,
+[data-theme="night"] select,
+[data-theme="night"] .card-actions .keep,
+[data-theme="night"] .card-actions .danger {
+  background: var(--card);
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+[data-theme="night"] select option {
+  background: var(--card);
+  color: var(--ink);
+}
+
+[data-theme="night"] #profileSelect {
+  background: var(--card);
+  color: var(--ink);
+}
+
+[data-theme="night"] #profileEditorSelect {
+  background-color: var(--card);
+}
+
+[data-theme="night"] .form-grid select[data-p] {
+  background-color: var(--card);
+}
+
+[data-theme="night"] .confirm-option,
+[data-theme="night"] .download-path {
+  background: var(--surface-hover);
+}
+
+[data-theme="night"] .ai-sweep-button {
+  border-color:#7f4540;
+  color:#ff948b;
+  background:#352321
+}
+
+[data-theme="night"] .ai-sweep-button em {
+  color:#211816;
+  background:#ff948b
+}
+
+[data-theme="night"] .toolbar button.ai-sweep-button:hover:not(:disabled) {
+  border-color:var(--remove-hover);
+  color:#ffd0cc;
+  background:#6a3531;
+  transform:none;
+  box-shadow:none
+}
+
+[data-theme="night"] .toolbar button.ai-sweep-button:hover:not(:disabled) em {
+  color:#321b19;
+  background:#ffc0bb
+}
+
+[data-theme="night"] #settingsBtn {
+  background: var(--card);
+}
+
+[data-theme="night"] #profileSelect:hover,
+[data-theme="night"] #profileEditorSelect:hover,
+[data-theme="night"] .form-grid select[data-p]:hover,
+[data-theme="night"] #settingsBtn:hover {
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
+}
+
+[data-theme="night"] button:hover:not(:disabled):not(.active) {
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
+}
+
+[data-theme="night"] nav button:not(.active) {
+  background: transparent;
+}
+
+[data-theme="night"] nav button:not(.active):hover {
+  background: var(--surface-hover);
+}
+
+[data-theme="night"] nav button.active:hover {
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
+}
+
+[data-theme="night"] .settings-tabs button:not(.active) {
+  border-color:var(--line);
+  background: transparent;
+}
+
+[data-theme="night"] .settings-tabs button:not(.active):hover {
+  border-color: var(--line);
+  background: var(--surface-hover);
+}
+
+[data-theme="night"] .settings-tabs button.active {
+  border-color: var(--pink);
+  background: transparent;
+  color: var(--pink);
+}
+
+[data-theme="night"] .settings-tabs button.active:hover {
+  border-color: var(--pink);
+  background: var(--surface-hover);
+  color: var(--pink);
+}
+
+[data-theme="night"] .logo {
+  border-color: transparent;
+  background: transparent;
+}
+
+[data-theme="night"] .logo:hover:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+}
+
+[data-theme="night"] .field-reset:hover:not(:disabled) {
+  background: var(--surface-hover) !important;
+}
+
+[data-theme="night"] .context-menu button {
+  background: transparent;
+}
+
+[data-theme="night"] .context-menu button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+[data-theme="night"] #scanBtn {
+  color: #fff;
+  background: var(--pink);
+  border-color: var(--pink);
+}
+
+[data-theme="night"] .primary {
+  color: #fff;
+  background: var(--keep);
+  border-color: var(--keep);
+}
+
+[data-theme="night"] .decision-keep .card-actions .keep,
+[data-theme="night"] .viewer .viewer-keep.active {
+  color: #fff;
+  background: var(--keep);
+  border-color: var(--keep);
+}
+
+[data-theme="night"] button.primary:hover:not(:disabled),
+[data-theme="night"] #saveProfile:hover:not(:disabled) {
+  background:var(--keep-hover);
+  color:#fff;
+  border-color:var(--keep-hover)
+}
+
+[data-theme="night"] #scanBtn:hover:not(:disabled),
+[data-theme="night"] #chooseBtn:hover:not(:disabled) {
+  background: var(--pink-hover);
+  border-color: var(--pink-hover);
+}
+
+[data-theme="night"] #homeBtn:hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
+}
+
+[data-theme="night"] .decision-keep .card-actions .keep:hover:not(:disabled),
+[data-theme="night"] .viewer .viewer-keep.active:hover:not(:disabled) {
+  background: var(--keep-hover);
+  border-color: var(--keep-hover);
+}
+
+[data-theme="night"] .danger,
+[data-theme="night"] .decision-remove .card-actions .danger,
+[data-theme="night"] .viewer .viewer-remove.active {
+  color: #fff;
+  background: var(--red);
+  border-color: var(--red);
+}
+
+[data-theme="night"] .danger:hover:not(:disabled),
+[data-theme="night"] #quarantineBtn:hover:not(:disabled),
+[data-theme="night"] #deleteProfile:hover:not(:disabled),
+[data-theme="night"] #confirmOk:hover:not(:disabled),
+[data-theme="night"] .decision-remove .card-actions .danger:hover:not(:disabled),
+[data-theme="night"] .viewer .viewer-remove.active:hover:not(:disabled) {
+  background: var(--remove-hover);
+  border-color: var(--remove-hover);
+}
+
+[data-theme="night"] .confirm-list {
+  background: var(--image-surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+[data-theme="night"] .thumb {
+  background: var(--image-surface);
+}
+
+[data-theme="night"] .folder-cover {
+  border-color: var(--card);
+  background: var(--image-surface);
+}
+
+[data-theme="night"] .similar-folder {
+  border-color: transparent;
+  background: transparent;
+}
+
+[data-theme="night"] .similar-folder:hover {
+  border-color: var(--line);
+  background: var(--surface-hover);
+}
+
+[data-theme="night"] .similar-folder.active {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--card) 82%, transparent);
+}
+
+[data-theme="night"] .similar-folder.active:hover {
+  background: var(--surface-hover);
+}
+
+[data-theme="night"] .search,
+[data-theme="night"] .search input {
+  background: var(--card);
+  color: var(--ink);
+}
+
+[data-theme="night"] .multi-filter-trigger,
+[data-theme="night"] .multi-filter-panel {
+  background: var(--card);
+  color: var(--ink);
+}
+
+[data-theme="night"] .multi-filter-trigger:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+[data-theme="night"] .multi-filter-trigger.empty-selection {
+  border-color: #8f4f49;
+  background: #382523;
+}
+
+[data-theme="night"] .multi-filter-panel label:hover {
+  background: var(--surface-hover);
+}
+
+[data-theme="night"] .multi-filter-head button {
+  background: transparent;
+}
+
+[data-theme="night"] .settings-tabs,
+[data-theme="night"] .settings-footer,
+[data-theme="night"] .settings-page,
+[data-theme="night"] .dialog-head {
+  background: var(--card);
+  border-color: var(--line);
+}
+
+[data-theme="night"] .estimate {
+  background: var(--surface-hover);
+}
+
+[data-theme="night"] .form-grid input[type="number"]::placeholder {
+  color: rgba(255, 255, 255, 0.48);
+}
+
+[data-theme="night"] .profile-save-status {
+  color: #9ce5b4;
+  background: #203b29;
+  border-color: #3d7450;
+}
+
+[data-theme="night"] .profile-save-status.failed {
+  color: #ffaaa3;
+  background: #432522;
+  border-color: #7d3b36;
+}
+

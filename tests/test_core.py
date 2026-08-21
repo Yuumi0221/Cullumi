@@ -7,40 +7,39 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest import mock
 from pathlib import Path
+from unittest import mock
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageOps
 
-import cullumi.core as core
+import cullumi.scanner as scanner_module
 from cullumi import __version__
-from cullumi.core import (
-    BUILTIN_PROFILES,
-    ConfigStore,
-    ProjectManager,
-    ScanCancelled,
-    Scanner,
-    SimilarityGroupCache,
-    analyze_photo,
-    apply_quarantine,
-    build_similarity_groups,
+from cullumi.classification import (
+    PHOTO_AI_FILTERS,
+    PHOTO_DECISION_FILTERS,
     classification_percentiles,
-    clear_decisions,
-    connect_db,
-    HEIF_EXTENSIONS,
-    import_decisions,
-    mark_ai_remove_suggestions,
-    open_heif,
     parse_photo_filter,
     photo_filter_where,
     photo_library_counts,
-    PHOTO_AI_FILTERS,
-    PHOTO_DECISION_FILTERS,
+)
+from cullumi.config import BUILTIN_PROFILES, ConfigStore, validate_profile
+from cullumi.media import HEIF_EXTENSIONS, analyze_photo, open_heif, open_image
+from cullumi.project_store import (
+    ProjectManager,
+    connect_db,
     project_id_for,
+    project_thumbnail_path,
+)
+from cullumi.scanner import DiscoveryResult, ScanCancelled, Scanner
+from cullumi.similarity import SimilarityGroupCache, build_similarity_groups
+from cullumi.workflows import (
+    apply_quarantine,
+    clear_decisions,
+    import_decisions,
+    mark_ai_remove_suggestions,
     quarantine_preview,
     restore_batch,
-    open_image,
-    validate_profile,
 )
 
 
@@ -349,6 +348,40 @@ class CullumiTests(unittest.TestCase):
         self.assertEqual(progress["video_count"], 1)
         self.assertEqual(progress["unsupported_extensions"], {".mov": 1})
 
+    def test_discovery_aggregates_supported_and_unsupported_files(self):
+        self.make_photo("photo.jpg")
+        (self.photos / "notes.txt").write_text("notes", encoding="utf-8")
+        (self.photos / "README").write_text("read me", encoding="utf-8")
+        (self.photos / "clip.mp4").write_bytes(b"not-a-real-video")
+        scanner = Scanner(self.config, self.manager)
+
+        discovery = scanner._discover(self.project, threading.Event())
+
+        self.assertEqual([path.name for path in discovery.photos], ["photo.jpg"])
+        self.assertEqual(discovery.discovered_total, 4)
+        self.assertEqual(discovery.unsupported_count, 3)
+        self.assertEqual(discovery.video_count, 1)
+        self.assertEqual(
+            discovery.unsupported_extensions,
+            {".txt": 1, "无扩展名": 1, ".mp4": 1},
+        )
+
+    def test_discovery_does_not_follow_a_file_symlink_outside_project(self):
+        outside = self.base / "outside.jpg"
+        with Image.new("RGB", (8, 8), "blue") as image:
+            image.save(outside)
+        link = self.photos / "outside-link.jpg"
+        try:
+            link.symlink_to(outside)
+        except OSError as error:
+            self.skipTest(f"当前环境无法创建符号链接：{error}")
+        scanner = Scanner(self.config, self.manager)
+
+        discovery = scanner._discover(self.project, threading.Event())
+
+        self.assertNotIn(link, discovery.photos)
+        self.assertEqual(discovery.discovered_total, 0)
+
     def test_scan_incremental_and_exact_duplicate(self):
         self.make_photo("IMG_0001.jpg")
         (self.photos / "IMG_0002.jpg").write_bytes((self.photos / "IMG_0001.jpg").read_bytes())
@@ -425,7 +458,13 @@ class CullumiTests(unittest.TestCase):
 
         def disappearing_discovery(project, cancel):
             gone.unlink()
-            return [gone, stays]
+            return DiscoveryResult(
+                photos=[gone, stays],
+                discovered_total=2,
+                unsupported_count=0,
+                video_count=0,
+                unsupported_extensions={},
+            )
 
         with mock.patch.object(scanner, "_discover", side_effect=disappearing_discovery):
             scanner.start(self.project.project_id)
@@ -469,7 +508,6 @@ class CullumiTests(unittest.TestCase):
     def test_scan_marks_photo_missing_when_it_disappears_during_analysis(self):
         self.make_photo("LATE_GONE.jpg")
         self.scan()
-        disappearing = self.photos / "LATE_GONE.jpg"
         conn = connect_db(self.project.db_path)
         conn.execute(
             "UPDATE photos SET error='retry' WHERE relative_path='LATE_GONE.jpg'"
@@ -477,14 +515,14 @@ class CullumiTests(unittest.TestCase):
         conn.commit()
         conn.close()
         scanner = Scanner(self.config, self.manager)
-        real_analyze = core.analyze_photo
+        real_analyze = scanner_module.analyze_photo
 
         def analyze_then_remove(path, thumbnail, stat=None):
             result = real_analyze(path, thumbnail, stat)
             path.unlink()
             return result
 
-        with mock.patch("cullumi.core.analyze_photo", side_effect=analyze_then_remove):
+        with mock.patch("cullumi.scanner.analyze_photo", side_effect=analyze_then_remove):
             scanner.start(self.project.project_id)
             scanner.threads[self.project.project_id].join(20)
         progress = scanner.get_progress(self.project.project_id)
@@ -503,7 +541,7 @@ class CullumiTests(unittest.TestCase):
         self.make_photo("ATOMIC.jpg")
         self.scan()
         conn = connect_db(self.project.db_path)
-        thumb_path = core.project_thumbnail_path(
+        thumb_path = project_thumbnail_path(
             self.project,
             conn.execute(
                 "SELECT thumbnail FROM photos WHERE relative_path='ATOMIC.jpg'"
@@ -742,7 +780,7 @@ class CullumiTests(unittest.TestCase):
         )
         scanner = Scanner(self.config, self.manager)
         with mock.patch(
-            "cullumi.core._structure_vector", wraps=core._structure_vector
+            "cullumi.scanner._structure_vector", wraps=scanner_module._structure_vector
         ) as loader:
             scanner.rebuild_similarity(self.project, conn, profile)
         self.assertEqual(loader.call_count, 3)
@@ -755,26 +793,26 @@ class CullumiTests(unittest.TestCase):
             for row in conn.execute("SELECT id,thumbnail FROM photos")
         }
         for pair in pairs:
-            left_path = core.project_thumbnail_path(
+            left_path = project_thumbnail_path(
                 self.project, photos[int(pair["a_id"])]["thumbnail"]
             )
-            right_path = core.project_thumbnail_path(
+            right_path = project_thumbnail_path(
                 self.project, photos[int(pair["b_id"])]["thumbnail"]
             )
             with Image.open(left_path) as left, Image.open(right_path) as right:
-                left_vector = core.np.asarray(
-                    ImageOps.grayscale(left).resize((64, 64)), dtype=core.np.float32
+                left_vector = np.asarray(
+                    ImageOps.grayscale(left).resize((64, 64)), dtype=np.float32
                 )
-                right_vector = core.np.asarray(
-                    ImageOps.grayscale(right).resize((64, 64)), dtype=core.np.float32
+                right_vector = np.asarray(
+                    ImageOps.grayscale(right).resize((64, 64)), dtype=np.float32
                 )
             left_vector -= left_vector.mean()
             right_vector -= right_vector.mean()
             denominator = float(
-                core.np.linalg.norm(left_vector) * core.np.linalg.norm(right_vector)
+                np.linalg.norm(left_vector) * np.linalg.norm(right_vector)
             )
             structure = (
-                float(core.np.sum(left_vector * right_vector) / denominator)
+                float(np.sum(left_vector * right_vector) / denominator)
                 if denominator else 0.0
             )
             self.assertAlmostEqual(float(pair["score"]), 0.70 + 0.30 * structure)
@@ -891,7 +929,7 @@ class CullumiTests(unittest.TestCase):
         stored_thumbnail = conn.execute("SELECT thumbnail FROM photos").fetchone()[0]
         conn.close()
         self.assertTrue(stored_thumbnail.startswith("thumbs/"))
-        thumbnail = core.project_thumbnail_path(migrated, stored_thumbnail)
+        thumbnail = project_thumbnail_path(migrated, stored_thumbnail)
         self.assertTrue(thumbnail.is_file())
         cleaned = self.manager.cleanup_old_cache(self.project.project_id, str(old))
         self.assertTrue(cleaned["cleaned"])

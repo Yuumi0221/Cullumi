@@ -8,7 +8,6 @@ function renderSimilarFolders(){
   $("#similarFolders").innerHTML=state.similar.groups.map(group=>similarFolder(group,selected)).join("");
   $("#similarFolders").classList.toggle("compact",selected&&state.similar.mode==="side");
   $("#similarFolderPane").classList.toggle("hidden",selected&&state.similar.mode==="expanded");
-  $$("[data-similar-group]").forEach(button=>button.onclick=e=>{e.stopPropagation();openSimilarGroup(button.dataset.similarGroup)});
 }
 function applySimilarMode(){
   const selected=!!state.similar.selectedId,expanded=state.similar.mode==="expanded",visible=state.view==="similar"&&selected;
@@ -55,7 +54,7 @@ async function loadSimilarGroupMembers(){
     return photoCard(photo,index,recommended?"推荐保留":"可考虑移除",recommended?"recommended":"candidate-remove",extra);
   }).join("");
   $("#empty").classList.toggle("hidden",!!decorated.length);
-  bindGallery();renderSimilarFolders();applySimilarMode();
+  renderSimilarFolders();applySimilarMode();
 }
 async function openSimilarGroup(groupId){
   state.similar.selectedId=groupId;

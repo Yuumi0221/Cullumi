@@ -7,7 +7,7 @@ $BuildWorkPath = Join-Path $BuildRoot "work"
 $BuildDistPath = Join-Path $BuildRoot "dist"
 
 if (-not (Test-Path -LiteralPath $Python)) {
-    throw "未找到 .venv，请先创建虚拟环境并安装 requirements.txt。"
+    throw "未找到 .venv，请先创建虚拟环境并安装 requirements-build.txt。"
 }
 
 Push-Location $ProjectRoot

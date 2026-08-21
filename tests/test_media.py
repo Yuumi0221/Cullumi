@@ -7,7 +7,7 @@ from unittest import mock
 
 from PIL import Image
 
-from cullumi.core import (
+from cullumi.media import (
     DISPLAY_PREVIEW_EXTENSIONS,
     DISPLAY_PREVIEW_MAX_SIZE,
     analyze_photo,

@@ -65,6 +65,10 @@ function updateCounts(p){
   $("#pairCount").textContent=p.similar_groups??p.pairs;
   $("#clearDecisionsBtn").disabled=!Object.values(p.decisions||{}).reduce((sum,count)=>sum+count,0);
 }
+function applyProjectCounts(counts){
+  if(!state.project||!counts)return;
+  Object.assign(state.project,counts);updateCounts(state.project);
+}
 async function refreshProject(){if(!state.project)return;state.project=await json(`/api/project?project_id=${state.project.id}`);updateCounts(state.project)}
 async function startScan(){if(!state.project)return;await json("/api/scan",{project_id:state.project.id});pollProgress()}
 const wait=milliseconds=>new Promise(resolve=>setTimeout(resolve,milliseconds));

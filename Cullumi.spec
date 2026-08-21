@@ -43,7 +43,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,
-    icon="web/brand-icon.ico",
+    icon="web/assets/icons/brand-icon.ico",
 )
 coll = COLLECT(
     exe,

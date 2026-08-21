@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import threading
@@ -13,8 +14,39 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-
 DATABASE_SCHEMA_VERSION = 1
+_WAL_CONFIGURED_DATABASES: dict[Path, tuple[int, int]] = {}
+_INITIALIZED_DATABASES: dict[Path, tuple[int, int, int, int]] = {}
+_DATABASE_CONFIGURATION_LOCK = threading.RLock()
+
+
+def _database_identity(path: Path) -> tuple[int, int]:
+    file_stat = path.stat()
+    return int(file_stat.st_dev), int(file_stat.st_ino)
+
+
+def _database_fingerprint(path: Path) -> tuple[int, int, int, int]:
+    """Identify both file replacement and writes that may change the schema version."""
+    file_stat = path.stat()
+    return (
+        int(file_stat.st_dev),
+        int(file_stat.st_ino),
+        int(file_stat.st_size),
+        int(file_stat.st_mtime_ns),
+    )
+
+
+def _ensure_wal(
+    conn: sqlite3.Connection, path: Path, initialized: bool
+) -> bool:
+    """Enable persistent WAL once for each database file identity."""
+    identity = _database_identity(path)
+    with _DATABASE_CONFIGURATION_LOCK:
+        if not initialized and _WAL_CONFIGURED_DATABASES.get(path) == identity:
+            return False
+        conn.execute("PRAGMA journal_mode=WAL")
+        _WAL_CONFIGURED_DATABASES[path] = identity
+        return True
 
 
 def _is_within(path: Path, root: Path) -> bool:
@@ -113,7 +145,7 @@ def _backup_database_for_migration(
 
 def _initialize_database(
     conn: sqlite3.Connection, path: Path, existed: bool
-) -> None:
+) -> bool:
     current_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
     if current_version > DATABASE_SCHEMA_VERSION:
         raise RuntimeError(
@@ -121,7 +153,7 @@ def _initialize_database(
             "请使用更新版本的 Cullumi 打开"
         )
     if current_version == DATABASE_SCHEMA_VERSION:
-        return
+        return False
     if existed and _database_has_user_tables(conn):
         _backup_database_for_migration(conn, path, DATABASE_SCHEMA_VERSION)
     try:
@@ -134,18 +166,26 @@ def _initialize_database(
         if conn.in_transaction:
             conn.rollback()
         raise
+    return True
 
 
 def connect_db(path: Path) -> sqlite3.Connection:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    existed = path.is_file() and path.stat().st_size > 0
-    conn = sqlite3.connect(path, timeout=30, check_same_thread=False)
+    resolved_path = Path(os.path.abspath(path))
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(resolved_path, timeout=30, check_same_thread=False)
     try:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
-        _initialize_database(conn, path, existed)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.commit()
+        with _DATABASE_CONFIGURATION_LOCK:
+            fingerprint = _database_fingerprint(resolved_path)
+            existed = fingerprint[2] > 0
+            if not existed or _INITIALIZED_DATABASES.get(resolved_path) != fingerprint:
+                initialized = _initialize_database(conn, resolved_path, existed)
+                _ensure_wal(conn, resolved_path, initialized)
+                conn.commit()
+                _INITIALIZED_DATABASES[resolved_path] = _database_fingerprint(
+                    resolved_path
+                )
         return conn
     except Exception:
         conn.close()

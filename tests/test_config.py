@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from cullumi.core import BUILTIN_PROFILES, ConfigStore
+from cullumi.config import BUILTIN_PROFILES, ConfigStore
 
 
 class ConfigRecoveryTests(unittest.TestCase):
@@ -176,7 +176,7 @@ class ConfigRecoveryTests(unittest.TestCase):
         original = "broken-but-important"
         self.path.write_text(original, encoding="utf-8")
 
-        with mock.patch("cullumi.core.shutil.copy2", side_effect=OSError("read only")):
+        with mock.patch("cullumi.config.shutil.copy2", side_effect=OSError("read only")):
             config = ConfigStore(self.path)
 
         self.assertEqual(self.path.read_text(encoding="utf-8"), original)

@@ -35,24 +35,37 @@
 
 主要代码按职责拆分：
 
-- `cullumi/core.py`：配置、规则与扫描流程编排，同时保留旧版导入入口。
+- `cullumi/config.py`：应用配置、模式定义和参数校验。
+- `cullumi/classification.py`：照片筛选条件、项目统计和画质分类。
+- `cullumi/scanner.py`：扫描、增量分析、重复确认和相似关系重建。
+- `cullumi/core.py`：旧版 Python 导入入口的兼容导出，不再承载具体实现。
 - `cullumi/project_store.py`：项目模型、SQLite 连接与迁移、缓存路径和写入一致性。
 - `cullumi/media.py`：图片解码、缩略图、高清预览、图像指标与感知哈希。
 - `cullumi/workflows.py`：决定导入导出、批量标记、隔离与恢复。
 - `cullumi/similarity.py`：相似候选索引、结构比较和分组算法。
-- `web/runtime.js`：共享状态、接口请求、提示与主题。
-- `web/session.js`：最近项目、项目打开和扫描进度。
-- `web/similar.js`：相似照片列表与分组浏览。
-- `web/settings.js`：模式、设置、确认框和更新提示。
-- `web/app.js`：图库、照片查看器及页面事件入口。
+- `web/js/runtime.js`：共享状态、接口请求、提示与主题。
+- `web/js/session.js`：最近项目、项目打开和扫描进度。
+- `web/js/similar.js`：相似照片列表与分组浏览。
+- `web/js/settings.js`：模式、设置、确认框和更新提示。
+- `web/js/gallery.js`：图库分页、照片卡片、查看器和决定状态同步。
+- `web/js/app.js`：页面事件绑定和应用启动入口。
+- `web/css/`：基础、工作区、主题、响应式和首页样式。
+- `web/assets/`：按图片、字体和图标分类的静态资源。
 
-前端脚本是无需构建工具的经典脚本，并按 `runtime`、`session`、`similar`、`settings`、`app` 的顺序加载。新增跨模块功能时，应把实现放入对应职责文件，并保持该依赖顺序。
+前端脚本是无需构建工具的经典脚本，并按 `runtime`、`session`、`similar`、`settings`、`gallery`、`app` 的顺序加载。样式按 `base`、`workspace`、`theme`、`responsive`、`home` 的顺序加载。新增跨模块功能时，应把实现放入对应职责文件，并保持依赖顺序。
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 .\.venv\Scripts\python.exe app.py
+```
+
+开发检查额外安装：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\ruff.exe check .
 ```
 
 真实 DOM 界面测试需要 Node.js 20 及以上，并使用本机 Microsoft Edge，在隔离的临时配置与模拟接口数据下加载正式页面、样式和全部前端脚本：
@@ -67,6 +80,7 @@ npm run test:dom
 构建便携目录：
 
 ```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
 .\build.ps1
 ```
 

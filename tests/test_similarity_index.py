@@ -10,10 +10,12 @@ from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
+import numpy as np
 from PIL import Image
 
-import cullumi.core as core
-from cullumi.core import BUILTIN_PROFILES, ConfigStore, ProjectManager, Scanner, connect_db
+from cullumi.config import BUILTIN_PROFILES, ConfigStore
+from cullumi.project_store import ProjectManager, connect_db
+from cullumi.scanner import Scanner
 from cullumi.similarity import hamming, hamming_candidate_pairs
 
 
@@ -40,7 +42,7 @@ class SimilarityIndexTests(unittest.TestCase):
         randomizer = random.Random(7)
         hashes = [f"{randomizer.getrandbits(64):016x}" for _ in range(1000)]
         with mock.patch(
-            "cullumi.similarity.np.bitwise_count", wraps=core.np.bitwise_count
+            "cullumi.similarity.np.bitwise_count", wraps=np.bitwise_count
         ) as vectorized_count:
             candidates = list(hamming_candidate_pairs(hashes, 14))
         all_pairs = len(hashes) * (len(hashes) - 1) // 2
@@ -103,9 +105,8 @@ class SimilarityIndexTests(unittest.TestCase):
             profile["similarity"]["exact_duplicates"] = False
             profile["similarity"]["structure_min"] = -1
             scanner.rebuild_similarity(project, indexed, profile)
-            with mock.patch.object(
-                core,
-                "hamming_candidate_pairs",
+            with mock.patch(
+                "cullumi.scanner.hamming_candidate_pairs",
                 side_effect=lambda values, radius: itertools.combinations(
                     range(len(values)), 2
                 ),

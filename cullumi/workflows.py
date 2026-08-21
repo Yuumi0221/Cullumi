@@ -14,11 +14,12 @@ from typing import Any
 from .project_store import (
     Project,
     _is_within,
-    atomic_write_json as _atomic_write_json,
     connect_db,
     safe_relative_path,
 )
-
+from .project_store import (
+    atomic_write_json as _atomic_write_json,
+)
 
 QUARANTINE_DIR = "_照片筛选隔离"
 
