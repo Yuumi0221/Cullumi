@@ -6,10 +6,10 @@
   <title>Cullumi</title>
   <link rel="icon" href="/static/assets/images/brand-icon.png" type="image/png">
   <link rel="stylesheet" href="/static/css/base.css?v=1.0.1-css-layout1">
-  <link rel="stylesheet" href="/static/css/workspace.css?v=1.0.1-css-layout1">
+  <link rel="stylesheet" href="/static/css/workspace.css?v=1.0.1-css-layout18">
   <link rel="stylesheet" href="/static/css/theme.css?v=1.0.1-css-layout1">
   <link rel="stylesheet" href="/static/css/responsive.css?v=1.0.1-css-layout1">
-  <link rel="stylesheet" href="/static/css/home.css?v=1.0.1-css-layout1">
+  <link rel="stylesheet" href="/static/css/home.css?v=1.0.1-css-layout3">
 </head>
 <body>
   <header class="topbar">
@@ -33,7 +33,7 @@
       <div class="hero">
         <div><p class="eyebrow">从任意照片文件夹开始</p><h1><span>快速留下</span><span>美好瞬间</span></h1>
           <p class="hero-description">支持 JPG / PNG / HEIC / HEIF / RAW 等常见图片格式<br>所有分析均在本机完成，保护你的隐私</p>
-          <button id="chooseBtn" class="primary hero-choose"><svg class="hero-choose-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6Z"/></svg>选择照片文件夹</button>
+          <button id="chooseBtn" class="primary hero-choose"><svg class="hero-choose-icon" viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=2#home-folder"></use></svg>选择照片文件夹</button>
         </div>
       </div>
       <div class="home-bg-left" aria-hidden="true">
@@ -87,7 +87,7 @@
           <div id="libraryFilters" class="library-filters">
             <div class="multi-filter" data-filter-menu="decisions">
               <button class="multi-filter-trigger" type="button" aria-expanded="false" aria-controls="decisionFilterPanel">
-                <span>决定状态</span><b id="decisionFilterSummary">全部</b><svg class="filter-chevron" viewBox="0 0 18 18" aria-hidden="true"><path d="m5 7 4 4 4-4"/></svg>
+                <span>决定状态</span><b id="decisionFilterSummary">全部</b><svg class="filter-chevron" viewBox="0 0 1024 1024" aria-hidden="true"><use class="filter-chevron-down" href="/static/assets/icons.svg?v=1#chevron-down"></use><use class="filter-chevron-up" href="/static/assets/icons.svg?v=1#chevron-up"></use></svg>
               </button>
               <div id="decisionFilterPanel" class="multi-filter-panel hidden">
                 <div class="multi-filter-head"><b>决定状态</b><button type="button" data-select-all="decisions">全选</button></div>
@@ -98,7 +98,7 @@
             </div>
             <div class="multi-filter" data-filter-menu="ai">
               <button class="multi-filter-trigger" type="button" aria-expanded="false" aria-controls="aiFilterPanel">
-                <span>AI 分析</span><b id="aiFilterSummary">全部</b><svg class="filter-chevron" viewBox="0 0 18 18" aria-hidden="true"><path d="m5 7 4 4 4-4"/></svg>
+                <span>AI 分析</span><b id="aiFilterSummary">全部</b><svg class="filter-chevron" viewBox="0 0 1024 1024" aria-hidden="true"><use class="filter-chevron-down" href="/static/assets/icons.svg?v=1#chevron-down"></use><use class="filter-chevron-up" href="/static/assets/icons.svg?v=1#chevron-up"></use></svg>
               </button>
               <div id="aiFilterPanel" class="multi-filter-panel hidden">
                 <div class="multi-filter-head"><b>AI 分析</b><button type="button" data-select-all="ai">全选</button></div>
@@ -138,10 +138,25 @@
   </main>
 
   <dialog id="viewer" class="viewer">
-    <button class="close" data-close aria-label="关闭预览"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
-    <button class="side prev" id="viewerPrev" aria-label="上一张"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
-    <figure><img id="viewerImage" draggable="false"><figcaption><div class="viewer-title-line"><span id="viewerBadge" class="viewer-badge hidden"></span><b id="viewerName"></b></div><span id="viewerMeta"></span></figcaption></figure>
-    <button class="side next" id="viewerNext" aria-label="下一张"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button>
+    <button class="close" data-close aria-label="关闭预览"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#viewer-close"></use></svg></button>
+    <button class="side prev" id="viewerPrev" aria-label="上一张"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#viewer-prev"></use></svg></button>
+    <figure>
+      <div class="viewer-media"><img id="viewerImage" draggable="false"><video id="viewerVideo" class="hidden" muted playsinline preload="metadata"></video></div>
+      <div id="motionControls" class="motion-controls hidden">
+        <button id="motionPlay" class="motion-play-button" type="button" aria-label="暂停" title="暂停"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=2#motion-pause"></use></svg></button>
+        <span id="motionTime">0:00 / 0:00</span>
+        <div id="motionTimelineWrap" class="motion-timeline-wrap">
+          <span id="motionOriginalMarker" class="motion-cover-marker motion-original-marker hidden" role="img" aria-label="原始封面位置" title="原始封面位置"></span>
+          <span id="motionCoverMarker" class="motion-cover-marker" role="img" aria-label="当前封面位置" title="当前封面位置"></span>
+          <input id="motionTimeline" type="range" min="0" max="1" value="0" step="1" aria-label="动态照片时间轴">
+        </div>
+        <button id="motionMute" class="motion-sound-button" type="button" aria-label="播放声音" title="播放声音"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#motion-muted"></use></svg></button>
+        <button id="motionSetCover" class="motion-set-cover-button" type="button" aria-label="设为封面" title="设为封面"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=2#motion-set-cover"></use></svg></button>
+        <button id="motionResetCover" class="motion-reset-button" type="button" aria-label="恢复原始封面" title="恢复原始封面"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use transform="translate(1024 0) scale(-1 1)" href="/static/assets/icons.svg?v=1#motion-reset"></use></svg></button>
+      </div>
+      <figcaption><div class="viewer-title-line"><span id="viewerBadge" class="viewer-badge hidden"></span><b id="viewerName"></b></div><span id="viewerMeta"></span></figcaption>
+    </figure>
+    <button class="side next" id="viewerNext" aria-label="下一张"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#viewer-next"></use></svg></button>
     <footer><button id="viewerKeep" class="viewer-decision viewer-keep">W / ↑ 保留</button><span id="viewerIndex"></span><button id="viewerRemove" class="viewer-decision viewer-remove">S / ↓ 移除</button></footer>
   </dialog>
 
@@ -227,10 +242,10 @@
   <div id="toast"></div>
   <script>window.APP_TOKEN="__APP_TOKEN__"</script>
   <script src="/static/js/runtime.js?v=1.0.1-layout1"></script>
-  <script src="/static/js/session.js?v=1.0.1-layout1"></script>
+  <script src="/static/js/session.js?v=1.0.1-layout2"></script>
   <script src="/static/js/similar.js?v=1.0.1-layout1"></script>
   <script src="/static/js/settings.js?v=1.0.1-layout1"></script>
-  <script src="/static/js/gallery.js?v=1.0.1-layout1"></script>
-  <script src="/static/js/app.js?v=1.0.1-layout1"></script>
+  <script src="/static/js/gallery.js?v=1.0.1-layout9"></script>
+  <script src="/static/js/app.js?v=1.0.1-layout5"></script>
 </body>
 </html>

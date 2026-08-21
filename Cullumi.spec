@@ -1,10 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
+from PyInstaller.utils.hooks import collect_data_files
 
 msvcp140 = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "msvcp140.dll")
 fallback_internal = os.environ.get("CULLUMI_BUILD_INTERNAL", "")
 runtime_datas = []
+runtime_datas.extend(collect_data_files("imageio_ffmpeg"))
 if fallback_internal:
     for runtime_dir in ("clr_loader", "pythonnet", "webview", "rawpy"):
         source = os.path.join(fallback_internal, runtime_dir)
@@ -23,6 +25,7 @@ a = Analysis(
         "webview.platforms.winforms",
         "pillow_heif",
         "rawpy",
+        "imageio_ffmpeg",
     ],
     hookspath=[],
     hooksconfig={},

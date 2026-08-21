@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import os
 import sqlite3
+import subprocess
 import threading
 from contextlib import closing, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,17 @@ from .classification import (
     classify,
 )
 from .config import ConfigStore
-from .media import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, analyze_photo
+from .media import (
+    IMAGE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    analyze_photo,
+    ensure_motion_video,
+    extract_motion_frame,
+    motion_asset_from_row,
+    motion_fingerprint,
+    paired_motion_asset,
+    probe_motion,
+)
 from .project_store import (
     Project,
     ProjectManager,
@@ -53,6 +64,7 @@ class DiscoveryResult:
     unsupported_count: int
     video_count: int
     unsupported_extensions: dict[str, int]
+    videos: list[Path] = field(default_factory=list)
 
 def _check_cancelled(cancel: threading.Event | None) -> None:
     if cancel is not None and cancel.is_set():
@@ -152,6 +164,7 @@ class Scanner:
             return any(resolved == root or root in resolved.parents for root in excluded)
 
         photos: list[Path] = []
+        videos: list[Path] = []
         discovered_total = 0
         unsupported_count = 0
         video_count = 0
@@ -178,8 +191,10 @@ class Scanner:
                         unsupported_extensions[key] = unsupported_extensions.get(key, 0) + 1
                         if extension in VIDEO_EXTENSIONS:
                             video_count += 1
+                            videos.append(path)
         return DiscoveryResult(
             photos=photos,
+            videos=videos,
             discovered_total=discovered_total,
             unsupported_count=unsupported_count,
             video_count=video_count,
@@ -193,15 +208,42 @@ class Scanner:
             self._set(project_id, stage="discovering")
             discovery = self._discover(project, cancel)
             files = discovery.photos
+            sidecars = {
+                (path.parent.resolve(), path.stem.casefold()): path
+                for path in discovery.videos
+                if path.suffix.lower() in {".mov", ".m4v", ".mp4"}
+            }
+            motion_assets = {
+                path: asset
+                for path in files
+                if (asset := paired_motion_asset(path, sidecars)) is not None
+            }
+            matched_sidecars = {
+                asset.path.resolve()
+                for asset in motion_assets.values()
+                if asset.kind == "apple_sidecar"
+            }
+            unsupported_count = max(
+                0, discovery.unsupported_count - len(matched_sidecars)
+            )
+            video_count = max(0, discovery.video_count - len(matched_sidecars))
+            unsupported_extensions = dict(discovery.unsupported_extensions)
+            for sidecar in matched_sidecars:
+                extension = sidecar.suffix.lower()
+                remaining = unsupported_extensions.get(extension, 0) - 1
+                if remaining > 0:
+                    unsupported_extensions[extension] = remaining
+                else:
+                    unsupported_extensions.pop(extension, None)
             self._set(
                 project_id,
                 stage="analyzing",
                 total=len(files),
                 current=0,
                 discovered_total=discovery.discovered_total,
-                unsupported_count=discovery.unsupported_count,
-                video_count=discovery.video_count,
-                unsupported_extensions=discovery.unsupported_extensions,
+                unsupported_count=unsupported_count,
+                video_count=video_count,
+                unsupported_extensions=unsupported_extensions,
                 unavailable_count=0,
             )
             with closing(connect_db(project.db_path)) as conn:
@@ -227,6 +269,26 @@ class Scanner:
                         unavailable_count += 1
                     seen.add(rel)
                     old = existing.get(rel)
+                    asset = motion_assets.get(path)
+                    asset_values = asset.storage_values(project.root) if asset else {
+                        "media_type": "image", "motion_kind": "",
+                        "motion_relative_path": "", "motion_offset": 0,
+                        "motion_length": 0, "motion_size": 0, "motion_mtime": 0,
+                        "motion_asset_id": "",
+                    }
+                    motion_identity_same = bool(
+                        old
+                        and old["media_type"] == asset_values["media_type"]
+                        and old["motion_kind"] == asset_values["motion_kind"]
+                        and old["motion_relative_path"] == asset_values["motion_relative_path"]
+                    )
+                    motion_same = bool(
+                        motion_identity_same
+                        and int(old["motion_offset"] or 0) == asset_values["motion_offset"]
+                        and int(old["motion_length"] or 0) == asset_values["motion_length"]
+                        and int(old["motion_size"] or 0) == asset_values["motion_size"]
+                        and abs(float(old["motion_mtime"] or 0) - asset_values["motion_mtime"]) < 0.001
+                    )
                     thumbnail = (
                         project_thumbnail_path(project, old["thumbnail"])
                         if old and old["thumbnail"]
@@ -237,7 +299,9 @@ class Scanner:
                         and stat is not None
                         and old["size"] == stat.st_size
                         and abs(old["mtime"] - stat.st_mtime) < 0.001
+                        and motion_same
                         and not old["error"]
+                        and not old["motion_error"]
                         and thumbnail is not None
                         and thumbnail.is_file()
                     ):
@@ -246,7 +310,53 @@ class Scanner:
                         self._set(project_id, current=index)
                         continue
                     thumb_name = hashlib.sha1(rel.encode("utf-8")).hexdigest() + ".jpg"
-                    metrics = analyze_photo(path, project.thumb_dir / thumb_name, stat)
+                    motion_values = {
+                        **asset_values,
+                        "motion_error": "", "motion_duration_ms": 0,
+                        "motion_fps": 0, "motion_frame_count": 0,
+                        "motion_width": 0, "motion_height": 0,
+                        "motion_sha256": old["motion_sha256"] if old and motion_same else "",
+                    }
+                    if asset:
+                        try:
+                            motion_values.update(probe_motion(asset))
+                        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+                            motion_values["motion_error"] = str(error)
+                    cover_source = "still"
+                    cover_time_ms = 0
+                    cover_frame_index = 0
+                    metrics = None
+                    if (
+                        asset
+                        and old
+                        and motion_identity_same
+                        and old["cover_source"] == "motion"
+                        and not motion_values["motion_error"]
+                    ):
+                        cover_time_ms = min(
+                            int(old["cover_time_ms"] or 0),
+                            max(0, int(motion_values["motion_duration_ms"]) - 1),
+                        )
+                        try:
+                            motion_dir = project.motion_dir or project.project_dir / "motion"
+                            video = ensure_motion_video(asset, motion_dir)
+                            frame = motion_dir / (
+                                f"{motion_fingerprint(asset)}.motion-cover-{cover_time_ms}.jpg"
+                            )
+                            extract_motion_frame(video, cover_time_ms, frame)
+                            metrics = analyze_photo(frame, project.thumb_dir / thumb_name)
+                            metrics.update({
+                                "extension": path.suffix.lower(), "size": stat.st_size,
+                                "mtime": stat.st_mtime, "taken": old["taken"],
+                            })
+                            cover_source = "motion"
+                            cover_frame_index = round(
+                                cover_time_ms * float(motion_values["motion_fps"]) / 1000
+                            )
+                        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+                            motion_values["motion_error"] = str(error)
+                    if metrics is None:
+                        metrics = analyze_photo(path, project.thumb_dir / thumb_name, stat)
                     if not path.is_file():
                         seen.discard(rel)
                         unavailable_count += 1
@@ -257,16 +367,25 @@ class Scanner:
                             unavailable_count=unavailable_count,
                         )
                         continue
-                    suggestion, reason = classify(metrics, profile)
                     if metrics.get("thumbnail"):
                         metrics["thumbnail"] = project_thumbnail_storage_path(
                             metrics["thumbnail"]
                         )
                     values = {
-                        "relative_path": rel, **metrics, "suggestion": suggestion, "reason": reason,
+                        "relative_path": rel, **metrics, **motion_values,
+                        "cover_source": cover_source,
+                        "cover_time_ms": cover_time_ms,
+                        "cover_frame_index": cover_frame_index,
+                        "cover_revision": int(old["cover_revision"] or 0) + 1 if old else 0,
+                        "quality_score": 0,
+                        "suggestion": "keep", "reason": "",
                         "status": "active",
-                        "analyzed_at": datetime.now().isoformat(timespec="seconds"),
+                        "analyzed_at": datetime.now().isoformat(timespec="microseconds"),
                     }
+                    values["quality_score"] = round(
+                        max(0.0, min(1.0, quality_score(values, profile))) * 100, 1
+                    )
+                    values["suggestion"], values["reason"] = classify(values, profile)
                     conn.execute(
                         PHOTO_UPSERT_SQL,
                         [values[column] for column in PHOTO_ANALYSIS_COLUMNS],
@@ -326,10 +445,11 @@ class Scanner:
             "SELECT size,COUNT(*) c FROM photos WHERE status='active' AND error='' GROUP BY size HAVING c>1"
         ).fetchall()
         updates: list[tuple[str, int]] = []
+        motion_updates: list[tuple[str, int]] = []
         missing_ids: list[tuple[int]] = []
         unavailable = 0
         for size_row in sizes:
-            for row in conn.execute("SELECT id,relative_path,sha256 FROM photos WHERE status='active' AND size=?", (size_row["size"],)):
+            for row in conn.execute("SELECT * FROM photos WHERE status='active' AND size=?", (size_row["size"],)):
                 _check_cancelled(cancel)
                 try:
                     path = safe_relative_path(project.root, row["relative_path"])
@@ -341,23 +461,43 @@ class Scanner:
                     missing_ids.append((int(row["id"]),))
                     unavailable += 1
                     continue
-                if row["sha256"]:
-                    continue
-                digest = hashlib.sha256()
-                try:
-                    with path.open("rb") as handle:
-                        for block in iter(lambda: handle.read(1024 * 1024), b""):
-                            _check_cancelled(cancel)
-                            digest.update(block)
-                except (FileNotFoundError, NotADirectoryError):
-                    missing_ids.append((int(row["id"]),))
-                    unavailable += 1
-                    continue
-                except OSError:
-                    unavailable += 1
-                    continue
-                updates.append((digest.hexdigest(), int(row["id"])))
+                if not row["sha256"]:
+                    digest = hashlib.sha256()
+                    try:
+                        with path.open("rb") as handle:
+                            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                                _check_cancelled(cancel)
+                                digest.update(block)
+                    except (FileNotFoundError, NotADirectoryError):
+                        missing_ids.append((int(row["id"]),))
+                        unavailable += 1
+                        continue
+                    except OSError:
+                        unavailable += 1
+                        continue
+                    updates.append((digest.hexdigest(), int(row["id"])))
+                if row["media_type"] == "motion_photo" and not row["motion_sha256"]:
+                    try:
+                        asset = motion_asset_from_row(project.root, row)
+                        motion_digest = hashlib.sha256()
+                        with asset.path.open("rb") as motion_source:
+                            if asset.offset:
+                                motion_source.seek(asset.offset)
+                            remaining = asset.length or asset.path.stat().st_size
+                            while remaining:
+                                _check_cancelled(cancel)
+                                block = motion_source.read(min(1024 * 1024, remaining))
+                                if not block:
+                                    break
+                                motion_digest.update(block)
+                                remaining -= len(block)
+                        motion_updates.append((motion_digest.hexdigest(), int(row["id"])))
+                    except (OSError, ValueError):
+                        unavailable += 1
         conn.executemany("UPDATE photos SET sha256=? WHERE id=?", updates)
+        conn.executemany(
+            "UPDATE photos SET motion_sha256=? WHERE id=?", motion_updates
+        )
         conn.executemany(
             "UPDATE photos SET status='missing',sha256='' WHERE id=?",
             missing_ids,
@@ -375,13 +515,14 @@ class Scanner:
     ) -> None:
         rows = conn.execute("SELECT * FROM photos WHERE status='active'").fetchall()
         percentiles = classification_percentiles(rows, profile)
-        updates: list[tuple[str, str, int]] = []
+        updates: list[tuple[str, str, float, int]] = []
         for row in rows:
             _check_cancelled(cancel)
             suggestion, reason = classify(row, profile, percentiles)
-            updates.append((suggestion, reason, int(row["id"])))
+            score = round(max(0.0, min(1.0, quality_score(row, profile))) * 100, 1)
+            updates.append((suggestion, reason, score, int(row["id"])))
         conn.executemany(
-            "UPDATE photos SET suggestion=?,reason=? WHERE id=?",
+            "UPDATE photos SET suggestion=?,reason=?,quality_score=? WHERE id=?",
             updates,
         )
         if commit:
@@ -429,11 +570,16 @@ class Scanner:
         pairs: list[tuple[int, int, float, str, int, int]] = []
         seen: set[tuple[int, int]] = set()
         if sim.get("exact_duplicates", True):
-            by_hash: dict[str, list[sqlite3.Row]] = {}
+            by_hash: dict[tuple[str, str], list[sqlite3.Row]] = {}
             for row in rows:
                 _check_cancelled(cancel)
-                if row["sha256"]:
-                    by_hash.setdefault(row["sha256"], []).append(row)
+                motion_hash = str(row["motion_sha256"] or "")
+                if row["sha256"] and (
+                    row["media_type"] != "motion_photo" or motion_hash
+                ):
+                    by_hash.setdefault(
+                        (str(row["sha256"]), motion_hash), []
+                    ).append(row)
             for group in by_hash.values():
                 _check_cancelled(cancel)
                 if len(group) < 2:
@@ -524,4 +670,3 @@ class Scanner:
             if candidate.exists():
                 import_decisions(project, candidate)
                 break
-

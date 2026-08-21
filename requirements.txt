@@ -3,3 +3,4 @@ Pillow==12.2.0
 pillow-heif==1.1.1
 rawpy==0.25.1
 pywebview==6.1
+imageio-ffmpeg==0.6.0

@@ -2,19 +2,75 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
 import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
+from PIL import Image
+
 from cullumi import http_api as app
 from cullumi.config import ConfigStore
+from cullumi.media import ffmpeg_executable
 from cullumi.project_store import ProjectManager, connect_db
 from cullumi.scanner import Scanner
+from cullumi.similarity import SimilarityGroupCache
 
 
 class AppSafetyTests(unittest.TestCase):
+    def test_motion_cover_at_video_end_uses_the_last_real_frame(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"
+            photos.mkdir()
+            with Image.new("RGB", (320, 240), "navy") as image:
+                image.save(photos / "IMG_0010.JPG")
+            subprocess.run(
+                [
+                    ffmpeg_executable(), "-y", "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=10",
+                    "-t", "0.5", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    str(photos / "IMG_0010.MOV"),
+                ],
+                check=True,
+            )
+            config = ConfigStore(root / "config.json")
+            config.data["default_cache_root"] = str(root / "cache")
+            config.save()
+            manager = ProjectManager(config)
+            project = manager.open(str(photos))
+            groups = SimilarityGroupCache()
+            scanner = Scanner(config, manager, groups)
+            scanner.start(project.project_id)
+            scanner.threads[project.project_id].join(20)
+            with closing(connect_db(project.db_path)) as conn:
+                photo_id = int(conn.execute("SELECT id FROM photos").fetchone()[0])
+            handler = object.__new__(app.Handler)
+            handler._send_json = mock.Mock()
+
+            with (
+                mock.patch.object(app, "CONFIG", config, create=True),
+                mock.patch.object(app, "MANAGER", manager, create=True),
+                mock.patch.object(app, "SCANNER", scanner, create=True),
+                mock.patch.object(app, "SIMILARITY_GROUPS", groups, create=True),
+            ):
+                handler.api_motion_cover({
+                    "project_id": project.project_id,
+                    "photo_id": photo_id,
+                    "source": "motion",
+                    "time_ms": 500,
+                })
+
+            payload = handler._send_json.call_args.args[0]["photo"]
+            self.assertEqual(payload["motion"]["cover_source"], "motion")
+            self.assertEqual(payload["motion"]["cover_time_ms"], 400)
+            self.assertEqual(payload["motion"]["cover_frame_index"], 4)
+            self.assertEqual((payload["width"], payload["height"]), (160, 120))
+            self.assertGreaterEqual(payload["quality_score"], 0)
+            self.assertIn(".cover-1.jpg", payload["thumbnail"])
+
     def test_route_tables_reference_handler_methods(self):
         for routes in (app.GET_ROUTES, app.POST_ROUTES):
             for path, method_name in routes.items():
@@ -228,6 +284,30 @@ class AppSafetyTests(unittest.TestCase):
                 handler.send_header.call_args_list,
             )
             handler.end_headers.assert_called_once_with()
+
+    def test_motion_video_range_request_returns_partial_content(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "motion.webm"
+            path.write_bytes(b"0123456789")
+            handler = object.__new__(app.Handler)
+            handler.headers = {"Range": "bytes=3-6"}
+            handler.wfile = io.BytesIO()
+            handler.send_response = mock.Mock()
+            handler.send_header = mock.Mock()
+            handler.end_headers = mock.Mock()
+
+            handler._send_range_file(path, "video/webm")
+
+            handler.send_response.assert_called_once_with(206)
+            self.assertEqual(handler.wfile.getvalue(), b"3456")
+            self.assertIn(
+                mock.call("Content-Range", "bytes 3-6/10"),
+                handler.send_header.call_args_list,
+            )
+            self.assertIn(
+                mock.call("Accept-Ranges", "bytes"),
+                handler.send_header.call_args_list,
+            )
 
     def test_send_file_returns_not_found_when_open_fails(self):
         handler = object.__new__(app.Handler)

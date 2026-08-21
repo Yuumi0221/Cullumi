@@ -527,7 +527,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("function renderRecentProjects()", script)
         self.assertIn('$("#recentSearch").oninput=', script)
         self.assertIn('class="recent-more"', script)
-        self.assertIn('<circle cx="2" cy="2" r="2"/>', script)
+        self.assertIn('/static/assets/icons.svg?v=3#home-more', script)
         self.assertIn('event.target.closest(".recent-more")?openRecentMenu(', script)
         self.assertIn("item.oncontextmenu=event=>openRecentMenu(", script)
         self.assertIn(".recent-more:hover {", styles)

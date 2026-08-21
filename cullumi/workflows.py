@@ -86,19 +86,34 @@ def mark_ai_remove_suggestions(project: Project) -> int:
 def quarantine_preview(project: Project) -> dict[str, Any]:
     with closing(connect_db(project.db_path)) as conn:
         rows = conn.execute(
-            "SELECT id,relative_path,size,mtime FROM photos WHERE decision='remove' AND status='active' ORDER BY relative_path"
+            """SELECT id,relative_path,size,mtime,media_type,motion_kind,
+                      motion_relative_path,motion_size,motion_mtime
+                 FROM photos WHERE decision='remove' AND status='active'
+                 ORDER BY relative_path"""
         ).fetchall()
+    items = [dict(row) for row in rows]
     return {
-        "count": len(rows),
-        "total_size": sum(int(row["size"] or 0) for row in rows),
-        "items": [dict(row) for row in rows],
+        "count": len(items),
+        "total_size": sum(
+            int(item["size"] or 0)
+            + (
+                int(item["motion_size"] or 0)
+                if item["motion_kind"] == "apple_sidecar"
+                and item["motion_relative_path"] != item["relative_path"]
+                else 0
+            )
+            for item in items
+        ),
+        "items": items,
     }
 
 
 def _write_manifest_csv(batch_root: Path, manifest: list[dict[str, Any]]) -> None:
     with (batch_root / "manifest.csv").open("w", encoding="utf-8-sig", newline="") as handle:
         fields = [
-            "photo_id", "relative_path", "quarantine_path", "restore_path", "status", "size", "error"
+            "photo_id", "relative_path", "quarantine_path", "restore_path",
+            "companion_relative_path", "companion_quarantine_path",
+            "companion_restore_path", "status", "size", "error"
         ]
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -117,28 +132,62 @@ def apply_quarantine(project: Project) -> dict[str, Any]:
     batch_id = f"{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:8]}"
     batch_root = _quarantine_batch_root(project, batch_id)
     manifest: list[dict[str, Any]] = []
-    prepared: list[tuple[dict[str, Any], dict[str, Any], Path, Path]] = []
+    prepared: list[
+        tuple[dict[str, Any], dict[str, Any], list[tuple[Path, Path]]]
+    ] = []
     for item in preview["items"]:
         source = safe_relative_path(project.root, item["relative_path"], "照片路径")
         entry: dict[str, Any] = {
             "photo_id": int(item["id"]),
             "relative_path": item["relative_path"],
             "status": "pending",
-            "size": int(item["size"] or 0),
+            "size": int(item["size"] or 0) + (
+                int(item["motion_size"] or 0)
+                if item["motion_kind"] == "apple_sidecar"
+                and item["motion_relative_path"] != item["relative_path"]
+                else 0
+            ),
         }
-        if not source.exists():
+        companion = None
+        if (
+            item["motion_kind"] == "apple_sidecar"
+            and item["motion_relative_path"]
+            and item["motion_relative_path"] != item["relative_path"]
+        ):
+            companion = safe_relative_path(
+                project.root, item["motion_relative_path"], "动态照片视频路径"
+            )
+            entry["companion_relative_path"] = item["motion_relative_path"]
+        sources = [(source, int(item["size"] or 0), float(item["mtime"] or 0))]
+        if companion:
+            sources.append(
+                (companion, int(item["motion_size"] or 0), float(item["motion_mtime"] or 0))
+            )
+        if any(not candidate.exists() for candidate, _, _ in sources):
             entry["status"] = "missing"
             manifest.append(entry)
             continue
-        stat = source.stat()
-        if stat.st_size != item["size"] or abs(stat.st_mtime - item["mtime"]) > 0.01:
+        if any(
+            candidate.stat().st_size != expected_size
+            or abs(candidate.stat().st_mtime - expected_mtime) > 0.01
+            for candidate, expected_size, expected_mtime in sources
+        ):
             entry["status"] = "changed"
             manifest.append(entry)
             continue
         destination = safe_relative_path(batch_root, item["relative_path"], "隔离目标路径")
         entry["quarantine_path"] = destination.relative_to(project.root.resolve()).as_posix()
+        moves = [(source, destination)]
+        if companion:
+            companion_destination = safe_relative_path(
+                batch_root, item["motion_relative_path"], "动态照片隔离目标路径"
+            )
+            entry["companion_quarantine_path"] = companion_destination.relative_to(
+                project.root.resolve()
+            ).as_posix()
+            moves.append((companion, companion_destination))
         manifest.append(entry)
-        prepared.append((entry, item, source, destination))
+        prepared.append((entry, item, moves))
 
     batch_root.mkdir(parents=True, exist_ok=False)
     manifest_path = batch_root / "manifest.json"
@@ -150,27 +199,44 @@ def apply_quarantine(project: Project) -> dict[str, Any]:
             (batch_id, datetime.now().isoformat(timespec="seconds"), str(manifest_path), 0, 0),
         )
         conn.commit()
-        for entry, item, source, destination in prepared:
-            if not source.exists():
+        for entry, item, moves in prepared:
+            if any(not source.exists() for source, _ in moves):
                 entry["status"] = "missing"
                 _atomic_write_json(manifest_path, manifest)
                 continue
-            stat = source.stat()
-            if stat.st_size != item["size"] or abs(stat.st_mtime - item["mtime"]) > 0.01:
+            expected = [
+                (int(item["size"] or 0), float(item["mtime"] or 0)),
+                *(
+                    [(int(item["motion_size"] or 0), float(item["motion_mtime"] or 0))]
+                    if len(moves) > 1
+                    else []
+                ),
+            ]
+            if any(
+                source.stat().st_size != expected_size
+                or abs(source.stat().st_mtime - expected_mtime) > 0.01
+                for (source, _), (expected_size, expected_mtime) in zip(
+                    moves, expected
+                )
+            ):
                 entry["status"] = "changed"
                 _atomic_write_json(manifest_path, manifest)
                 continue
-            destination.parent.mkdir(parents=True, exist_ok=True)
+            moved_paths: list[tuple[Path, Path]] = []
             try:
-                shutil.move(str(source), str(destination))
+                for source, destination in moves:
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(source), str(destination))
+                    moved_paths.append((source, destination))
             except Exception as error:
-                if not source.exists() and destination.exists():
-                    entry["status"] = "moved"
-                else:
-                    entry["status"] = "error"
-                    entry["error"] = str(error)
-                    _atomic_write_json(manifest_path, manifest)
-                    continue
+                for original, moved in reversed(moved_paths):
+                    if moved.exists() and not original.exists():
+                        original.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(moved), str(original))
+                entry["status"] = "error"
+                entry["error"] = str(error)
+                _atomic_write_json(manifest_path, manifest)
+                continue
             else:
                 entry["status"] = "moved"
             _atomic_write_json(manifest_path, manifest)
@@ -205,6 +271,7 @@ def restore_batch(project: Project, batch_id: str) -> dict[str, Any]:
             raise ValueError("隔离清单格式无效")
 
         paths: dict[int, tuple[Path | None, Path, Path | None]] = {}
+        companion_paths: dict[int, tuple[Path | None, Path | None, Path | None]] = {}
         for index, item in enumerate(manifest):
             if not isinstance(item, dict):
                 raise ValueError("隔离清单格式无效")
@@ -218,18 +285,47 @@ def restore_batch(project: Project, batch_id: str) -> dict[str, Any]:
             if item.get("restore_path"):
                 restore_path = safe_relative_path(project.root, item["restore_path"], "已恢复文件路径")
             paths[index] = (source, destination, restore_path)
+            companion_source = companion_destination = companion_restore = None
+            if item.get("companion_relative_path"):
+                companion_destination = safe_relative_path(
+                    project.root, item["companion_relative_path"], "动态照片恢复目标路径"
+                )
+            if item.get("companion_quarantine_path"):
+                companion_source = safe_relative_path(
+                    project.root, item["companion_quarantine_path"], "动态照片隔离文件路径"
+                )
+                if not _is_within(companion_source, batch_root):
+                    raise ValueError("动态照片隔离文件路径超出当前批次")
+            if item.get("companion_restore_path"):
+                companion_restore = safe_relative_path(
+                    project.root, item["companion_restore_path"], "动态照片已恢复文件路径"
+                )
+            companion_paths[index] = (
+                companion_source, companion_destination, companion_restore
+            )
 
         restored = conflicts = missing = 0
         for index, item in enumerate(manifest):
             status = item.get("status")
             source, destination, recorded_restore = paths[index]
+            companion_source, companion_destination, companion_restore = companion_paths[index]
             if status == "restored":
                 if recorded_restore and recorded_restore.exists():
                     target_rel = recorded_restore.relative_to(project.root.resolve()).as_posix()
+                    companion_rel = (
+                        companion_restore.relative_to(project.root.resolve()).as_posix()
+                        if companion_restore and companion_restore.exists()
+                        else ""
+                    )
                     if item.get("photo_id"):
                         conn.execute(
-                            "UPDATE photos SET status='active',relative_path=? WHERE id=?",
-                            (target_rel, int(item["photo_id"])),
+                            """UPDATE photos SET status='active',relative_path=?,
+                                      motion_relative_path=CASE WHEN ?<>'' THEN ? ELSE motion_relative_path END
+                                 WHERE id=?""",
+                            (
+                                target_rel, companion_rel, companion_rel,
+                                int(item["photo_id"]),
+                            ),
                         )
                     conn.commit()
                 continue
@@ -249,24 +345,58 @@ def restore_batch(project: Project, batch_id: str) -> dict[str, Any]:
                 if source is None or not source.exists():
                     missing += 1
                     continue
-                if destination.exists():
+                if companion_source is not None and not companion_source.exists():
+                    missing += 1
+                    continue
+                primary_conflict = destination.exists()
+                companion_conflict = bool(
+                    companion_destination is not None and companion_destination.exists()
+                )
+                if primary_conflict or companion_conflict:
                     suffix = f".restored-{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
-                    destination = destination.with_name(destination.stem + suffix + destination.suffix)
-                    conflicts += 1
+                    destination = destination.with_name(
+                        destination.stem + suffix + destination.suffix
+                    )
+                    if companion_destination is not None:
+                        companion_destination = companion_destination.with_name(
+                            companion_destination.stem + suffix
+                            + companion_destination.suffix
+                        )
+                    conflicts += int(primary_conflict) + int(companion_conflict)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 item["status"] = "restoring"
                 item["restore_path"] = destination.relative_to(project.root.resolve()).as_posix()
+                if companion_destination is not None:
+                    companion_destination.parent.mkdir(parents=True, exist_ok=True)
+                    item["companion_restore_path"] = companion_destination.relative_to(
+                        project.root.resolve()
+                    ).as_posix()
                 _atomic_write_json(manifest_path, manifest)
                 shutil.move(str(source), str(destination))
+                try:
+                    if companion_source is not None and companion_destination is not None:
+                        shutil.move(str(companion_source), str(companion_destination))
+                except Exception:
+                    if destination.exists() and not source.exists():
+                        source.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(destination), str(source))
+                    raise
                 item["status"] = "restored"
                 item.pop("error", None)
                 _atomic_write_json(manifest_path, manifest)
                 restored += 1
             target_rel = destination.relative_to(project.root.resolve()).as_posix()
+            companion_rel = (
+                companion_destination.relative_to(project.root.resolve()).as_posix()
+                if companion_destination is not None
+                else ""
+            )
             if item.get("photo_id"):
                 conn.execute(
-                    "UPDATE photos SET status='active',relative_path=? WHERE id=?",
-                    (target_rel, int(item["photo_id"])),
+                    """UPDATE photos SET status='active',relative_path=?,
+                              motion_relative_path=CASE WHEN ?<>'' THEN ? ELSE motion_relative_path END
+                         WHERE id=?""",
+                    (target_rel, companion_rel, companion_rel, int(item["photo_id"])),
                 )
             else:
                 conn.execute(

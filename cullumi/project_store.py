@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-DATABASE_SCHEMA_VERSION = 1
+DATABASE_SCHEMA_VERSION = 2
 _WAL_CONFIGURED_DATABASES: dict[Path, tuple[int, int]] = {}
 _INITIALIZED_DATABASES: dict[Path, tuple[int, int, int, int]] = {}
 _DATABASE_CONFIGURATION_LOCK = threading.RLock()
@@ -94,7 +94,19 @@ CREATE TABLE IF NOT EXISTS photos (
   sharpness REAL, entropy REAL, phash TEXT, dhash TEXT, sha256 TEXT,
   thumbnail TEXT, error TEXT DEFAULT '', suggestion TEXT DEFAULT 'keep',
   reason TEXT DEFAULT '', decision TEXT DEFAULT '', status TEXT DEFAULT 'active',
-  analyzed_at TEXT
+  analyzed_at TEXT,
+  media_type TEXT NOT NULL DEFAULT 'image',
+  motion_kind TEXT NOT NULL DEFAULT '', motion_relative_path TEXT NOT NULL DEFAULT '',
+  motion_offset INTEGER NOT NULL DEFAULT 0, motion_length INTEGER NOT NULL DEFAULT 0,
+  motion_size INTEGER NOT NULL DEFAULT 0, motion_mtime REAL NOT NULL DEFAULT 0,
+  motion_asset_id TEXT NOT NULL DEFAULT '', motion_error TEXT NOT NULL DEFAULT '',
+  motion_duration_ms INTEGER NOT NULL DEFAULT 0, motion_fps REAL NOT NULL DEFAULT 0,
+  motion_frame_count INTEGER NOT NULL DEFAULT 0,
+  motion_width INTEGER NOT NULL DEFAULT 0, motion_height INTEGER NOT NULL DEFAULT 0,
+  motion_sha256 TEXT NOT NULL DEFAULT '',
+  cover_source TEXT NOT NULL DEFAULT 'still', cover_time_ms INTEGER NOT NULL DEFAULT 0,
+  cover_frame_index INTEGER NOT NULL DEFAULT 0, cover_revision INTEGER NOT NULL DEFAULT 0,
+  quality_score REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_photos_suggestion ON photos(suggestion);
 CREATE INDEX IF NOT EXISTS idx_photos_decision ON photos(decision);
@@ -110,6 +122,29 @@ CREATE TABLE IF NOT EXISTS quarantine_batches (
   total_size INTEGER, restored_at TEXT DEFAULT ''
 );
 """
+
+PHOTO_V2_COLUMNS = {
+    "media_type": "TEXT NOT NULL DEFAULT 'image'",
+    "motion_kind": "TEXT NOT NULL DEFAULT ''",
+    "motion_relative_path": "TEXT NOT NULL DEFAULT ''",
+    "motion_offset": "INTEGER NOT NULL DEFAULT 0",
+    "motion_length": "INTEGER NOT NULL DEFAULT 0",
+    "motion_size": "INTEGER NOT NULL DEFAULT 0",
+    "motion_mtime": "REAL NOT NULL DEFAULT 0",
+    "motion_asset_id": "TEXT NOT NULL DEFAULT ''",
+    "motion_error": "TEXT NOT NULL DEFAULT ''",
+    "motion_duration_ms": "INTEGER NOT NULL DEFAULT 0",
+    "motion_fps": "REAL NOT NULL DEFAULT 0",
+    "motion_frame_count": "INTEGER NOT NULL DEFAULT 0",
+    "motion_width": "INTEGER NOT NULL DEFAULT 0",
+    "motion_height": "INTEGER NOT NULL DEFAULT 0",
+    "motion_sha256": "TEXT NOT NULL DEFAULT ''",
+    "cover_source": "TEXT NOT NULL DEFAULT 'still'",
+    "cover_time_ms": "INTEGER NOT NULL DEFAULT 0",
+    "cover_frame_index": "INTEGER NOT NULL DEFAULT 0",
+    "cover_revision": "INTEGER NOT NULL DEFAULT 0",
+    "quality_score": "REAL NOT NULL DEFAULT 0",
+}
 
 
 def _database_has_user_tables(conn: sqlite3.Connection) -> bool:
@@ -155,11 +190,23 @@ def _initialize_database(
     if current_version == DATABASE_SCHEMA_VERSION:
         return False
     if existed and _database_has_user_tables(conn):
-        _backup_database_for_migration(conn, path, DATABASE_SCHEMA_VERSION)
+        _backup_database_for_migration(conn, path, current_version + 1)
+    existing_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(photos)").fetchall()
+    }
+    additions = ""
+    if existing_columns:
+        additions = "\n".join(
+            f"ALTER TABLE photos ADD COLUMN {name} {declaration};"
+            for name, declaration in PHOTO_V2_COLUMNS.items()
+            if name not in existing_columns
+        )
     try:
         conn.executescript(
             "BEGIN IMMEDIATE;\n"
             + DATABASE_SCHEMA_SQL
+            + "\n"
+            + additions
             + f"\nPRAGMA user_version={DATABASE_SCHEMA_VERSION};\nCOMMIT;"
         )
     except Exception:
@@ -201,6 +248,11 @@ class Project:
     db_path: Path
     thumb_dir: Path
     profile_id: str
+    motion_dir: Path | None = None
+
+    def __post_init__(self) -> None:
+        if self.motion_dir is None:
+            self.motion_dir = self.project_dir / "motion"
 
 
 def project_thumbnail_path(project: Project, stored_path: str | Path) -> Path:
@@ -239,7 +291,12 @@ _ACTIVE_DATABASE_FILES = {"project.db", "project.db-wal", "project.db-shm"}
 
 
 def _is_regenerable_preview(path: Path) -> bool:
-    return ".display-" in path.name or path.name.endswith(".tmp")
+    return (
+        ".display-" in path.name
+        or ".motion-cover-" in path.name
+        or path.suffix.lower() == ".webm"
+        or path.name.endswith(".tmp")
+    )
 
 
 def _migration_file_manifest(root: Path) -> dict[Path, int]:
@@ -307,8 +364,13 @@ class ProjectManager:
         project_dir.mkdir(parents=True, exist_ok=True)
         thumb_dir = project_dir / "thumbs"
         thumb_dir.mkdir(exist_ok=True)
+        motion_dir = project_dir / "motion"
+        motion_dir.mkdir(exist_ok=True)
         profile_id = existing.get("profile_id", "conservative")
-        project = Project(pid, root_path, cache, project_dir, project_dir / "project.db", thumb_dir, profile_id)
+        project = Project(
+            pid, root_path, cache, project_dir, project_dir / "project.db",
+            thumb_dir, profile_id, motion_dir,
+        )
         now = datetime.now().isoformat(timespec="seconds")
         with closing(connect_db(project.db_path)) as conn:
             conn.execute(
@@ -349,6 +411,7 @@ class ProjectManager:
             project_dir / "project.db",
             project_dir / "thumbs",
             data.get("profile_id", "conservative"),
+            project_dir / "motion",
         )
 
     def project_root(self, project_id: str) -> Path:
@@ -430,6 +493,7 @@ class ProjectManager:
             temp / "project.db",
             new_dir / "thumbs",
             project.profile_id,
+            new_dir / "motion",
         )
         destination_was_empty = new_dir.exists()
         installed = False

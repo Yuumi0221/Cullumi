@@ -200,11 +200,7 @@ body:not(.project-open) .icon-button {
   width:22px;
   height:22px;
   flex:0 0 auto;
-  fill:none;
-  stroke:currentColor;
-  stroke-width:1.8;
-  stroke-linecap:round;
-  stroke-linejoin:round;
+  fill:currentColor;
 }
 
 .recent-panel {
@@ -420,9 +416,8 @@ body:not(.project-open) .icon-button {
 
 .recent-more svg {
   display:block;
-  width:18px;
-  height:4px;
-  overflow:visible;
+  width:20px;
+  height:20px;
   fill:currentColor;
 }
 

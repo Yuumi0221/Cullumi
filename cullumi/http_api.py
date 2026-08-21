@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import mimetypes
 import os
+import re
 import secrets
 import sqlite3
 import stat
+import tempfile
 import urllib.parse
 import webbrowser
 from contextlib import closing
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
@@ -24,17 +29,26 @@ from .classification import (
     project_photo_counts,
 )
 from .config import ConfigStore, validate_profile
-from .media import DISPLAY_PREVIEW_EXTENSIONS, ensure_display_preview
+from .media import (
+    DISPLAY_PREVIEW_EXTENSIONS,
+    analyze_photo,
+    ensure_display_preview,
+    ensure_motion_video,
+    extract_motion_frame,
+    motion_asset_from_row,
+    motion_fingerprint,
+)
 from .native_dialogs import choose_csv, choose_directory, choose_save_csv
 from .project_store import (
     ProjectManager,
     connect_db,
     project_id_for,
     project_thumbnail_path,
+    project_thumbnail_storage_path,
     safe_relative_path,
 )
 from .scanner import Scanner
-from .similarity import SimilarityGroupCache, build_similarity_groups
+from .similarity import SimilarityGroupCache, build_similarity_groups, quality_score
 from .updates import RELEASES_PAGE_URL, check_for_update, download_release_asset
 from .workflows import (
     apply_quarantine,
@@ -63,6 +77,7 @@ GET_ROUTES = {
     "/api/similar-group": "api_similar_group",
     "/api/thumb": "api_thumb",
     "/api/photo": "api_photo",
+    "/api/motion/video": "api_motion_video",
     "/api/quarantine/preview": "api_quarantine_preview",
     "/api/quarantine/batches": "api_batches",
 }
@@ -84,6 +99,8 @@ POST_ROUTES = {
     "/api/decision": "api_decision",
     "/api/decision/ai-remove": "api_decision_ai_remove",
     "/api/decision/clear": "api_decision_clear",
+    "/api/motion/cover": "api_motion_cover",
+    "/api/motion/recommend": "api_motion_recommend",
     "/api/settings": "api_settings",
     "/api/profile/save": "api_profile_save",
     "/api/profile/delete": "api_profile_delete",
@@ -120,8 +137,27 @@ def json_safe_row(row: Any) -> dict[str, Any]:
 def photo_payload(project_id: str, row: Any) -> dict[str, Any]:
     data = json_safe_row(row)
     data["project_id"] = project_id
-    data["thumb_url"] = f"/api/thumb?project_id={project_id}&id={row['id']}&token={TOKEN}"
-    data["photo_url"] = f"/api/photo?project_id={project_id}&id={row['id']}&token={TOKEN}"
+    revision = int(row["cover_revision"] or 0)
+    suffix = f"&v={revision}"
+    data["thumb_url"] = f"/api/thumb?project_id={project_id}&id={row['id']}&token={TOKEN}{suffix}"
+    data["photo_url"] = f"/api/photo?project_id={project_id}&id={row['id']}&token={TOKEN}{suffix}"
+    if row["media_type"] == "motion_photo":
+        data["motion"] = {
+            "kind": row["motion_kind"],
+            "duration_ms": int(row["motion_duration_ms"] or 0),
+            "fps": float(row["motion_fps"] or 0),
+            "frame_count": int(row["motion_frame_count"] or 0),
+            "width": int(row["motion_width"] or 0),
+            "height": int(row["motion_height"] or 0),
+            "cover_source": row["cover_source"],
+            "cover_time_ms": int(row["cover_time_ms"] or 0),
+            "cover_frame_index": int(row["cover_frame_index"] or 0),
+            "error": row["motion_error"],
+            "video_url": (
+                f"/api/motion/video?project_id={project_id}&id={row['id']}"
+                f"&token={TOKEN}{suffix}"
+            ),
+        }
     return data
 
 
@@ -262,6 +298,58 @@ class Handler(BaseHTTPRequestHandler):
                     remaining -= len(chunk)
             except ConnectionError:
                 # The client closed the connection while a large file was streaming.
+                return
+
+    def _send_range_file(self, path: Path, content_type: str) -> None:
+        try:
+            source = path.open("rb")
+        except (FileNotFoundError, IsADirectoryError, PermissionError):
+            self.send_error(404)
+            return
+        with source:
+            size = os.fstat(source.fileno()).st_size
+            start, end = 0, max(0, size - 1)
+            range_header = self.headers.get("Range", "")
+            partial = False
+            if range_header:
+                match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
+                if not match or not size:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.end_headers()
+                    return
+                left, right = match.groups()
+                if not left:
+                    length = int(right or 0)
+                    start = max(0, size - length)
+                else:
+                    start = int(left)
+                    end = min(end, int(right)) if right else end
+                if start >= size or start > end:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.end_headers()
+                    return
+                partial = True
+            length = end - start + 1
+            self.send_response(206 if partial else 200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(length))
+            if partial:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.end_headers()
+            source.seek(start)
+            remaining = length
+            try:
+                while remaining:
+                    block = source.read(min(FILE_RESPONSE_CHUNK_SIZE, remaining))
+                    if not block:
+                        break
+                    self.wfile.write(block)
+                    remaining -= len(block)
+            except ConnectionError:
                 return
 
     def _body(self) -> dict[str, Any]:
@@ -467,6 +555,21 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_photo(self) -> None:
         project, row = self._photo_row()
+        if (
+            hasattr(row, "keys") and "media_type" in row.keys()
+            and row["media_type"] == "motion_photo"
+            and row["cover_source"] == "motion"
+        ):
+            asset = motion_asset_from_row(project.root, row)
+            motion_dir = project.motion_dir or project.project_dir / "motion"
+            video = ensure_motion_video(asset, motion_dir)
+            preview = motion_dir / (
+                f"{motion_fingerprint(asset)}.motion-cover-{int(row['cover_time_ms'])}.jpg"
+            )
+            if not preview.is_file():
+                extract_motion_frame(video, int(row["cover_time_ms"]), preview)
+            self._send_file(preview, "image/jpeg")
+            return
         path = safe_relative_path(project.root, row["relative_path"], "照片路径")
         if path.suffix.lower() not in DISPLAY_PREVIEW_EXTENSIONS:
             self._send_file(path)
@@ -479,6 +582,155 @@ class Handler(BaseHTTPRequestHandler):
             # broken viewer if the source becomes temporarily unavailable.
             preview = thumbnail
         self._send_file(preview, "image/jpeg")
+
+    def api_motion_video(self) -> None:
+        project, row = self._photo_row()
+        if row["media_type"] != "motion_photo":
+            raise ValueError("该照片不是动态照片")
+        if row["motion_error"]:
+            raise ValueError(f"动态部分不可用：{row['motion_error']}")
+        asset = motion_asset_from_row(project.root, row)
+        motion_dir = project.motion_dir or project.project_dir / "motion"
+        video = ensure_motion_video(asset, motion_dir)
+        self._send_range_file(video, "video/webm")
+
+    def api_motion_cover(self, body: dict[str, Any]) -> None:
+        pid = str(body["project_id"])
+        photo_id = int(body["photo_id"])
+        source = str(body.get("source", "motion"))
+        if source not in {"still", "motion"}:
+            raise ValueError("封面来源无效")
+        project = MANAGER.from_id(pid)
+        profile = CONFIG.get_profile(project.profile_id)
+        with MANAGER.data_operation(pid), SCANNER.project_operation(pid, "修改动态照片封面"):
+            with closing(connect_db(project.db_path)) as conn:
+                row = conn.execute(
+                    "SELECT * FROM photos WHERE id=? AND status='active'", (photo_id,)
+                ).fetchone()
+                if not row or row["media_type"] != "motion_photo":
+                    raise ValueError("动态照片不存在")
+                revision = int(row["cover_revision"] or 0) + 1
+                thumb_name = (
+                    f"{hashlib.sha1(str(row['relative_path']).encode('utf-8')).hexdigest()}"
+                    f".cover-{revision}.jpg"
+                )
+                new_thumb = project.thumb_dir / thumb_name
+                time_ms = 0
+                frame_index = 0
+                if source == "motion":
+                    time_ms = int(body.get("time_ms", -1))
+                    duration = int(row["motion_duration_ms"] or 0)
+                    if duration <= 0 or time_ms < 0 or time_ms > duration:
+                        raise ValueError("所选封面时间超出动态照片范围")
+                    fps = float(row["motion_fps"] or 0)
+                    frame_duration_ms = max(1, math.ceil(1000 / fps)) if fps > 0 else 1
+                    time_ms = min(time_ms, max(0, duration - frame_duration_ms))
+                    asset = motion_asset_from_row(project.root, row)
+                    motion_dir = project.motion_dir or project.project_dir / "motion"
+                    video = ensure_motion_video(asset, motion_dir)
+                    frame = motion_dir / (
+                        f"{motion_fingerprint(asset)}.motion-cover-{time_ms}.jpg"
+                    )
+                    extract_motion_frame(video, time_ms, frame)
+                    metrics = analyze_photo(frame, new_thumb)
+                    frame_index = round(time_ms * fps / 1000)
+                else:
+                    original = safe_relative_path(
+                        project.root, row["relative_path"], "照片路径"
+                    )
+                    metrics = analyze_photo(original, new_thumb)
+                if metrics["error"]:
+                    new_thumb.unlink(missing_ok=True)
+                    raise RuntimeError(metrics["error"])
+                values = dict(metrics)
+                values.update({
+                    "extension": row["extension"], "size": row["size"],
+                    "mtime": row["mtime"], "taken": row["taken"],
+                    "cover_source": source, "cover_time_ms": time_ms,
+                    "cover_frame_index": frame_index,
+                    "thumbnail": project_thumbnail_storage_path(new_thumb),
+                    "quality_score": 0,
+                })
+                values["quality_score"] = round(
+                    max(0.0, min(1.0, quality_score(values, profile))) * 100, 1
+                )
+                values["suggestion"], values["reason"] = classify(values, profile)
+                metric_columns = (
+                    "width", "height", "megapixels", "luminance", "contrast",
+                    "dark_clip", "bright_clip", "sharpness", "entropy", "phash",
+                    "dhash", "thumbnail", "suggestion", "reason", "quality_score",
+                    "cover_source", "cover_time_ms", "cover_frame_index",
+                )
+                assignments = ",".join(f"{column}=?" for column in metric_columns)
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
+                    conn.execute(
+                        f"UPDATE photos SET {assignments},cover_revision=?,analyzed_at=? WHERE id=?",
+                        [
+                            *[values[column] for column in metric_columns],
+                            revision,
+                            datetime.now().isoformat(timespec="microseconds"),
+                            photo_id,
+                        ],
+                    )
+                    SCANNER.reclassify(project, conn, profile, commit=False)
+                    SCANNER.rebuild_similarity(project, conn, profile, commit=False)
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    new_thumb.unlink(missing_ok=True)
+                    raise
+                updated = conn.execute(
+                    "SELECT * FROM photos WHERE id=?", (photo_id,)
+                ).fetchone()
+                project_counts = project_photo_counts(conn)
+        SIMILARITY_GROUPS.invalidate(pid)
+        self._send_json({
+            "saved": True,
+            "photo": photo_payload(pid, updated),
+            "project_counts": project_counts,
+        })
+
+    def api_motion_recommend(self, body: dict[str, Any]) -> None:
+        pid = str(body["project_id"])
+        photo_id = int(body["photo_id"])
+        project = MANAGER.from_id(pid)
+        profile = CONFIG.get_profile(project.profile_id)
+        with closing(connect_db(project.db_path)) as conn:
+            row = conn.execute(
+                "SELECT * FROM photos WHERE id=? AND status='active'", (photo_id,)
+            ).fetchone()
+        if not row or row["media_type"] != "motion_photo":
+            raise ValueError("动态照片不存在")
+        duration = int(row["motion_duration_ms"] or 0)
+        if duration <= 0:
+            raise ValueError("动态照片时长无效")
+        asset = motion_asset_from_row(project.root, row)
+        motion_dir = project.motion_dir or project.project_dir / "motion"
+        video = ensure_motion_video(asset, motion_dir)
+        count = min(15, max(2, int(row["motion_frame_count"] or 2)))
+        times = {round(index * max(0, duration - 1) / (count - 1)) for index in range(count)}
+        if row["cover_source"] == "motion":
+            times.add(int(row["cover_time_ms"] or 0))
+        candidates = []
+        with tempfile.TemporaryDirectory() as temporary:
+            temp_root = Path(temporary)
+            for index, time_ms in enumerate(sorted(times)):
+                frame = temp_root / f"frame-{index}.jpg"
+                thumb = temp_root / f"thumb-{index}.jpg"
+                extract_motion_frame(video, time_ms, frame)
+                metrics = analyze_photo(frame, thumb)
+                metrics.update({"cover_source": "motion", "size": row["size"]})
+                score = round(
+                    max(0.0, min(1.0, quality_score(metrics, profile))) * 100, 1
+                )
+                candidates.append({
+                    "time_ms": time_ms,
+                    "frame_index": round(time_ms * float(row["motion_fps"] or 0) / 1000),
+                    "quality_score": score,
+                })
+        recommended = max(candidates, key=lambda item: (item["quality_score"], -item["time_ms"]))
+        self._send_json({"recommended": recommended, "candidates": candidates})
 
     def api_quarantine_preview(self) -> None:
         pid = self._query().get("project_id", [""])[0]

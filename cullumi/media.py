@@ -4,7 +4,11 @@ import hashlib
 import io
 import math
 import os
+import re
+import subprocess
+import tempfile
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +42,226 @@ VIDEO_EXTENSIONS = {
     ".mov", ".mp4", ".m4v", ".avi", ".mkv", ".wmv", ".mts", ".m2ts",
     ".3gp", ".webm",
 }
+
+
+@dataclass(frozen=True)
+class MotionAsset:
+    kind: str
+    path: Path
+    offset: int = 0
+    length: int = 0
+    asset_id: str = ""
+
+    def storage_values(self, root: Path) -> dict[str, Any]:
+        stat = self.path.stat()
+        relative = self.path.relative_to(root).as_posix()
+        return {
+            "media_type": "motion_photo",
+            "motion_kind": self.kind,
+            "motion_relative_path": relative,
+            "motion_offset": self.offset,
+            "motion_length": self.length,
+            "motion_size": self.length or stat.st_size,
+            "motion_mtime": stat.st_mtime,
+            "motion_asset_id": self.asset_id,
+        }
+
+
+def _xmp_prefix(path: Path, limit: int = 2 * 1024 * 1024) -> str:
+    with path.open("rb") as source:
+        return source.read(limit).decode("utf-8", "ignore")
+
+
+def embedded_motion_asset(path: Path) -> MotionAsset | None:
+    """Read standard Google/Samsung Motion Photo XMP without signature guessing."""
+    if path.suffix.lower() not in {".jpg", ".jpeg"}:
+        return None
+    try:
+        xmp = _xmp_prefix(path)
+        marked = re.search(
+            r"(?:GCamera|Camera|Samsung):(?:MotionPhoto|MicroVideo)\s*=\s*[\"']1[\"']",
+            xmp,
+            re.IGNORECASE,
+        )
+        if not marked:
+            return None
+        legacy = re.search(
+            r"(?:MicroVideoOffset|MotionPhotoOffset)\s*=\s*[\"'](\d+)[\"']",
+            xmp,
+            re.IGNORECASE,
+        )
+        length = int(legacy.group(1)) if legacy else 0
+        if not length:
+            for element in re.findall(r"<[^>]+>", xmp):
+                if re.search(r"Semantic\s*=\s*[\"']MotionPhoto[\"']", element, re.I):
+                    found = re.search(r"Length\s*=\s*[\"'](\d+)[\"']", element, re.I)
+                    if found:
+                        length = int(found.group(1))
+                        break
+        size = path.stat().st_size
+        if length <= 0 or length >= size:
+            return None
+        return MotionAsset("android_embedded", path, size - length, length)
+    except (OSError, ValueError):
+        return None
+
+
+def paired_motion_asset(photo: Path, sidecars: dict[tuple[Path, str], Path]) -> MotionAsset | None:
+    embedded = embedded_motion_asset(photo)
+    if embedded:
+        return embedded
+    key = (photo.parent.resolve(), photo.stem.casefold())
+    sidecar = sidecars.get(key)
+    if sidecar and sidecar.resolve() != photo.resolve():
+        return MotionAsset("apple_sidecar", sidecar)
+    return None
+
+
+def motion_asset_from_row(root: Path, row: Any) -> MotionAsset:
+    relative = str(row["motion_relative_path"] or row["relative_path"])
+    path = (root / Path(relative)).resolve()
+    if path != root.resolve() and root.resolve() not in path.parents:
+        raise ValueError("动态照片视频路径超出项目目录")
+    return MotionAsset(
+        str(row["motion_kind"]),
+        path,
+        int(row["motion_offset"] or 0),
+        int(row["motion_length"] or 0),
+        str(row["motion_asset_id"] or ""),
+    )
+
+
+def ffmpeg_executable() -> str:
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception as error:
+        raise RuntimeError("动态照片视频组件未安装") from error
+
+
+def _motion_input(asset: MotionAsset):
+    if not asset.offset:
+        return None, asset.path
+    temporary = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+    temporary_path = Path(temporary.name)
+    try:
+        with asset.path.open("rb") as source:
+            source.seek(asset.offset)
+            remaining = asset.length
+            while remaining:
+                block = source.read(min(1024 * 1024, remaining))
+                if not block:
+                    break
+                temporary.write(block)
+                remaining -= len(block)
+    finally:
+        temporary.close()
+    return temporary_path, temporary_path
+
+
+def probe_motion(asset: MotionAsset) -> dict[str, Any]:
+    temporary, input_path = _motion_input(asset)
+    try:
+        result = subprocess.run(
+            [ffmpeg_executable(), "-hide_banner", "-i", str(input_path)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        output = result.stderr
+        duration_match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", output)
+        video_match = re.search(
+            r"Stream[^\n]*Video:[^\n]*?\b(\d{2,5})x(\d{2,5})\b[^\n]*?(\d+(?:\.\d+)?)\s*fps",
+            output,
+        )
+        if not duration_match or not video_match:
+            raise RuntimeError("无法读取动态照片的视频信息")
+        hours, minutes, seconds = duration_match.groups()
+        duration = (int(hours) * 3600 + int(minutes) * 60 + float(seconds))
+        fps = float(video_match.group(3))
+        asset_id_match = re.search(
+            r"com\.apple\.quicktime\.content\.identifier\s*:\s*([^\r\n]+)", output,
+            re.I,
+        )
+        return {
+            "motion_duration_ms": max(1, round(duration * 1000)),
+            "motion_fps": fps,
+            "motion_frame_count": max(1, round(duration * fps)),
+            "motion_width": int(video_match.group(1)),
+            "motion_height": int(video_match.group(2)),
+            "motion_asset_id": asset_id_match.group(1).strip() if asset_id_match else asset.asset_id,
+            "motion_error": "",
+        }
+    finally:
+        if temporary:
+            temporary.unlink(missing_ok=True)
+
+
+def motion_fingerprint(asset: MotionAsset) -> str:
+    stat = asset.path.stat()
+    payload = f"{asset.path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{asset.offset}:{asset.length}"
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:20]
+
+
+def ensure_motion_video(asset: MotionAsset, motion_dir: Path) -> Path:
+    motion_dir.mkdir(parents=True, exist_ok=True)
+    target = motion_dir / f"{motion_fingerprint(asset)}.webm"
+    if target.is_file() and target.stat().st_size:
+        return target
+    temporary_source, input_path = _motion_input(asset)
+    temporary_target = target.with_name(f"{target.name}.{uuid.uuid4().hex}.tmp.webm")
+    try:
+        command = [
+            ffmpeg_executable(), "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(input_path), "-map", "0:v:0", "-an", "-c:v", "libvpx-vp9",
+            "-crf", "34", "-b:v", "0", "-deadline", "good", "-cpu-used", "4",
+            str(temporary_target),
+        ]
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            timeout=120,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if completed.returncode or not temporary_target.is_file() or not temporary_target.stat().st_size:
+            message = completed.stderr.decode("utf-8", "replace").strip()
+            raise RuntimeError(message or "动态照片视频转换失败")
+        temporary_target.replace(target)
+        return target
+    finally:
+        temporary_target.unlink(missing_ok=True)
+        if temporary_source:
+            temporary_source.unlink(missing_ok=True)
+
+
+def extract_motion_frame(video: Path, time_ms: int, target: Path) -> Path:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f"{target.name}.{uuid.uuid4().hex}.tmp.jpg")
+    try:
+        completed = subprocess.run(
+            [
+                ffmpeg_executable(), "-y", "-hide_banner", "-loglevel", "error",
+                "-i", str(video), "-ss", f"{time_ms / 1000:.3f}",
+                "-frames:v", "1", "-q:v", "2", str(temporary),
+            ],
+            capture_output=True,
+            timeout=30,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if completed.returncode or not temporary.is_file():
+            message = completed.stderr.decode("utf-8", "replace").strip()
+            raise RuntimeError(message or "无法提取动态照片封面")
+        temporary.replace(target)
+        return target
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _dct_matrix(n: int) -> np.ndarray:

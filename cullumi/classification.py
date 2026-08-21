@@ -12,6 +12,11 @@ PHOTO_ANALYSIS_COLUMNS = (
     "megapixels", "taken", "luminance", "contrast", "dark_clip",
     "bright_clip", "sharpness", "entropy", "phash", "dhash", "sha256",
     "thumbnail", "error", "suggestion", "reason", "status", "analyzed_at",
+    "media_type", "motion_kind", "motion_relative_path", "motion_offset",
+    "motion_length", "motion_size", "motion_mtime", "motion_asset_id",
+    "motion_error", "motion_duration_ms", "motion_fps", "motion_frame_count",
+    "motion_width", "motion_height", "motion_sha256", "cover_source",
+    "cover_time_ms", "cover_frame_index", "cover_revision", "quality_score",
 )
 PHOTO_UPSERT_SQL = f"""INSERT INTO photos({','.join(PHOTO_ANALYSIS_COLUMNS)})
     VALUES({','.join('?' for _ in PHOTO_ANALYSIS_COLUMNS)})
@@ -151,9 +156,15 @@ def classify(row: sqlite3.Row | dict[str, Any], profile: dict[str, Any], percent
     flag("entropy", q["entropy_remove"] <= row["entropy"] < q["entropy_review"], False, "细节偏少")
     flag("resolution", row["megapixels"] < q["min_megapixels_remove"], True, "分辨率过低")
     flag("resolution", q["min_megapixels_remove"] <= row["megapixels"] < q["min_megapixels_review"], False, "分辨率偏低")
-    size_kb = row["size"] / 1024
-    flag("file_size", size_kb < q["min_size_kb_remove"], True, "文件异常小")
-    flag("file_size", q["min_size_kb_remove"] <= size_kb < q["min_size_kb_review"], False, "文件较小")
+    cover_source = (
+        row["cover_source"]
+        if hasattr(row, "keys") and "cover_source" in row.keys()
+        else "still"
+    )
+    if cover_source != "motion":
+        size_kb = row["size"] / 1024
+        flag("file_size", size_kb < q["min_size_kb_remove"], True, "文件异常小")
+        flag("file_size", q["min_size_kb_remove"] <= size_kb < q["min_size_kb_review"], False, "文件较小")
     match_all = q.get("match_mode") == "all"
     if reasons_remove and (not match_all or len(reasons_remove) >= 2):
         return "remove", "、".join(dict.fromkeys(reasons_remove))
@@ -177,4 +188,3 @@ def classification_percentiles(
             np.percentile(sharp, profile["quality"].get("blur_review_percentile", 5))
         ),
     }
-

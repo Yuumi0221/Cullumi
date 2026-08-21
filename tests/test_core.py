@@ -348,6 +348,52 @@ class CullumiTests(unittest.TestCase):
         self.assertEqual(progress["video_count"], 1)
         self.assertEqual(progress["unsupported_extensions"], {".mov": 1})
 
+    def test_live_photo_pair_is_one_photo_and_quarantines_both_assets(self):
+        self.make_photo("IMG_0042.JPG")
+        companion = self.photos / "IMG_0042.MOV"
+        companion.write_bytes(b"live-photo-video")
+        metadata = {
+            "motion_duration_ms": 1500,
+            "motion_fps": 30.0,
+            "motion_frame_count": 45,
+            "motion_width": 640,
+            "motion_height": 480,
+            "motion_asset_id": "asset-42",
+            "motion_error": "",
+        }
+        scanner = Scanner(self.config, self.manager)
+        with mock.patch("cullumi.scanner.probe_motion", return_value=metadata):
+            scanner.start(self.project.project_id)
+            scanner.threads[self.project.project_id].join(20)
+        progress = scanner.get_progress(self.project.project_id)
+        self.assertEqual(progress["stage"], "complete", progress)
+        self.assertEqual(progress["total"], 1)
+        self.assertEqual(progress["video_count"], 0)
+
+        conn = connect_db(self.project.db_path)
+        row = conn.execute("SELECT * FROM photos").fetchone()
+        self.assertEqual(row["media_type"], "motion_photo")
+        self.assertEqual(row["motion_kind"], "apple_sidecar")
+        self.assertEqual(row["motion_relative_path"], "IMG_0042.MOV")
+        conn.execute("UPDATE photos SET decision='remove' WHERE id=?", (row["id"],))
+        conn.commit()
+        conn.close()
+
+        preview = quarantine_preview(self.project)
+        self.assertEqual(preview["count"], 1)
+        self.assertEqual(
+            preview["total_size"],
+            (self.photos / "IMG_0042.JPG").stat().st_size + len(b"live-photo-video"),
+        )
+        batch = apply_quarantine(self.project)
+        self.assertFalse((self.photos / "IMG_0042.JPG").exists())
+        self.assertFalse(companion.exists())
+
+        restored = restore_batch(self.project, batch["batch_id"])
+        self.assertEqual(restored["restored"], 1)
+        self.assertTrue((self.photos / "IMG_0042.JPG").exists())
+        self.assertTrue(companion.exists())
+
     def test_discovery_aggregates_supported_and_unsupported_files(self):
         self.make_photo("photo.jpg")
         (self.photos / "notes.txt").write_text("notes", encoding="utf-8")

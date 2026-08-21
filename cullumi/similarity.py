@@ -232,8 +232,15 @@ def build_similarity_groups(
                     confidence[neighbor] = candidate
                     heapq.heappush(pending, (-candidate, neighbor))
 
-        hashes = {str(row["sha256"]) for row in members if row["sha256"]}
-        exact = len(hashes) == 1 and bool(hashes) and all(row["sha256"] for row in members)
+        hashes = {
+            (str(row["sha256"]), str(row["motion_sha256"] or ""))
+            for row in members if row["sha256"]
+        }
+        exact = (
+            len(hashes) == 1
+            and bool(hashes)
+            and all(row["sha256"] for row in members)
+        )
         ordered = sorted(members, key=lambda row: shooting_keys[int(row["id"])])
         stable_ids = ",".join(str(photo_id) for photo_id in sorted(member_ids))
         group_id = "sg-" + hashlib.sha1(stable_ids.encode("ascii")).hexdigest()[:16]
