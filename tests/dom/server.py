@@ -7,7 +7,7 @@ import urllib.parse
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -33,13 +33,16 @@ def run() -> None:
         application = http_api.ApplicationContext(
             config, manager, scanner, groups, token, ROOT / "web"
         )
+
         class DomTestHandler(http_api.Handler):
             def do_POST(self) -> None:
                 parsed = urllib.parse.urlparse(self.path)
                 if parsed.path != "/__shutdown__":
                     super().do_POST()
                     return
-                supplied = urllib.parse.parse_qs(parsed.query).get("token", [""])[0]
+                supplied = urllib.parse.parse_qs(parsed.query).get(
+                    "token", [""]
+                )[0]
                 if supplied != token:
                     self._send_json({"error": "未授权"}, 403)
                     return

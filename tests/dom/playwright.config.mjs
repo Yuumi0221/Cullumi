@@ -8,7 +8,7 @@ const root = path.resolve(here, "../..");
 const port = Number(process.env.CULLUMI_DOM_PORT || 4173);
 const token = process.env.CULLUMI_DOM_TOKEN || "cullumi-dom-test";
 const python = process.env.CULLUMI_PYTHON || path.join(root, ".venv", "Scripts", "python.exe");
-const server = path.join(root, "tests", "dom_server.py");
+const server = path.join(here, "server.py");
 const quoted = value => `"${value.replaceAll('"', '\\"')}"`;
 
 export default defineConfig({

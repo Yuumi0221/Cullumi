@@ -2,7 +2,6 @@
   "name": "cullumi-ui-tests",
   "private": true,
   "scripts": {
-    "test": "npm run test:dom",
     "test:dom": "playwright test --config tests/dom/playwright.config.mjs"
   },
   "devDependencies": {

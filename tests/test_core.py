@@ -14,7 +14,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageOps
 
 import cullumi.scanner as scanner_module
-from cullumi import __version__
+from cullumi import __version__, core
 from cullumi.classification import (
     PHOTO_AI_FILTERS,
     PHOTO_DECISION_FILTERS,
@@ -22,6 +22,7 @@ from cullumi.classification import (
     parse_photo_filter,
     photo_filter_where,
     photo_library_counts,
+    project_photo_counts,
 )
 from cullumi.config import BUILTIN_PROFILES, ConfigStore, validate_profile
 from cullumi.media import HEIF_EXTENSIONS, analyze_photo, open_heif, open_image
@@ -114,6 +115,46 @@ class CullumiTests(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "disk full"):
                 self.config.delete_custom_profile(saved["id"])
         self.assertIn(saved["id"], self.config.data["custom_profiles"])
+
+    def test_former_core_exports_still_point_to_their_owners(self):
+        self.assertIs(core.ConfigStore, ConfigStore)
+        self.assertIs(core.ProjectManager, ProjectManager)
+        self.assertIs(core.connect_db, connect_db)
+        self.assertIs(core.DiscoveryResult, DiscoveryResult)
+        self.assertIs(core.Scanner, Scanner)
+        self.assertIs(core.project_photo_counts, project_photo_counts)
+
+    def test_exact_duplicate_stage_honors_cancellation_before_hashing(self):
+        scanner = Scanner(mock.Mock(), mock.Mock())
+        project = mock.Mock()
+        connection = mock.Mock()
+        cancel = threading.Event()
+        cancel.set()
+        scanner._exact_hashes = mock.Mock()
+
+        with self.assertRaises(ScanCancelled):
+            scanner._confirm_exact_duplicates(
+                "project", project, connection, 0, cancel
+            )
+
+        scanner._exact_hashes.assert_not_called()
+
+    def test_relationship_stage_honors_cancellation_before_rebuild(self):
+        scanner = Scanner(mock.Mock(), mock.Mock())
+        project = mock.Mock()
+        connection = mock.Mock()
+        cancel = threading.Event()
+        cancel.set()
+        scanner.rebuild_similarity = mock.Mock()
+        scanner.reclassify = mock.Mock()
+
+        with self.assertRaises(ScanCancelled):
+            scanner._rebuild_relationships(
+                "project", project, connection, {}, cancel
+            )
+
+        scanner.rebuild_similarity.assert_not_called()
+        scanner.reclassify.assert_not_called()
 
     def test_heif_phone_variants_use_tolerant_decoder(self):
         self.assertIsNotNone(open_heif)

@@ -88,15 +88,23 @@ python -m venv .venv
 .\.venv\Scripts\python.exe app.py
 ```
 
-运行完整开发检查前，还需要安装 Node.js 20 及以上版本和 Microsoft Edge。
+安装开发依赖并运行核心检查。
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-npm ci
 .\verify.ps1
 ```
 
-`verify.ps1` 会依次运行 Ruff、Python 测试、眨眼模型校验和 Edge Playwright。浏览器测试使用隔离的临时配置和模拟接口数据，失败产物会写入 `test-results\` 与 `playwright-report\`。
+`verify.ps1` 默认运行 Ruff 和全部 Python 测试，眨眼模型校验已包含在 Python 测试中。
+
+如需额外运行浏览器交互和视觉检查，再安装 Node.js 20 及以上版本和 Microsoft Edge：
+
+```powershell
+npm ci
+.\verify.ps1 -Browser
+```
+
+可选浏览器测试使用隔离的临时配置和模拟接口数据，失败产物会写入 `test-results\` 与 `playwright-report\`。也可以单独执行 `npm run test:dom`。
 
 不少于 300 张、60 组授权连拍的真实眨眼评估流程见 `evaluation/README.md`。评估工具会输出逐人脸预测、精确率、召回率、组推荐成功率以及 P50 和 P95 性能报告。
 
