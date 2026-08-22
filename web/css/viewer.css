@@ -3,8 +3,8 @@
 .viewer {
   border:0;
   padding:0;
-  background:#160f12bb;
-  color:#fff;
+  background:var(--bg);
+  color:var(--ink);
   width:100vw;
   height:100vh;
   max-width:none;
@@ -12,7 +12,7 @@
 }
 
 .viewer::backdrop {
-  background:#151013ef
+  background:color-mix(in srgb,var(--bg) 88%,transparent)
 }
 
 .viewer figure {
@@ -94,15 +94,6 @@
 .keep {
   background:var(--keep);
   color:#fff
-}
-
-.viewer {
-  color: var(--ink);
-  background: var(--bg);
-}
-
-.viewer::backdrop {
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
 }
 
 .viewer .viewer-title-line {

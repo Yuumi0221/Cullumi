@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import urllib.parse
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -32,7 +33,21 @@ def run() -> None:
         application = http_api.ApplicationContext(
             config, manager, scanner, groups, token, ROOT / "web"
         )
-        server = ThreadingHTTPServer(("127.0.0.1", port), http_api.Handler)
+        class DomTestHandler(http_api.Handler):
+            def do_POST(self) -> None:
+                parsed = urllib.parse.urlparse(self.path)
+                if parsed.path != "/__shutdown__":
+                    super().do_POST()
+                    return
+                supplied = urllib.parse.parse_qs(parsed.query).get("token", [""])[0]
+                if supplied != token:
+                    self._send_json({"error": "未授权"}, 403)
+                    return
+                self._send_json({"stopped": True})
+                self.server.shutdown()
+
+        server = ThreadingHTTPServer(("127.0.0.1", port), DomTestHandler)
+        server.daemon_threads = True
         server.application = application
         print(f"DOM test server ready on {port}", flush=True)
         try:

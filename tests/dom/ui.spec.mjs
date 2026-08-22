@@ -181,7 +181,7 @@ async function installApi(page, options = {}) {
     if (url.pathname === "/api/settings") {
       if (body.motion_cover_writeback) writebackMode = body.motion_cover_writeback;
       if (typeof body.blink_detection_enabled === "boolean") blinkEnabled = body.blink_detection_enabled;
-      return fulfill({ saved: true, settings: { theme: body.theme || "day", motion_cover_writeback: writebackMode, blink_detection_enabled: blinkEnabled } });
+      return fulfill({ saved: true, settings: { theme: body.theme || "day", motion_cover_writeback: writebackMode, blink_detection_enabled: blinkEnabled }, blink_rescan_required: blinkEnabled && !!options.blinkRescanRequired });
     }
     if (url.pathname === "/api/choose-cache") {
       return fulfill({ path: "D:\\新缓存" });
@@ -286,7 +286,7 @@ test("首页加载全部脚本并异步渲染最近项目", async ({ page }) => 
   const scripts = await page.locator("script[src]").evaluateAll(nodes =>
     nodes.map(node => new URL(node.src).pathname.split("/").pop())
   );
-  expect(scripts).toEqual(["runtime.js", "session.js", "similar.js", "settings.js", "gallery.js", "app.js"]);
+  expect(scripts).toEqual(["runtime.js", "session.js", "similar.js", "settings.js", "gallery.js", "viewer.js", "app.js"]);
 
   await page.locator("#recentSearch").fill("不存在的项目");
   await expect(page.locator("#recentList")).toContainText("没有匹配的项目");
@@ -345,8 +345,8 @@ test("自定义模式恢复按钮使用统一图标并停留在字段标题行",
   expect(positions.resetBottom).toBeLessThanOrEqual(positions.fieldTop);
 });
 
-test("眨眼检测开关和自定义模式阈值可以编辑及单项重置", async ({ page }) => {
-  const requests = await openApp(page);
+test("眨眼检测重新开启时按项目状态提示需要重新扫描", async ({ page }) => {
+  const requests = await openApp(page, { blinkRescanRequired: true });
   await openProject(page);
   await page.locator("#settingsBtn").click();
 
@@ -354,7 +354,13 @@ test("眨眼检测开关和自定义模式阈值可以编辑及单项重置", as
   await expect(toggle).toBeChecked();
   await page.locator('label[aria-label="启用眨眼检测"]').click();
   await expect(toggle).not.toBeChecked();
+  await expect(page.locator("#blinkRescanStatus")).toBeHidden();
   await expect.poll(() => requests.findLast(request => request.path === "/api/settings")?.body?.blink_detection_enabled).toBe(false);
+  await page.locator('label[aria-label="启用眨眼检测"]').click();
+  await expect(toggle).toBeChecked();
+  await expect(page.locator("#blinkRescanStatus")).toHaveText("需要重新扫描");
+  await expect(page.locator("#blinkRescanStatus")).toBeVisible();
+  await expect.poll(() => requests.findLast(request => request.path === "/api/settings")?.body?.project_id).toBe("project-1");
 
   await page.locator('[data-setting="profiles"]').click();
   const threshold = page.locator('[data-p="similarity.blink.face_confidence_min"]');
@@ -372,8 +378,9 @@ test("眨眼作为问题显示在非推荐照片的信息行并隐藏文件信�
   await page.locator('[data-nav="similar"]').click();
   await page.locator('[data-similar-group="similar-1"]').click();
 
-  await expect(page.locator('[data-photo-id="1"]')).not.toContainText("眨眼");
-  const candidate = page.locator('[data-photo-id="2"]');
+  const detail = page.locator("#similarDetailGallery");
+  await expect(detail.locator('[data-photo-id="1"]')).not.toContainText("眨眼");
+  const candidate = detail.locator('[data-photo-id="2"]');
   await expect(candidate.locator("small")).toHaveText("眨眼");
   await expect(candidate.locator("small")).not.toContainText("4000×3000");
   await expect(candidate.locator("small")).not.toContainText("MB");
@@ -386,7 +393,7 @@ test("眨眼作为问题显示在非推荐照片的信息行并隐藏文件信�
     height: 3000,
     size: 2_500_000,
   }))).toBe("严重失焦、对比度极低、眨眼");
-  await page.locator('[data-photo-id="2"] .thumb').click();
+  await candidate.locator(".thumb").click();
   await expect(page.locator("#viewerMeta")).toContainText("眨眼");
 });
 

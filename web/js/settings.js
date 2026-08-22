@@ -9,7 +9,7 @@ function editorRead(){const p=state.editor;p.name=$("#profileName").value.trim()
 function profileSaveStatus(message,failed=false){const el=$("#profileSaveStatus");el.textContent=message;el.className=`profile-save-status ${failed?"failed":"success"}`}
 function clearProfileValidation(){[$("#profileName"),...$$('.form-grid input[type="number"][data-p]')].forEach(el=>{el.classList.remove("input-invalid");el.closest("label")?.classList.remove("field-invalid")});$("#profileSaveStatus").className="profile-save-status hidden"}
 function validateProfileInputs(showBottom=true){const fields=[$("#profileName"),...$$('.form-grid input[type="number"][data-p]')],missing=fields.filter(el=>!String(el.value).trim());fields.forEach(el=>{const invalid=missing.includes(el);el.classList.toggle("input-invalid",invalid);el.closest("label")?.classList.toggle("field-invalid",invalid)});if(missing.length){if(showBottom)profileSaveStatus("还有项目没有输入完整，请填写标红的项目。",true);missing[0].focus();return false}return true}
-async function saveProfile(){if(!validateProfileInputs(true))return;const button=$("#saveProfile");button.disabled=true;profileSaveStatus("正在保存…");try{const p=await json("/api/profile/save",{profile:editorRead()});const i=state.profiles.findIndex(x=>x.id===p.id);if(i>=0)state.profiles[i]=p;else state.profiles.push(p);renderProfiles();$("#profileEditorSelect").value=p.id;editorLoad(p.id);profileSaveStatus("✓ 自定义模式已保存");toast("自定义模式已保存")}catch(e){profileSaveStatus(`保存失败：${e.message}`,true);toast(`保存失败：${e.message}`)}finally{button.disabled=!!state.editor?.builtin}}
+async function saveProfile(){if(!validateProfileInputs(true))return;const button=$("#saveProfile");button.disabled=true;profileSaveStatus("正在保存…");try{const p=await json("/api/profile/save",{profile:editorRead(),project_id:state.project?.id||""});const i=state.profiles.findIndex(x=>x.id===p.id);if(i>=0)state.profiles[i]=p;else state.profiles.push(p);renderProfiles();$("#profileEditorSelect").value=p.id;editorLoad(p.id);if(state.project?.profile_id===p.id)await refreshProject();profileSaveStatus("✓ 自定义模式已保存");toast("自定义模式已保存")}catch(e){profileSaveStatus(`保存失败：${e.message}`,true);toast(`保存失败：${e.message}`)}finally{button.disabled=!!state.editor?.builtin}}
 async function cloneProfile(){const source=state.profiles.find(x=>x.id===$("#profileEditorSelect").value);const p=structuredClone(source);p.base_mode=source.builtin?source.id:(source.base_mode||"balanced");p.id="";p.name=p.name+" 副本";p.builtin=false;p.quality.blur_review_percentile??=5;p.quality.blur_remove_percentile??=1;delete p.created_at;delete p.updated_at;state.editor=p;clearProfileValidation();$("#profileName").disabled=false;$("#saveProfile").disabled=false;$("#deleteProfile").disabled=true;$("#profileName").value=p.name;$$("[data-p]").forEach(el=>{const v=getPath(p,el.dataset.p);el.type==="checkbox"?el.checked=!!v:el.value=v});toast("请命名并保存新模式")}
 async function applyProfile(id){try{state.project=await json("/api/profile/apply",{project_id:state.project.id,profile_id:id});updateCounts(state.project);toast("已切换分析模式");loadView()}catch(e){toast(e.message)}}
 async function estimate(){if(!validateProfileInputs(false)){$("#estimate").textContent="预估失败：还有项目没有输入完整，请填写标红的项目。";return}const button=$("#estimateBtn");button.disabled=true;$("#estimate").textContent="正在按当前参数完整预估…";try{const d=await json("/api/profile/estimate",{project_id:state.project.id,profile:editorRead()});$("#estimate").textContent=`预计：建议移除 ${d.counts.remove||0} 张，人工复看 ${d.counts.review||0} 张，相似组 ${d.estimated_groups||0} 组（${d.estimated_pairs||0} 条关系）。`}catch(e){$("#estimate").textContent=`预估失败：${e.message}`;toast(`预估失败：${e.message}`)}finally{button.disabled=false}}
@@ -215,8 +215,9 @@ function bindSettingsEvents(){
   $("#blinkDetectionEnabled").onchange=async event=>{
     const previous=state.settings.blink_detection_enabled!==false;
     try{
-      const saved=await json("/api/settings",{blink_detection_enabled:event.target.checked});
+      const saved=await json("/api/settings",{blink_detection_enabled:event.target.checked,project_id:state.project?.id||""});
       state.settings.blink_detection_enabled=saved.settings.blink_detection_enabled;
+      setBlinkRescanRequired(saved.blink_rescan_required);
       if(state.view==="similar")await loadView();
     }catch(error){
       event.target.checked=previous;
@@ -247,5 +248,11 @@ function bindSettingsEvents(){
   $("#deleteProfile").onclick=confirmDeleteProfile;
   addProfileResetButtons();
   configureProfileInputs();
+}
+
+function setBlinkRescanRequired(required){
+  const visible=Boolean(required&&state.settings.blink_detection_enabled!==false&&state.project);
+  $("#blinkRescanStatus").classList.toggle("hidden",!visible);
+  if(state.project)state.project.blink_rescan_required=visible;
 }
 

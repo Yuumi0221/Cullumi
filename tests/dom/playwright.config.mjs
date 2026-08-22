@@ -12,6 +12,7 @@ const server = path.join(root, "tests", "dom_server.py");
 const quoted = value => `"${value.replaceAll('"', '\\"')}"`;
 
 export default defineConfig({
+  globalTeardown: path.join(here, "global-teardown.mjs"),
   testDir: here,
   testMatch: "*.spec.mjs",
   fullyParallel: false,

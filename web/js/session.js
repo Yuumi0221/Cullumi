@@ -54,7 +54,7 @@ async function openProject(pid){try{await showProject(await json(`/api/project?p
 async function showProject(p){
   state.project=p;state.view="library";state.activeNav="library";state.filters={decisions:new Set(DECISION_VALUES),ai:new Set(AI_VALUES)};state.similar={groups:[],selectedId:"",mode:"closed",listSearch:"",memberSearch:""};document.body.classList.add("project-open");$("#home").classList.add("hidden");$("#workspace").classList.remove("hidden");
   $("#projectName").textContent=p.root.split(/[\\/]/).pop();$("#projectPath").textContent=p.root;$("#projectCache").value=p.cache_root;
-  $("#profileSelect").value=p.profile_id;$("#searchInput").value="";syncFilterControls();updateCounts(p);setActiveNav("library");await loadView();
+  $("#profileSelect").value=p.profile_id;$("#searchInput").value="";syncFilterControls();updateCounts(p);setBlinkRescanRequired(p.blink_rescan_required);setActiveNav("library");await loadView();
 }
 function updateCounts(p){
   const c=p.library_counts||{};
@@ -69,7 +69,7 @@ function applyProjectCounts(counts){
   if(!state.project||!counts)return;
   Object.assign(state.project,counts);updateCounts(state.project);
 }
-async function refreshProject(){if(!state.project)return;state.project=await json(`/api/project?project_id=${state.project.id}`);updateCounts(state.project)}
+async function refreshProject(){if(!state.project)return;state.project=await json(`/api/project?project_id=${state.project.id}`);updateCounts(state.project);setBlinkRescanRequired(state.project.blink_rescan_required)}
 async function startScan(){if(!state.project)return;await json("/api/scan",{project_id:state.project.id});pollProgress()}
 const wait=milliseconds=>new Promise(resolve=>setTimeout(resolve,milliseconds));
 async function pollProgress(){

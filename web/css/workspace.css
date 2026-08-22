@@ -214,26 +214,6 @@
   font-size: 12px;
 }
 
-.settings-tabs {
-  display: flex;
-  gap: 8px;
-  border-bottom:0
-}
-
-.settings-tabs button {
-  border:1px solid var(--line);
-  border-radius: 9px;
-  margin-bottom:0;
-  background: transparent;
-}
-
-.settings-tabs button.active {
-  border: 1px solid var(--pink);
-  background: transparent;
-  color: var(--pink);
-  font-weight: 700;
-}
-
 html,
 body {
   width: 100%;
@@ -419,8 +399,7 @@ button.primary:hover:not(:disabled),
   background: var(--pink-hover)
 }
 
-.decision-keep .card-actions .keep:hover:not(:disabled),
-.viewer .viewer-keep.active:hover:not(:disabled) {
+.decision-keep .card-actions .keep:hover:not(:disabled) {
   border-color: var(--keep-hover-dark);
   background: var(--keep-hover-dark);
 }
@@ -429,14 +408,12 @@ button.primary:hover:not(:disabled),
 #quarantineBtn:hover:not(:disabled),
 #deleteProfile:hover:not(:disabled),
 #confirmOk:hover:not(:disabled),
-.decision-remove .card-actions .danger:hover:not(:disabled),
-.viewer .viewer-remove.active:hover:not(:disabled) {
+.decision-remove .card-actions .danger:hover:not(:disabled) {
   border-color: var(--remove-hover-dark);
   background: var(--remove-hover-dark);
 }
 
 nav button:hover:not(:disabled),
-.settings-tabs button:hover:not(:disabled),
 .dialog-head button:hover:not(:disabled),
 .context-menu button:hover:not(:disabled) {
   background: var(--surface-hover);
@@ -806,42 +783,6 @@ body.similar-side-open .similar-browser {
   display: none;
   width: 0;
   height: 0;
-}
-
-.settings-footer {
-  border-top: 1px solid var(--line);
-  padding: 13px 24px 15px;
-  text-align: center;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.update-row {
-  display:flex;
-  flex-direction:column;
-  gap:6px;
-  margin:0 0 20px;
-}
-
-#generalSettings > .toggle {
-  margin-bottom:8px
-}
-
-.update-row .toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px; /* 控制文字与按钮、选框之间的间距 */
-  margin: 0;
-  cursor: pointer;
-}
-
-.update-row .toggle button {
-  margin-left: 20px; /* 额外微调与文字的间距 */
-}
-
-.update-row > span {
-  color: var(--muted);
-  font-size: 12px;
 }
 
 .confirm-option {

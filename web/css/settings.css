@@ -1,19 +1,5 @@
 /* Settings dialog and profile editor. */
 
-.settings-tabs {
-  padding:12px 25px 0
-}
-
-.settings-tabs button {
-  border:0;
-  background:transparent
-}
-
-.settings-tabs button.active {
-  color:var(--pink);
-  border-bottom:2px solid var(--pink)
-}
-
 .settings-page {
   padding:24px 26px 28px;
   overflow:auto;
@@ -373,6 +359,35 @@
   color:var(--muted);
   font-size:11px;
   line-height:1.45;
+}
+
+.setting-copy .setting-warning {
+  color:var(--red);
+  font-weight:650;
+}
+
+.update-row {
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  margin:0 0 20px;
+}
+
+.update-row .toggle {
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  margin:0;
+  cursor:pointer;
+}
+
+.update-row .toggle button {
+  margin-left:20px;
+}
+
+.update-row > span {
+  color:var(--muted);
+  font-size:12px;
 }
 
 .setting-actions {
