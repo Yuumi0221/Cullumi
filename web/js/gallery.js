@@ -183,3 +183,165 @@ async function quarantine(){
   $("#confirmOk").onclick=async()=>{$("#confirm").close();const r=await json("/api/quarantine/apply",{project_id:state.project.id});toast(`已隔离 ${r.moved} 张，跳过 ${r.skipped} 张`);await refreshProject();loadView()};$("#confirm").showModal()
 }
 async function restore(id){const r=await json("/api/quarantine/restore",{project_id:state.project.id,batch_id:id});toast(`恢复 ${r.restored} 张，文件名冲突 ${r.conflicts} 张`);await refreshProject();loadView()}
+
+function selectNavigationView(event){
+  const button=event.target.closest("[data-nav]");
+  if(!button)return;
+  if(button.dataset.preset){
+    applyLibraryPreset(button.dataset.preset);
+    return;
+  }
+  const next=button.dataset.view;
+  if(!next)return;
+  if(state.view==="similar"&&next!=="similar")closeSimilarDetail(false);
+  state.view=next;
+  closeFilterMenus();
+  setActiveNav(button.dataset.nav);
+  $("#searchInput").value="";
+  if(next==="similar"){
+    $("#searchInput").value=state.similar.listSearch;
+    $("#searchInput").placeholder="搜索相似组中的照片";
+  }else{
+    $("#searchInput").placeholder="搜索文件名或路径";
+  }
+  loadView();
+}
+
+function bindLibraryFilterEvents(){
+  $$(".multi-filter-trigger").forEach(button=>button.onclick=event=>{
+    event.stopPropagation();
+    const owner=button.closest(".multi-filter");
+    const panel=owner.querySelector(".multi-filter-panel");
+    const opening=panel.classList.contains("hidden");
+    closeFilterMenus();
+    if(opening){
+      panel.classList.remove("hidden");
+      button.setAttribute("aria-expanded","true");
+    }
+  });
+  $$(".multi-filter-panel").forEach(panel=>panel.onclick=event=>event.stopPropagation());
+  $$('[data-filter-group]').forEach(input=>input.onchange=()=>{
+    const values=state.filters[input.dataset.filterGroup];
+    input.checked?values.add(input.value):values.delete(input.value);
+    syncFilterControls();
+    setActiveNav(libraryPresetName());
+    loadView();
+  });
+  $$('[data-select-all]').forEach(button=>button.onclick=()=>{
+    const group=button.dataset.selectAll;
+    const all=group==="decisions"?DECISION_VALUES:AI_VALUES;
+    state.filters[group]=new Set(all);
+    syncFilterControls();
+    setActiveNav(libraryPresetName());
+    loadView();
+  });
+}
+
+function bindViewerEvents(){
+  $("#viewerPrev").onclick=()=>moveViewer(-1);
+  $("#viewerNext").onclick=()=>moveViewer(1);
+  $("#viewerKeep").onclick=()=>setDecision(state.items[state.viewerIndex].id,"keep");
+  $("#viewerRemove").onclick=()=>setDecision(state.items[state.viewerIndex].id,"remove");
+  $("#viewer").addEventListener("close",()=>{
+    stopViewerMotion();
+    syncViewerDecisions().catch(error=>toast(error.message));
+  });
+  ["timeupdate","play","pause","ended"].forEach(name=>$("#viewerVideo").addEventListener(name,syncMotionTime));
+  $("#viewerVideo").addEventListener("volumechange",syncMotionVolume);
+  $("#motionMute").onclick=toggleMotionMute;
+  $("#motionPlay").onclick=toggleMotionPlayback;
+  $("#motionTimeline").oninput=event=>{
+    $("#viewerVideo").pause();
+    $("#viewerVideo").currentTime=Number(event.target.value)/1000;
+    syncMotionTime();
+  };
+  $("#motionSetCover").onclick=()=>saveMotionCover("motion");
+  $("#motionResetCover").onclick=()=>saveMotionCover("still",0);
+  $("#viewerImage").addEventListener("click",event=>{
+    if(state.viewerTransform.suppressClick)return;
+    clearTimeout(state.viewerClickTimer);
+    state.viewerClickTimer=setTimeout(()=>zoomViewer(1.5,event.clientX,event.clientY),220);
+  });
+  $("#viewerImage").addEventListener("dblclick",event=>{
+    event.preventDefault();
+    clearTimeout(state.viewerClickTimer);
+    resetViewerTransform();
+  });
+  $("#viewerVideo").addEventListener("click",()=>{
+    if(!state.viewerTransform.suppressClick)toggleMotionPlayback();
+  });
+  [$("#viewerImage"),$("#viewerVideo")].forEach(media=>{
+    media.addEventListener("wheel",event=>{
+      event.preventDefault();
+      zoomViewer(event.deltaY<0?1.18:1/1.18,event.clientX,event.clientY);
+    },{passive:false});
+    media.addEventListener("mousedown",event=>{
+      if(event.button!==0||state.viewerTransform.scale<=1)return;
+      event.preventDefault();
+      const transform=state.viewerTransform;
+      Object.assign(transform,{dragging:true,moved:false,startClientX:event.clientX,startClientY:event.clientY,startX:transform.x,startY:transform.y});
+      applyViewerTransform();
+    });
+  });
+  window.addEventListener("mousemove",event=>{
+    const transform=state.viewerTransform;
+    if(!transform.dragging)return;
+    const dx=event.clientX-transform.startClientX;
+    const dy=event.clientY-transform.startClientY;
+    if(Math.abs(dx)+Math.abs(dy)>3)transform.moved=true;
+    transform.x=transform.startX+dx;
+    transform.y=transform.startY+dy;
+    clampViewerPan();
+    applyViewerTransform();
+  });
+  window.addEventListener("mouseup",()=>{
+    const transform=state.viewerTransform;
+    if(!transform.dragging)return;
+    transform.dragging=false;
+    if(transform.moved){
+      transform.suppressClick=true;
+      setTimeout(()=>transform.suppressClick=false,0);
+    }
+    applyViewerTransform();
+  });
+}
+
+function bindGalleryEvents(){
+  [$("#gallery"),$("#similarDetailGallery")].forEach(container=>container.addEventListener("click",handleGalleryClick));
+  $("#nav").onclick=selectNavigationView;
+  bindLibraryFilterEvents();
+  let searchTimer;
+  $("#searchInput").oninput=()=>{
+    if(state.view==="similar"){
+      if(state.similar.selectedId)state.similar.memberSearch=$("#searchInput").value.trim();
+      else state.similar.listSearch=$("#searchInput").value.trim();
+    }
+    clearTimeout(searchTimer);
+    searchTimer=setTimeout(loadView,250);
+  };
+  $("#profileSelect").onchange=event=>applyProfile(event.target.value);
+  $("#exportBtn").onclick=async()=>{
+    try{
+      const result=await json("/api/export/save",{project_id:state.project.id});
+      if(result.saved)toast(`CSV 已保存到：${result.path}`);
+    }catch(error){
+      toast(`导出失败：${error.message}`);
+    }
+  };
+  $("#importBtn").onclick=async()=>{
+    const file=await json("/api/choose-csv",{});
+    if(!file.path)return;
+    const result=await json("/api/import",{project_id:state.project.id,path:file.path});
+    toast(`导入 ${result.imported} 条，缺失 ${result.missing} 条`);
+    await refreshProject();
+    loadView();
+  };
+  $("#quarantineBtn").onclick=quarantine;
+  $("#clearDecisionsBtn").onclick=confirmClearDecisions;
+  $("#markAiRemoveBtn").onclick=confirmAiRemoveSuggestions;
+  bindViewerEvents();
+  const libraryObserver=new IntersectionObserver(entries=>{
+    if(entries.some(entry=>entry.isIntersecting))loadLibraryPage(false);
+  },{rootMargin:"600px 0px"});
+  libraryObserver.observe($("#librarySentinel"));
+}

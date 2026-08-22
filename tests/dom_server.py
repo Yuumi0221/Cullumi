@@ -20,9 +20,20 @@ def run() -> None:
         config_module.app_data_dir = lambda: Path(temporary)
 
         from cullumi import http_api
+        from cullumi.config import ConfigStore
+        from cullumi.project_store import ProjectManager
+        from cullumi.scanner import Scanner
+        from cullumi.similarity import SimilarityGroupCache
 
-        http_api.TOKEN = token
+        config = ConfigStore(Path(temporary) / "config.json")
+        manager = ProjectManager(config)
+        groups = SimilarityGroupCache()
+        scanner = Scanner(config, manager, groups)
+        application = http_api.ApplicationContext(
+            config, manager, scanner, groups, token, ROOT / "web"
+        )
         server = ThreadingHTTPServer(("127.0.0.1", port), http_api.Handler)
+        server.application = application
         print(f"DOM test server ready on {port}", flush=True)
         try:
             server.serve_forever()

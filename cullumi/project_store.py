@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import json
 import os
 import shutil
 import sqlite3
@@ -13,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from .fs_utils import is_within
 
 DATABASE_SCHEMA_VERSION = 3
 _WAL_CONFIGURED_DATABASES: dict[Path, tuple[int, int]] = {}
@@ -49,12 +50,6 @@ def _ensure_wal(
         return True
 
 
-def _is_within(path: Path, root: Path) -> bool:
-    resolved_path = path.resolve()
-    resolved_root = root.resolve()
-    return resolved_path == resolved_root or resolved_root in resolved_path.parents
-
-
 def safe_relative_path(root: Path, relative_path: str, label: str = "文件路径") -> Path:
     """Resolve an untrusted relative path and keep it inside ``root``."""
     if not isinstance(relative_path, str) or not relative_path.strip():
@@ -64,17 +59,9 @@ def safe_relative_path(root: Path, relative_path: str, label: str = "文件路�
         raise ValueError(f"{label}必须是相对路径")
     resolved_root = root.resolve()
     target = (resolved_root / relative).resolve()
-    if target == resolved_root or not _is_within(target, resolved_root):
+    if target == resolved_root or not is_within(target, resolved_root):
         raise ValueError(f"{label}超出项目目录")
     return target
-
-
-def atomic_write_json(path: Path, value: Any) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    temporary.replace(path)
 
 
 def project_id_for(root: Path) -> str:
@@ -358,7 +345,7 @@ class ProjectManager:
         default_cache_root = config_data["default_cache_root"]
         cache = Path(cache_root or existing.get("cache_root") or default_cache_root).resolve()
         project_dir = cache / pid
-        overlaps_photos = _is_within(project_dir, root_path) or _is_within(root_path, project_dir)
+        overlaps_photos = is_within(project_dir, root_path) or is_within(root_path, project_dir)
         existing_cache = Path(existing["cache_root"]).resolve() if existing.get("cache_root") else None
         if overlaps_photos and existing_cache != cache:
             raise ValueError("缓存位置不能与照片文件夹重叠")
@@ -467,7 +454,7 @@ class ProjectManager:
                 "path": str(new_dir),
                 "cache_root": str(new_cache),
             }
-        if _is_within(new_dir, project.root) or _is_within(project.root, new_dir):
+        if is_within(new_dir, project.root) or is_within(project.root, new_dir):
             raise ValueError("新缓存位置不能与照片文件夹重叠")
         if new_dir.exists() and any(new_dir.iterdir()):
             raise ValueError("新位置已有同名项目缓存")

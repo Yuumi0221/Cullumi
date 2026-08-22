@@ -1,5 +1,6 @@
 import re
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 WEB_SCRIPT_FILES = (
@@ -14,6 +15,8 @@ WEB_SCRIPT_FILES = (
 WEB_STYLE_FILES = (
     "css/base.css",
     "css/workspace.css",
+    "css/viewer.css",
+    "css/settings.css",
     "css/theme.css",
     "css/responsive.css",
     "css/home.css",
@@ -84,6 +87,37 @@ class WebModuleStructureTests(unittest.TestCase):
             positions.append(markup.index(source))
         self.assertEqual(positions, sorted(positions))
 
+    def test_viewer_and_settings_styles_have_component_owners(self):
+        web = Path(__file__).parents[1] / "web" / "css"
+        base = (web / "base.css").read_text(encoding="utf-8")
+        workspace = (web / "workspace.css").read_text(encoding="utf-8")
+        viewer = (web / "viewer.css").read_text(encoding="utf-8")
+        settings = (web / "settings.css").read_text(encoding="utf-8")
+        self.assertNotRegex(base, r"(?m)^\.viewer\s*\{")
+        self.assertNotRegex(workspace, r"(?m)^\.viewer\s*\{")
+        self.assertNotIn("#settings.panel-dialog {", workspace)
+        self.assertIn(".viewer {", viewer)
+        self.assertIn("#settings.panel-dialog {", settings)
+
+    def test_svg_symbols_and_references_are_in_sync(self):
+        web = Path(__file__).parents[1] / "web"
+        sprite = web / "assets" / "icons.svg"
+        namespace = {"svg": "http://www.w3.org/2000/svg"}
+        symbols = {
+            element.attrib["id"]
+            for element in ET.parse(sprite).getroot().findall("svg:symbol", namespace)
+        }
+        sources = [web / "index.html", *(web / "js").glob("*.js")]
+        references = {
+            match.group(1)
+            for source in sources
+            for match in re.finditer(
+                r"icons\.svg[^#\"']*#([A-Za-z0-9_-]+)",
+                source.read_text(encoding="utf-8"),
+            )
+        }
+        self.assertEqual(symbols, references)
+
     def test_feature_owners_stay_out_of_app_entrypoint(self):
         web = Path(__file__).parents[1] / "web"
         runtime = (web / "js" / "runtime.js").read_text(encoding="utf-8")
@@ -96,11 +130,20 @@ class WebModuleStructureTests(unittest.TestCase):
         self.assertIn("async function boot()", session)
         self.assertIn("async function loadSimilarView()", similar)
         self.assertIn("async function saveProfile()", settings)
+        self.assertIn("function bindSessionEvents()", session)
+        self.assertIn("function bindSimilarEvents()", similar)
+        self.assertIn("function bindSettingsEvents()", settings)
+        self.assertIn("function bindGalleryEvents()", (web / "js" / "gallery.js").read_text(encoding="utf-8"))
+        self.assertIn("function startApplication()", entrypoint)
         for feature_source in (
             "const state=",
             "async function boot()",
             "async function loadSimilarView()",
             "async function saveProfile()",
+            "function bindSessionEvents()",
+            "function bindSimilarEvents()",
+            "function bindSettingsEvents()",
+            "function bindGalleryEvents()",
         ):
             self.assertNotIn(feature_source, entrypoint)
 
@@ -113,7 +156,7 @@ class WebStaticTests(unittest.TestCase):
         server = server_script()
         self.assertIn('id="startupWarning"', markup)
         self.assertIn('b.startup_warning&&!$("#startupWarning").dataset.shown', script)
-        self.assertIn('"startup_warning": CONFIG.load_warning', server)
+        self.assertIn('"startup_warning": self.config.load_warning', server)
 
     def test_scan_reports_files_that_become_unavailable(self):
         script = web_script()
@@ -136,7 +179,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('id="updateDialog"', markup)
         self.assertIn('json("/api/update/check",{})', script)
         self.assertIn('json("/api/update/download",{})', script)
-        self.assertIn("auto_check_updates:e.target.checked", script)
+        self.assertIn("auto_check_updates:event.target.checked", script)
 
     def test_mode_selects_are_rounded_and_csv_actions_share_a_row(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
@@ -149,8 +192,8 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn(".form-grid select[data-p] {", styles)
         self.assertIn("appearance: none;", styles)
         self.assertIn('href="/static/assets/icons.svg?v=1#motion-reset"', script)
-        self.assertNotIn('b.textContent="↺"', script)
-        self.assertIn("label.insertBefore(b,field)", script)
+        self.assertIn("function addProfileResetButtons()", script)
+        self.assertIn("label.insertBefore(button,field)", script)
         self.assertIn(".form-grid .field-reset-label {", styles)
         self.assertIn("grid-template-columns:minmax(0,1fr) 20px;", styles)
         self.assertIn(".field-reset-label > .form-select {", styles)
@@ -279,7 +322,7 @@ class WebStaticTests(unittest.TestCase):
         styles = web_styles()
         self.assertIn("validateProfileInputs", script)
         self.assertIn("还有项目没有输入完整", script)
-        self.assertIn("el.placeholder=", script)
+        self.assertIn("element.placeholder=", script)
         self.assertIn(".field-invalid", styles)
         self.assertIn(".input-invalid", styles)
 
@@ -416,10 +459,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("function closeNoticeOnBackdrop(event)", script)
         self.assertIn("dialog.getBoundingClientRect()", script)
         self.assertIn("if(outside)dialog.close()", script)
-        self.assertIn(
-            '$$("dialog[data-backdrop-close]").forEach(dialog=>dialog.addEventListener("click",closeNoticeOnBackdrop))',
-            script,
-        )
+        self.assertIn("dialog.addEventListener(\"click\",closeNoticeOnBackdrop)", script)
 
     def test_export_uses_native_save_route(self):
         script = web_script()
@@ -538,7 +578,7 @@ class WebStaticTests(unittest.TestCase):
         styles = web_styles()
         for setting, title in (("general", "通用"), ("storage", "存储"), ("profiles", "模式")):
             self.assertIn(f'data-setting="{setting}" data-settings-title="{title}"', markup)
-        for icon in ("setting-general", "setting-store", "setting-mode"):
+        for icon in ("topbar-setting", "setting-store", "setting-mode"):
             self.assertIn(f'/static/assets/icons.svg?v=5#{icon}', markup)
         self.assertIn('id="storageSettings"', markup)
         self.assertIn("<h3>图片操作</h3>", markup)
@@ -659,7 +699,7 @@ class WebStaticTests(unittest.TestCase):
         script = web_script()
         self.assertIn("state.project.cache_root=migration.cache_root", script)
         self.assertIn('$("#projectCache").value=migration.cache_root', script)
-        self.assertIn("迁移失败：${e.message}", script)
+        self.assertIn("迁移失败：${error.message}", script)
 
     def test_default_cache_updates_ui_only_after_settings_are_saved(self):
         script = web_script()
@@ -667,7 +707,7 @@ class WebStaticTests(unittest.TestCase):
         state_update = "state.settings.default_cache_root=cacheRoot"
         self.assertLess(script.index(request), script.index(state_update))
         self.assertIn("const cacheRoot=saved.settings.default_cache_root", script)
-        self.assertIn("保存失败：${e.message}", script)
+        self.assertIn("保存失败：${error.message}", script)
 
     def test_toast_moves_inside_the_topmost_open_dialog(self):
         script = web_script()

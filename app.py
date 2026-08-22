@@ -29,7 +29,10 @@ SCANNER = Scanner(CONFIG, MANAGER, SIMILARITY_GROUPS)
 TOKEN = secrets.token_urlsafe(24)
 WEB_ROOT = resource_path("web")
 APP_ICON = WEB_ROOT / "assets" / "icons" / "brand-icon.ico"
-http_api.configure(CONFIG, MANAGER, SCANNER, SIMILARITY_GROUPS, TOKEN, WEB_ROOT)
+APPLICATION = http_api.ApplicationContext(
+    CONFIG, MANAGER, SCANNER, SIMILARITY_GROUPS, TOKEN, WEB_ROOT
+)
+http_api.configure(APPLICATION)
 
 
 def apply_native_window_icon(window: Any) -> None:
@@ -50,6 +53,7 @@ def apply_native_window_icon(window: Any) -> None:
 
 def run() -> None:
     server = ThreadingHTTPServer(("127.0.0.1", 0), http_api.Handler)
+    server.application = APPLICATION
     port = server.server_address[1]
     url = f"http://127.0.0.1:{port}/?token={TOKEN}"
     thread = threading.Thread(target=server.serve_forever, daemon=True)

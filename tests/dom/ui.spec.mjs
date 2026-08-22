@@ -854,6 +854,7 @@ test("存储迁移失败提示显示在设置对话框顶层", async ({ page }) 
 
   await page.locator("#settingsBtn").click();
   await expect(page.locator("#settings")).toBeVisible();
+  await page.locator('[data-setting="storage"]').click();
   await page.locator("#projectCacheBtn").click();
 
   await expect(page.locator("#settings > #toast")).toContainText("迁移失败：目标文件夹无法写入");

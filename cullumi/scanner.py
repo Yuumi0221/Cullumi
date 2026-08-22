@@ -20,10 +20,14 @@ from .classification import (
     classify,
 )
 from .config import ConfigStore
+from .fs_utils import is_within
 from .media import (
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
     analyze_photo,
+)
+from .motion import (
+    MotionAsset,
     ensure_motion_video,
     extract_motion_frame,
     locate_motion_still_time,
@@ -35,7 +39,6 @@ from .media import (
 from .project_store import (
     Project,
     ProjectManager,
-    _is_within,
     connect_db,
     project_thumbnail_path,
     project_thumbnail_storage_path,
@@ -157,7 +160,7 @@ class Scanner:
         stored = self.config.snapshot().get("projects", {}).get(project.project_id, {})
         excluded = [project.root / QUARANTINE_DIR, project.project_dir]
         excluded.extend(Path(item) for item in stored.get("old_caches", []))
-        excluded = [path.resolve() for path in excluded if _is_within(path, project.root)]
+        excluded = [path.resolve() for path in excluded if is_within(path, project.root)]
         project_root = project.root.resolve()
 
         def is_excluded(path: Path) -> bool:
@@ -202,50 +205,109 @@ class Scanner:
             unsupported_extensions=unsupported_extensions,
         )
 
+    def _prepare_scan(
+        self, project_id: str, cancel: threading.Event
+    ) -> tuple[Project, dict[str, Any], list[Path], dict[Path, MotionAsset]]:
+        """Discover files and pair motion sidecars before database work begins."""
+        project = self.manager.from_id(project_id)
+        profile = self.config.get_profile(project.profile_id)
+        self._set(project_id, stage="discovering")
+        discovery = self._discover(project, cancel)
+        files = discovery.photos
+        sidecars = {
+            (path.parent.resolve(), path.stem.casefold()): path
+            for path in discovery.videos
+            if path.suffix.lower() in {".mov", ".m4v", ".mp4"}
+        }
+        motion_assets = {
+            path: asset
+            for path in files
+            if (asset := paired_motion_asset(path, sidecars)) is not None
+        }
+        matched_sidecars = {
+            asset.path.resolve()
+            for asset in motion_assets.values()
+            if asset.kind == "apple_sidecar"
+        }
+        unsupported_count = max(
+            0, discovery.unsupported_count - len(matched_sidecars)
+        )
+        video_count = max(0, discovery.video_count - len(matched_sidecars))
+        unsupported_extensions = dict(discovery.unsupported_extensions)
+        for sidecar in matched_sidecars:
+            extension = sidecar.suffix.lower()
+            remaining = unsupported_extensions.get(extension, 0) - 1
+            if remaining > 0:
+                unsupported_extensions[extension] = remaining
+            else:
+                unsupported_extensions.pop(extension, None)
+        self._set(
+            project_id,
+            stage="analyzing",
+            total=len(files),
+            current=0,
+            discovered_total=discovery.discovered_total,
+            unsupported_count=unsupported_count,
+            video_count=video_count,
+            unsupported_extensions=unsupported_extensions,
+            unavailable_count=0,
+        )
+        return project, profile, files, motion_assets
+
+    def _finish_scan(
+        self,
+        project_id: str,
+        project: Project,
+        files: list[Path],
+        unavailable_count: int,
+        cancel: threading.Event,
+    ) -> None:
+        """Run post-database imports and publish the terminal scan state."""
+        _check_cancelled(cancel)
+        self._auto_import_csv(project)
+        self._set(
+            project_id,
+            stage="complete",
+            done=True,
+            current=len(files),
+            total=len(files),
+            unavailable_count=unavailable_count,
+        )
+
+    def _confirm_exact_duplicates(
+        self,
+        project_id: str,
+        project: Project,
+        conn: sqlite3.Connection,
+        unavailable_count: int,
+        cancel: threading.Event,
+    ) -> int:
+        """Confirm byte-identical candidates after incremental analysis."""
+        _check_cancelled(cancel)
+        self._set(project_id, stage="hashing")
+        unavailable_count += self._exact_hashes(project, conn, cancel)
+        self._set(project_id, unavailable_count=unavailable_count)
+        return unavailable_count
+
+    def _rebuild_relationships(
+        self,
+        project_id: str,
+        project: Project,
+        conn: sqlite3.Connection,
+        profile: dict[str, Any],
+        cancel: threading.Event,
+    ) -> None:
+        """Rebuild similarity topology and dependent classifications."""
+        _check_cancelled(cancel)
+        self._set(project_id, stage="grouping")
+        self.rebuild_similarity(project, conn, profile, cancel)
+        _check_cancelled(cancel)
+        self.reclassify(project, conn, profile, cancel)
+
     def _run(self, project_id: str, cancel: threading.Event) -> None:
         try:
-            project = self.manager.from_id(project_id)
-            profile = self.config.get_profile(project.profile_id)
-            self._set(project_id, stage="discovering")
-            discovery = self._discover(project, cancel)
-            files = discovery.photos
-            sidecars = {
-                (path.parent.resolve(), path.stem.casefold()): path
-                for path in discovery.videos
-                if path.suffix.lower() in {".mov", ".m4v", ".mp4"}
-            }
-            motion_assets = {
-                path: asset
-                for path in files
-                if (asset := paired_motion_asset(path, sidecars)) is not None
-            }
-            matched_sidecars = {
-                asset.path.resolve()
-                for asset in motion_assets.values()
-                if asset.kind == "apple_sidecar"
-            }
-            unsupported_count = max(
-                0, discovery.unsupported_count - len(matched_sidecars)
-            )
-            video_count = max(0, discovery.video_count - len(matched_sidecars))
-            unsupported_extensions = dict(discovery.unsupported_extensions)
-            for sidecar in matched_sidecars:
-                extension = sidecar.suffix.lower()
-                remaining = unsupported_extensions.get(extension, 0) - 1
-                if remaining > 0:
-                    unsupported_extensions[extension] = remaining
-                else:
-                    unsupported_extensions.pop(extension, None)
-            self._set(
-                project_id,
-                stage="analyzing",
-                total=len(files),
-                current=0,
-                discovered_total=discovery.discovered_total,
-                unsupported_count=unsupported_count,
-                video_count=video_count,
-                unsupported_extensions=unsupported_extensions,
-                unavailable_count=0,
+            project, profile, files, motion_assets = self._prepare_scan(
+                project_id, cancel
             )
             with closing(connect_db(project.db_path)) as conn:
                 existing = {row["relative_path"]: row for row in conn.execute("SELECT * FROM photos")}
@@ -430,24 +492,18 @@ class Scanner:
                     missing,
                 )
                 conn.commit()
-                _check_cancelled(cancel)
-                self._set(project_id, stage="hashing")
-                unavailable_count += self._exact_hashes(project, conn, cancel)
-                self._set(project_id, unavailable_count=unavailable_count)
-                _check_cancelled(cancel)
-                self._set(project_id, stage="grouping")
-                self.rebuild_similarity(project, conn, profile, cancel)
-                _check_cancelled(cancel)
-                self.reclassify(project, conn, profile, cancel)
-            _check_cancelled(cancel)
-            self._auto_import_csv(project)
-            self._set(
-                project_id,
-                stage="complete",
-                done=True,
-                current=len(files),
-                total=len(files),
-                unavailable_count=unavailable_count,
+                unavailable_count = self._confirm_exact_duplicates(
+                    project_id,
+                    project,
+                    conn,
+                    unavailable_count,
+                    cancel,
+                )
+                self._rebuild_relationships(
+                    project_id, project, conn, profile, cancel
+                )
+            self._finish_scan(
+                project_id, project, files, unavailable_count, cancel
             )
         except ScanCancelled:
             self._set(project_id, stage="cancelled", done=True)

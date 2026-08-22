@@ -84,3 +84,30 @@ async function pollProgress(){
     }
   }catch(error){if(generation===state.poll)toast(`读取扫描进度失败：${error.message}`)}
 }
+
+function bindSessionEvents(){
+  $("#chooseBtn").onclick=chooseProject;
+  $("#recentSearch").oninput=event=>{
+    state.recentQuery=event.target.value;
+    renderRecentProjects();
+  };
+  $("#scanBtn").onclick=startScan;
+  $("#cancelBtn").onclick=()=>json("/api/scan/cancel",{project_id:state.project.id});
+  $("#homeBtn").onclick=()=>{
+    document.body.classList.remove("project-open","similar-view-open","similar-detail-open","similar-side-open");
+    $("#workspace").classList.add("hidden");
+    $("#home").classList.remove("hidden");
+    $("#searchInput").value="";
+    state.poll+=1;
+    boot().catch(error=>toast(error.message));
+  };
+  $("#projectBox").ondblclick=openCurrentProjectFolder;
+  $("#projectBox").onkeydown=event=>{
+    if(event.key!=="Enter")return;
+    event.preventDefault();
+    openCurrentProjectFolder();
+  };
+  $("#recentOpenFolder").onclick=openRecentFolder;
+  $("#recentRemove").onclick=confirmRemoveRecent;
+  document.querySelector("main").addEventListener("scroll",closeRecentMenu,{passive:true});
+}

@@ -7,12 +7,12 @@ import mimetypes
 import os
 import re
 import secrets
-import sqlite3
 import stat
 import tempfile
 import urllib.parse
 import webbrowser
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -22,17 +22,18 @@ from . import __version__
 from .classification import (
     PHOTO_AI_FILTERS,
     PHOTO_DECISION_FILTERS,
-    classification_percentiles,
     classify,
     parse_photo_filter,
     photo_filter_where,
     project_photo_counts,
 )
-from .config import ConfigStore, validate_profile
+from .config import ConfigStore
 from .media import (
     DISPLAY_PREVIEW_EXTENSIONS,
     analyze_photo,
     ensure_display_preview,
+)
+from .motion import (
     ensure_motion_video,
     extract_motion_asset_frame,
     extract_motion_frame,
@@ -52,7 +53,8 @@ from .project_store import (
     safe_relative_path,
 )
 from .scanner import Scanner
-from .similarity import SimilarityGroupCache, build_similarity_groups, quality_score
+from .settings_service import apply_profile, estimate_profile, save_settings
+from .similarity import SimilarityGroupCache, quality_score
 from .updates import RELEASES_PAGE_URL, check_for_update, download_release_asset
 from .workflows import (
     apply_quarantine,
@@ -70,6 +72,7 @@ SCANNER: Scanner
 SIMILARITY_GROUPS: SimilarityGroupCache
 TOKEN = secrets.token_urlsafe(24)
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
+APPLICATION: ApplicationContext | None = None
 FILE_RESPONSE_CHUNK_SIZE = 256 * 1024
 GET_ROUTES = {
     "/api/bootstrap": "api_bootstrap",
@@ -118,21 +121,69 @@ POST_ROUTES = {
 }
 
 
+@dataclass(frozen=True)
+class ApplicationContext:
+    config: ConfigStore
+    manager: ProjectManager
+    scanner: Scanner
+    similarity_groups: SimilarityGroupCache
+    token: str
+    web_root: Path
+
+
 def configure(
-    config: ConfigStore,
-    manager: ProjectManager,
-    scanner: Scanner,
-    similarity_groups: SimilarityGroupCache,
-    token: str,
-    web_root: Path,
-) -> None:
-    global CONFIG, MANAGER, SCANNER, SIMILARITY_GROUPS, TOKEN, WEB_ROOT
-    CONFIG = config
-    MANAGER = manager
-    SCANNER = scanner
-    SIMILARITY_GROUPS = similarity_groups
-    TOKEN = token
-    WEB_ROOT = web_root
+    application: ApplicationContext | ConfigStore,
+    manager: ProjectManager | None = None,
+    scanner: Scanner | None = None,
+    similarity_groups: SimilarityGroupCache | None = None,
+    token: str | None = None,
+    web_root: Path | None = None,
+) -> ApplicationContext:
+    """Install an explicit dependency context for the HTTP application.
+
+    The expanded signature remains supported for callers embedding older Cullumi
+    versions; new code should pass a single :class:`ApplicationContext`.
+    """
+    global APPLICATION, CONFIG, MANAGER, SCANNER, SIMILARITY_GROUPS, TOKEN, WEB_ROOT
+    if isinstance(application, ApplicationContext):
+        context = application
+    else:
+        if any(
+            value is None
+            for value in (manager, scanner, similarity_groups, token, web_root)
+        ):
+            raise TypeError("configure requires a complete application context")
+        context = ApplicationContext(
+            application,
+            manager,
+            scanner,
+            similarity_groups,
+            token,
+            web_root,
+        )
+    APPLICATION = context
+    # Retain these aliases for older embedders while request handling uses the
+    # immutable context exclusively.
+    CONFIG = context.config
+    MANAGER = context.manager
+    SCANNER = context.scanner
+    SIMILARITY_GROUPS = context.similarity_groups
+    TOKEN = context.token
+    WEB_ROOT = context.web_root
+    return context
+
+
+def current_application() -> ApplicationContext:
+    if APPLICATION is not None:
+        return APPLICATION
+    try:
+        return ApplicationContext(
+            CONFIG, MANAGER, SCANNER, SIMILARITY_GROUPS, TOKEN, WEB_ROOT
+        )
+    except NameError as error:
+        raise RuntimeError(
+            "HTTP application context has not been configured"
+        ) from error
 
 
 def json_safe_row(row: Any) -> dict[str, Any]:
@@ -140,14 +191,18 @@ def json_safe_row(row: Any) -> dict[str, Any]:
 
 
 def photo_payload(
-    project_id: str, row: Any, profile: dict[str, Any] | None = None
+    project_id: str,
+    row: Any,
+    profile: dict[str, Any] | None = None,
+    application: ApplicationContext | None = None,
 ) -> dict[str, Any]:
+    application = application or current_application()
     data = json_safe_row(row)
     data["project_id"] = project_id
     if not str(row["error"] or ""):
         if profile is None:
-            project = MANAGER.from_id(project_id)
-            profile = CONFIG.get_profile(project.profile_id)
+            project = application.manager.from_id(project_id)
+            profile = application.config.get_profile(project.profile_id)
         data["quality_score"] = round(
             max(0.0, min(1.0, quality_score(row, profile))) * 100, 1
         )
@@ -155,8 +210,9 @@ def photo_payload(
         data["quality_score"] = None
     revision = int(row["cover_revision"] or 0)
     suffix = f"&v={revision}"
-    data["thumb_url"] = f"/api/thumb?project_id={project_id}&id={row['id']}&token={TOKEN}{suffix}"
-    data["photo_url"] = f"/api/photo?project_id={project_id}&id={row['id']}&token={TOKEN}{suffix}"
+    token = application.token
+    data["thumb_url"] = f"/api/thumb?project_id={project_id}&id={row['id']}&token={token}{suffix}"
+    data["photo_url"] = f"/api/photo?project_id={project_id}&id={row['id']}&token={token}{suffix}"
     if row["media_type"] == "motion_photo":
         data["motion"] = {
             "kind": row["motion_kind"],
@@ -172,19 +228,22 @@ def photo_payload(
             "error": row["motion_error"],
             "video_url": (
                 f"/api/motion/video?project_id={project_id}&id={row['id']}"
-                f"&token={TOKEN}{suffix}"
+                f"&token={token}{suffix}"
             ),
         }
     return data
 
 
-def project_summary(project_id: str) -> dict[str, Any]:
-    project = MANAGER.from_id(project_id)
+def project_summary(
+    project_id: str, application: ApplicationContext | None = None
+) -> dict[str, Any]:
+    application = application or current_application()
+    project = application.manager.from_id(project_id)
     with closing(connect_db(project.db_path)) as conn:
         photo_counts = project_photo_counts(conn)
         pairs = conn.execute("SELECT COUNT(*) FROM similar_pairs").fetchone()[0]
-        profile = CONFIG.get_profile(project.profile_id)
-        similar_groups = SIMILARITY_GROUPS.count(project_id, conn, profile)
+        profile = application.config.get_profile(project.profile_id)
+        similar_groups = application.similarity_groups.count(project_id, conn, profile)
     return {
         "id": project_id,
         "root": str(project.root),
@@ -210,14 +269,19 @@ def recent_project_stub(project_id: str, stored: dict[str, Any]) -> dict[str, An
     }
 
 
-def recent_project_payload(project_id: str, stored: dict[str, Any]) -> dict[str, Any]:
+def recent_project_payload(
+    project_id: str,
+    stored: dict[str, Any],
+    application: ApplicationContext | None = None,
+) -> dict[str, Any]:
+    application = application or current_application()
     payload = recent_project_stub(project_id, stored)
     available = payload["available"]
     if not available:
         return payload
     conn = None
     try:
-        project = MANAGER.from_id(project_id)
+        project = application.manager.from_id(project_id)
         if not project.db_path.is_file():
             payload["stats_loaded"] = True
             return payload
@@ -239,7 +303,7 @@ def recent_project_payload(project_id: str, stored: dict[str, Any]) -> dict[str,
             query = urllib.parse.urlencode({
                 "project_id": project_id,
                 "id": cover["id"],
-                "token": TOKEN,
+                "token": application.token,
             })
             payload["thumbnail_url"] = f"/api/thumb?{query}"
     except Exception as error:
@@ -253,6 +317,27 @@ def recent_project_payload(project_id: str, stored: dict[str, Any]) -> dict[str,
 
 class Handler(BaseHTTPRequestHandler):
     server_version = f"Cullumi/{__version__}"
+
+    @property
+    def application(self) -> ApplicationContext:
+        server_application = getattr(getattr(self, "server", None), "application", None)
+        return server_application or current_application()
+
+    @property
+    def config(self) -> ConfigStore:
+        return self.application.config
+
+    @property
+    def manager(self) -> ProjectManager:
+        return self.application.manager
+
+    @property
+    def scanner(self) -> Scanner:
+        return self.application.scanner
+
+    @property
+    def similarity_groups(self) -> SimilarityGroupCache:
+        return self.application.similarity_groups
 
     def log_message(self, format: str, *args: Any) -> None:
         if os.environ.get("CULLUMI_DEBUG"):
@@ -270,7 +355,7 @@ class Handler(BaseHTTPRequestHandler):
             return True
         query_token = self._query().get("token", [""])[0]
         header_token = self.headers.get("X-App-Token", "")
-        return secrets.compare_digest(query_token or header_token, TOKEN)
+        return secrets.compare_digest(query_token or header_token, self.application.token)
 
     def _send_json(self, value: Any, status: int = 200) -> None:
         data = json.dumps(value, ensure_ascii=False).encode("utf-8")
@@ -403,7 +488,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             parsed = self._parsed()
             if parsed.path == "/":
-                html = (WEB_ROOT / "index.html").read_text(encoding="utf-8").replace("__APP_TOKEN__", TOKEN)
+                html = (self.application.web_root / "index.html").read_text(
+                    encoding="utf-8"
+                ).replace("__APP_TOKEN__", self.application.token)
                 data = html.encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -413,8 +500,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(data)
                 return
             if parsed.path.startswith("/static/"):
-                candidate = (WEB_ROOT / parsed.path.removeprefix("/static/")).resolve()
-                if WEB_ROOT.resolve() not in candidate.parents:
+                web_root = self.application.web_root.resolve()
+                candidate = (web_root / parsed.path.removeprefix("/static/")).resolve()
+                if web_root not in candidate.parents:
                     self.send_error(403)
                 else:
                     self._send_file(candidate)
@@ -433,7 +521,7 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_error(error)
 
     def api_bootstrap(self) -> None:
-        config_data = CONFIG.snapshot()
+        config_data = self.config.snapshot()
         recent = []
         for pid in config_data.get("recent_projects", []):
             project = config_data.get("projects", {}).get(pid)
@@ -441,7 +529,7 @@ class Handler(BaseHTTPRequestHandler):
                 recent.append(recent_project_stub(pid, project))
         self._send_json({
             "version": __version__,
-            "startup_warning": CONFIG.load_warning,
+            "startup_warning": self.config.load_warning,
             "settings": {
                 "default_cache_root": config_data["default_cache_root"],
                 "auto_advance": config_data.get("auto_advance", True),
@@ -452,23 +540,23 @@ class Handler(BaseHTTPRequestHandler):
                 "theme": config_data.get("theme", "day"),
             },
             "recent_projects": recent,
-            "profiles": list(CONFIG.profiles().values()),
+            "profiles": list(self.config.profiles().values()),
         })
 
     def api_recent_project(self) -> None:
         project_id = self._query().get("project_id", [""])[0]
-        stored = CONFIG.snapshot().get("projects", {}).get(project_id)
+        stored = self.config.snapshot().get("projects", {}).get(project_id)
         if not stored:
             raise ValueError("项目不存在")
-        self._send_json(recent_project_payload(project_id, stored))
+        self._send_json(recent_project_payload(project_id, stored, self.application))
 
     def api_project(self) -> None:
         pid = self._query().get("project_id", [""])[0]
-        self._send_json(project_summary(pid))
+        self._send_json(project_summary(pid, self.application))
 
     def api_progress(self) -> None:
         pid = self._query().get("project_id", [""])[0]
-        self._send_json(SCANNER.get_progress(pid))
+        self._send_json(self.scanner.get_progress(pid))
 
     def api_photos(self) -> None:
         query = self._query()
@@ -476,8 +564,8 @@ class Handler(BaseHTTPRequestHandler):
         search = query.get("search", [""])[0]
         limit = min(500, max(1, int(query.get("limit", ["200"])[0])))
         offset = max(0, int(query.get("offset", ["0"])[0]))
-        project = MANAGER.from_id(pid)
-        profile = CONFIG.get_profile(project.profile_id)
+        project = self.manager.from_id(pid)
+        profile = self.config.get_profile(project.profile_id)
 
         file_state = query.get("file", ["readable"])[0]
         raw_decisions = query.get("decisions", [None])[0]
@@ -501,17 +589,19 @@ class Handler(BaseHTTPRequestHandler):
             ).fetchall()
         self._send_json({
             "total": total,
-            "items": [photo_payload(pid, row, profile) for row in rows],
+            "items": [
+                photo_payload(pid, row, profile, self.application) for row in rows
+            ],
         })
 
     def api_similar_groups(self) -> None:
         query = self._query()
         pid = query.get("project_id", [""])[0]
         search = query.get("search", [""])[0].casefold()
-        project = MANAGER.from_id(pid)
-        profile = CONFIG.get_profile(project.profile_id)
+        project = self.manager.from_id(pid)
+        profile = self.config.get_profile(project.profile_id)
         with closing(connect_db(project.db_path)) as conn:
-            groups = SIMILARITY_GROUPS.get(pid, conn, profile)
+            groups = self.similarity_groups.get(pid, conn, profile)
         items = []
         for group in groups:
             if search and not any(
@@ -524,9 +614,12 @@ class Handler(BaseHTTPRequestHandler):
                     "count": len(group["members"]),
                     "kind": group["kind"],
                     "recommended_id": group["recommended_id"],
-                    "recommended": photo_payload(pid, group["recommended"], profile),
+                    "recommended": photo_payload(
+                        pid, group["recommended"], profile, self.application
+                    ),
                     "covers": [
-                        photo_payload(pid, row, profile) for row in group["covers"]
+                        photo_payload(pid, row, profile, self.application)
+                        for row in group["covers"]
                     ],
                     "face_safe": group["face_safe"],
                 }
@@ -538,11 +631,15 @@ class Handler(BaseHTTPRequestHandler):
         pid = query.get("project_id", [""])[0]
         group_id = query.get("group_id", [""])[0]
         search = query.get("search", [""])[0].casefold()
-        project = MANAGER.from_id(pid)
-        profile = CONFIG.get_profile(project.profile_id)
+        project = self.manager.from_id(pid)
+        profile = self.config.get_profile(project.profile_id)
         with closing(connect_db(project.db_path)) as conn:
             group = next(
-                (item for item in SIMILARITY_GROUPS.get(pid, conn, profile) if item["id"] == group_id),
+                (
+                    item
+                    for item in self.similarity_groups.get(pid, conn, profile)
+                    if item["id"] == group_id
+                ),
                 None,
             )
         if not group:
@@ -551,7 +648,7 @@ class Handler(BaseHTTPRequestHandler):
         for row in group["members"]:
             if search and search not in str(row["relative_path"]).casefold():
                 continue
-            item = photo_payload(pid, row, profile)
+            item = photo_payload(pid, row, profile, self.application)
             item["group_similarity"] = group["confidence"].get(int(row["id"]), 0.0)
             members.append(item)
         result = {
@@ -568,7 +665,7 @@ class Handler(BaseHTTPRequestHandler):
         query = self._query()
         pid = query.get("project_id", [""])[0]
         photo_id = int(query.get("id", ["0"])[0])
-        project = MANAGER.from_id(pid)
+        project = self.manager.from_id(pid)
         with closing(connect_db(project.db_path)) as conn:
             row = conn.execute("SELECT * FROM photos WHERE id=?", (photo_id,)).fetchone()
         if not row:
@@ -623,8 +720,8 @@ class Handler(BaseHTTPRequestHandler):
     def api_motion_locate(self, body: dict[str, Any]) -> None:
         pid = str(body["project_id"])
         photo_id = int(body["photo_id"])
-        project = MANAGER.from_id(pid)
-        with MANAGER.data_operation(pid), SCANNER.project_operation(
+        project = self.manager.from_id(pid)
+        with self.manager.data_operation(pid), self.scanner.project_operation(
             pid, "定位动态照片封面"
         ):
             with closing(connect_db(project.db_path)) as conn:
@@ -663,9 +760,11 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("封面来源无效")
         if write_source and source != "motion":
             raise ValueError("只有动态帧可以修改原图")
-        project = MANAGER.from_id(pid)
-        profile = CONFIG.get_profile(project.profile_id)
-        with MANAGER.data_operation(pid), SCANNER.project_operation(pid, "修改动态照片封面"):
+        project = self.manager.from_id(pid)
+        profile = self.config.get_profile(project.profile_id)
+        with self.manager.data_operation(pid), self.scanner.project_operation(
+            pid, "修改动态照片封面"
+        ):
             with closing(connect_db(project.db_path)) as conn:
                 row = conn.execute(
                     "SELECT * FROM photos WHERE id=? AND status='active'", (photo_id,)
@@ -784,8 +883,8 @@ class Handler(BaseHTTPRequestHandler):
                             photo_id,
                         ],
                     )
-                    SCANNER.reclassify(project, conn, profile, commit=False)
-                    SCANNER.rebuild_similarity(project, conn, profile, commit=False)
+                    self.scanner.reclassify(project, conn, profile, commit=False)
+                    self.scanner.rebuild_similarity(project, conn, profile, commit=False)
                     conn.commit()
                 except Exception:
                     conn.rollback()
@@ -797,20 +896,20 @@ class Handler(BaseHTTPRequestHandler):
                     "SELECT * FROM photos WHERE id=?", (photo_id,)
                 ).fetchone()
                 project_counts = project_photo_counts(conn)
-        SIMILARITY_GROUPS.invalidate(pid)
+        self.similarity_groups.invalidate(pid)
         self._send_json({
             "saved": True,
             "source_written": bool(writeback_result),
             "source_backup": str(writeback_result["backup"]) if writeback_result else "",
-            "photo": photo_payload(pid, updated, profile),
+            "photo": photo_payload(pid, updated, profile, self.application),
             "project_counts": project_counts,
         })
 
     def api_motion_recommend(self, body: dict[str, Any]) -> None:
         pid = str(body["project_id"])
         photo_id = int(body["photo_id"])
-        project = MANAGER.from_id(pid)
-        profile = CONFIG.get_profile(project.profile_id)
+        project = self.manager.from_id(pid)
+        profile = self.config.get_profile(project.profile_id)
         with closing(connect_db(project.db_path)) as conn:
             row = conn.execute(
                 "SELECT * FROM photos WHERE id=? AND status='active'", (photo_id,)
@@ -849,11 +948,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_quarantine_preview(self) -> None:
         pid = self._query().get("project_id", [""])[0]
-        self._send_json(quarantine_preview(MANAGER.from_id(pid)))
+        self._send_json(quarantine_preview(self.manager.from_id(pid)))
 
     def api_batches(self) -> None:
         pid = self._query().get("project_id", [""])[0]
-        project = MANAGER.from_id(pid)
+        project = self.manager.from_id(pid)
         with closing(connect_db(project.db_path)) as conn:
             rows = conn.execute("SELECT * FROM quarantine_batches ORDER BY created_at DESC").fetchall()
         self._send_json({"items": [json_safe_row(row) for row in rows]})
@@ -869,26 +968,26 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_open_project(self, body: dict[str, Any]) -> None:
         project_id = project_id_for(Path(body["root"]).resolve())
-        with SCANNER.project_operation(project_id, "打开项目"):
-            project = MANAGER.open(body["root"], body.get("cache_root"))
-        SIMILARITY_GROUPS.invalidate(project.project_id)
-        self._send_json(project_summary(project.project_id))
+        with self.scanner.project_operation(project_id, "打开项目"):
+            project = self.manager.open(body["root"], body.get("cache_root"))
+        self.similarity_groups.invalidate(project.project_id)
+        self._send_json(project_summary(project.project_id, self.application))
 
     def api_project_cache(self, body: dict[str, Any]) -> None:
         project_id = body["project_id"]
-        with SCANNER.project_operation(project_id, "迁移缓存"):
-            result = MANAGER.migrate_cache(project_id, body["cache_root"])
-        SIMILARITY_GROUPS.invalidate(project_id)
+        with self.scanner.project_operation(project_id, "迁移缓存"):
+            result = self.manager.migrate_cache(project_id, body["cache_root"])
+        self.similarity_groups.invalidate(project_id)
         self._send_json(result)
 
     def api_cache_cleanup(self, body: dict[str, Any]) -> None:
         project_id = body["project_id"]
-        with SCANNER.project_operation(project_id, "清理缓存"):
-            result = MANAGER.cleanup_old_cache(project_id, body["path"])
+        with self.scanner.project_operation(project_id, "清理缓存"):
+            result = self.manager.cleanup_old_cache(project_id, body["path"])
         self._send_json(result)
 
     def api_project_open_folder(self, body: dict[str, Any]) -> None:
-        root = MANAGER.project_root(body["project_id"])
+        root = self.manager.project_root(body["project_id"])
         if not hasattr(os, "startfile"):
             raise ValueError("当前系统不支持文件管理器操作")
         os.startfile(str(root))
@@ -898,11 +997,11 @@ class Handler(BaseHTTPRequestHandler):
         project_id = body["project_id"]
         delete_cache = bool(body.get("delete_cache", False))
         if delete_cache:
-            with SCANNER.project_operation(project_id, "删除项目缓存"):
-                result = MANAGER.remove_from_recent(project_id, True)
+            with self.scanner.project_operation(project_id, "删除项目缓存"):
+                result = self.manager.remove_from_recent(project_id, True)
         else:
-            result = MANAGER.remove_from_recent(project_id, False)
-        SIMILARITY_GROUPS.invalidate(project_id)
+            result = self.manager.remove_from_recent(project_id, False)
+        self.similarity_groups.invalidate(project_id)
         self._send_json(result)
 
     def api_open_github(self, body: dict[str, Any]) -> None:
@@ -926,11 +1025,11 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"opened": True})
 
     def api_scan(self, body: dict[str, Any]) -> None:
-        started = SCANNER.start(body["project_id"])
+        started = self.scanner.start(body["project_id"])
         self._send_json({"started": started})
 
     def api_scan_cancel(self, body: dict[str, Any]) -> None:
-        SCANNER.cancel(body["project_id"])
+        self.scanner.cancel(body["project_id"])
         self._send_json({"cancelled": True})
 
     def api_decision(self, body: dict[str, Any]) -> None:
@@ -938,8 +1037,8 @@ class Handler(BaseHTTPRequestHandler):
         decision = body.get("decision", "")
         if decision not in {"", "keep", "remove"}:
             raise ValueError("无效决定")
-        with MANAGER.data_operation(project_id):
-            project = MANAGER.from_id(project_id)
+        with self.manager.data_operation(project_id):
+            project = self.manager.from_id(project_id)
             with closing(connect_db(project.db_path)) as conn:
                 photo_id = int(body["photo_id"])
                 cursor = conn.execute(
@@ -959,8 +1058,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_decision_clear(self, body: dict[str, Any]) -> None:
         project_id = body["project_id"]
-        with MANAGER.data_operation(project_id):
-            project = MANAGER.from_id(project_id)
+        with self.manager.data_operation(project_id):
+            project = self.manager.from_id(project_id)
             result = clear_decisions(project)
             with closing(connect_db(project.db_path)) as conn:
                 counts = project_photo_counts(conn)
@@ -968,110 +1067,43 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_decision_ai_remove(self, body: dict[str, Any]) -> None:
         project_id = body["project_id"]
-        with MANAGER.data_operation(project_id):
-            project = MANAGER.from_id(project_id)
+        with self.manager.data_operation(project_id):
+            project = self.manager.from_id(project_id)
             result = mark_ai_remove_suggestions(project)
             with closing(connect_db(project.db_path)) as conn:
                 counts = project_photo_counts(conn)
         self._send_json({"marked": result, "project_counts": counts})
 
     def api_settings(self, body: dict[str, Any]) -> None:
-        updates: dict[str, Any] = {}
-        if "theme" in body:
-            theme = str(body["theme"])
-            if theme not in {"day", "night"}:
-                raise ValueError("主题必须为 day 或 night")
-            updates["theme"] = theme
-        for key in ("auto_advance", "auto_check_updates"):
-            if key in body:
-                if not isinstance(body[key], bool):
-                    raise ValueError(f"{key} 必须为布尔值")
-                updates[key] = body[key]
-        if "motion_cover_writeback" in body:
-            writeback = str(body["motion_cover_writeback"])
-            if writeback not in {"never", "ask", "always"}:
-                raise ValueError("动态照片封面修改设置无效")
-            updates["motion_cover_writeback"] = writeback
-        cache_path = None
-        if "default_cache_root" in body:
-            raw_path = body["default_cache_root"]
-            if not isinstance(raw_path, str) or not raw_path.strip():
-                raise ValueError("默认缓存位置不能为空")
-            cache_path = Path(raw_path).resolve()
-            updates["default_cache_root"] = str(cache_path)
-        if cache_path:
-            cache_path.mkdir(parents=True, exist_ok=True)
-        with CONFIG.edit() as data:
-            data.update(updates)
-        self._send_json({"saved": True, "settings": CONFIG.snapshot()})
+        settings = save_settings(self.config, body)
+        self._send_json({"saved": True, "settings": settings})
 
     def api_profile_save(self, body: dict[str, Any]) -> None:
-        self._send_json(CONFIG.save_custom_profile(body["profile"]))
+        self._send_json(self.config.save_custom_profile(body["profile"]))
 
     def api_profile_delete(self, body: dict[str, Any]) -> None:
-        CONFIG.delete_custom_profile(body["profile_id"])
+        self.config.delete_custom_profile(body["profile_id"])
         self._send_json({"deleted": True})
 
     def api_profile_apply(self, body: dict[str, Any]) -> None:
-        project = MANAGER.from_id(body["project_id"])
-        profile_id = body["profile_id"]
-        profiles = CONFIG.profiles()
-        if profile_id not in profiles:
-            raise ValueError("筛选模式不存在")
-        profile = profiles[profile_id]
-        with SCANNER.project_operation(project.project_id, "应用筛选模式"):
-            with MANAGER.data_operation(project.project_id):
-                with CONFIG.lock:
-                    old_profile_id = CONFIG.data["projects"][project.project_id].get(
-                        "profile_id", "conservative"
-                    )
-                with closing(connect_db(project.db_path)) as conn:
-                    config_saved = False
-                    try:
-                        conn.execute(
-                            "UPDATE project SET profile_id=?,updated_at=datetime('now') WHERE id=1",
-                            (profile_id,),
-                        )
-                        SCANNER.reclassify(project, conn, profile, commit=False)
-                        SCANNER.rebuild_similarity(project, conn, profile, commit=False)
-                        with CONFIG.edit() as data:
-                            data["projects"][project.project_id]["profile_id"] = profile_id
-                        config_saved = True
-                        conn.commit()
-                    except Exception:
-                        conn.rollback()
-                        if config_saved:
-                            with CONFIG.edit() as data:
-                                data["projects"][project.project_id]["profile_id"] = old_profile_id
-                        raise
-        SIMILARITY_GROUPS.invalidate(project.project_id)
-        self._send_json(project_summary(project.project_id))
+        project = apply_profile(
+            self.config,
+            self.manager,
+            self.scanner,
+            self.similarity_groups,
+            body["project_id"],
+            body["profile_id"],
+        )
+        self._send_json(project_summary(project.project_id, self.application))
 
     def api_profile_estimate(self, body: dict[str, Any]) -> None:
-        profile = body["profile"]
-        validate_profile(profile)
-        project = MANAGER.from_id(body["project_id"])
-        with closing(connect_db(project.db_path)) as conn:
-            rows = conn.execute("SELECT * FROM photos WHERE status='active'").fetchall()
-            percentiles = classification_percentiles(rows, profile)
-            counts = {"remove": 0, "review": 0, "keep": 0, "unreadable": 0}
-            for row in rows:
-                suggestion, _ = classify(row, profile, percentiles)
-                counts[suggestion] = counts.get(suggestion, 0) + 1
-            with closing(sqlite3.connect(":memory:")) as estimate_conn:
-                estimate_conn.row_factory = sqlite3.Row
-                conn.backup(estimate_conn)
-                SCANNER.rebuild_similarity(project, estimate_conn, profile)
-                estimated_pairs = estimate_conn.execute("SELECT COUNT(*) FROM similar_pairs").fetchone()[0]
-                estimated_groups = len(build_similarity_groups(estimate_conn, profile))
-        self._send_json({
-            "counts": counts,
-            "estimated_pairs": estimated_pairs,
-            "estimated_groups": estimated_groups,
-        })
+        result = estimate_profile(
+            self.manager, self.scanner, body["project_id"], body["profile"]
+        )
+        self._send_json(result)
 
     def api_export_save(self, body: dict[str, Any]) -> None:
-        project = MANAGER.from_id(body["project_id"])
+        project = self.manager.from_id(body["project_id"])
         selected = choose_save_csv("保存筛选结果 CSV", project.root, "照片筛选结果.csv")
         if not selected:
             self._send_json({"saved": False, "cancelled": True})
@@ -1088,23 +1120,23 @@ class Handler(BaseHTTPRequestHandler):
         csv_path = Path(body.get("path") or "")
         if not csv_path.exists():
             raise ValueError("CSV 文件不存在")
-        with MANAGER.data_operation(project_id):
-            project = MANAGER.from_id(project_id)
+        with self.manager.data_operation(project_id):
+            project = self.manager.from_id(project_id)
             result = import_decisions(project, csv_path)
         self._send_json(result)
 
     def api_quarantine_apply(self, body: dict[str, Any]) -> None:
         project_id = body["project_id"]
-        with SCANNER.project_operation(project_id, "隔离照片"):
-            with MANAGER.data_operation(project_id):
-                result = apply_quarantine(MANAGER.from_id(project_id))
-        SIMILARITY_GROUPS.invalidate(project_id)
+        with self.scanner.project_operation(project_id, "隔离照片"):
+            with self.manager.data_operation(project_id):
+                result = apply_quarantine(self.manager.from_id(project_id))
+        self.similarity_groups.invalidate(project_id)
         self._send_json(result)
 
     def api_restore(self, body: dict[str, Any]) -> None:
         project_id = body["project_id"]
-        with SCANNER.project_operation(project_id, "恢复照片"):
-            with MANAGER.data_operation(project_id):
-                result = restore_batch(MANAGER.from_id(project_id), body["batch_id"])
-        SIMILARITY_GROUPS.invalidate(project_id)
+        with self.scanner.project_operation(project_id, "恢复照片"):
+            with self.manager.data_operation(project_id):
+                result = restore_batch(self.manager.from_id(project_id), body["batch_id"])
+        self.similarity_groups.invalidate(project_id)
         self._send_json(result)

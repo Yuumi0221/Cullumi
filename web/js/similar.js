@@ -84,3 +84,21 @@ function expandSimilarDetail(){
   state.similar.mode="expanded";
   renderSimilarFolders();applySimilarMode();
 }
+
+function bindSimilarEvents(){
+  $("#similarCollapseBtn").onclick=()=>closeSimilarDetail();
+  $("#similarBackBtn").onclick=()=>closeSimilarDetail();
+  $("#similarExpandBtn").onclick=expandSimilarDetail;
+  $("#similarFolderPane").onclick=event=>{
+    if(state.similar.mode==="side"&&!event.target.closest("[data-similar-group]"))closeSimilarDetail();
+  };
+  $("#similarFolders").onclick=event=>{
+    const button=event.target.closest("[data-similar-group]");
+    if(!button)return;
+    event.stopPropagation();
+    openSimilarGroup(button.dataset.similarGroup);
+  };
+  window.addEventListener("resize",()=>{
+    if(state.view==="similar"&&state.similar.selectedId&&window.innerWidth<=850&&state.similar.mode==="side")expandSimilarDetail();
+  });
+}

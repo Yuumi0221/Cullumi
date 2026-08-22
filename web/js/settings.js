@@ -87,3 +87,149 @@ function confirmAiRemoveSuggestions(){
   $("#confirm").showModal();
 }
 
+function selectSettingsPage(button){
+  $$('[data-setting]').forEach(candidate=>{
+    const active=candidate===button;
+    candidate.classList.toggle("active",active);
+    active?candidate.setAttribute("aria-current","page"):candidate.removeAttribute("aria-current");
+  });
+  $$('[data-setting-page]').forEach(page=>page.classList.toggle("hidden",page.dataset.settingPage!==button.dataset.setting));
+  $("#settingsPageTitle").textContent=button.dataset.settingsTitle||button.textContent.trim();
+}
+
+async function chooseDefaultCache(){
+  const button=$("#defaultCacheBtn");
+  try{
+    const selected=await json("/api/choose-cache",{});
+    if(!selected.path)return;
+    button.disabled=true;
+    const saved=await json("/api/settings",{default_cache_root:selected.path});
+    const cacheRoot=saved.settings.default_cache_root;
+    state.settings.default_cache_root=cacheRoot;
+    $("#defaultCache").value=cacheRoot;
+    toast("默认位置已保存");
+  }catch(error){
+    toast(`保存失败：${error.message}`);
+  }finally{
+    button.disabled=false;
+  }
+}
+
+async function migrateProjectCache(){
+  if(!state.project)return;
+  const button=$("#projectCacheBtn");
+  try{
+    const selected=await json("/api/choose-cache",{});
+    if(!selected.path)return;
+    button.disabled=true;
+    const migration=await json("/api/project/cache",{project_id:state.project.id,cache_root:selected.path});
+    state.project.cache_root=migration.cache_root;
+    $("#projectCache").value=migration.cache_root;
+    if(migration.old_cache){
+      $("#oldCaches").innerHTML=`<div class="old-cache-row"><p class="old-cache-path">旧缓存已保留：${esc(migration.old_cache)}</p><button id="cleanOld">清理</button></div>`;
+      $("#cleanOld").onclick=async()=>{
+        try{
+          await json("/api/project/cache/cleanup",{project_id:state.project.id,path:migration.old_cache});
+          $("#oldCaches").innerHTML='<span class="empty-cache">暂无待清理的旧缓存</span>';
+          toast("旧缓存已清理");
+        }catch(error){
+          toast(`清理失败：${error.message}`);
+        }
+      };
+    }
+    toast(migration.changed?"迁移完成，旧缓存仍保留":"当前项目已使用此存储位置");
+  }catch(error){
+    toast(`迁移失败：${error.message}`);
+  }finally{
+    button.disabled=false;
+  }
+}
+
+function addProfileResetButtons(){
+  $$(".form-grid [data-p]").forEach(element=>{
+    const button=document.createElement("button");
+    const label=element.closest("label");
+    const field=element.closest(".select-field")||element;
+    button.type="button";
+    button.className="field-reset";
+    button.innerHTML='<svg viewBox="0 0 1024 1024" aria-hidden="true"><use transform="translate(1024 0) scale(-1 1)" href="/static/assets/icons.svg?v=1#motion-reset"></use></svg>';
+    button.title="恢复基础模式默认值";
+    button.setAttribute("aria-label",button.title);
+    label.classList.add("field-reset-label");
+    label.insertBefore(button,field);
+    button.onclick=()=>{
+      const base=state.profiles.find(profile=>profile.id===(state.editor?.base_mode||"balanced"))||state.profiles.find(profile=>profile.id==="balanced");
+      const value=getPath(base,element.dataset.p);
+      if(value===undefined)return;
+      setPath(state.editor,element.dataset.p,value);
+      element.value=value;
+    };
+  });
+}
+
+function configureProfileInputs(){
+  const numberRanges={
+    "quality.min_megapixels_review":[0,500],
+    "quality.min_megapixels_remove":[0,500],
+    "quality.min_size_kb_review":[0,10000000],
+    "quality.min_size_kb_remove":[0,10000000],
+    "similarity.time_window_minutes":[0,10080],
+    "similarity.sequence_gap":[0,10000],
+    "similarity.min_group_size":[2,1000],
+  };
+  $$('.form-grid input[type="number"][data-p]').forEach(element=>{
+    const range=numberRanges[element.dataset.p]||[element.min,element.max];
+    if(range[0]!==""&&range[0]!==undefined)element.min=range[0];
+    if(range[1]!==""&&range[1]!==undefined)element.max=range[1];
+    element.placeholder=`请输入 ${element.min}–${element.max}`;
+    element.addEventListener("input",()=>{
+      if(!String(element.value).trim())return;
+      element.classList.remove("input-invalid");
+      element.closest("label")?.classList.remove("field-invalid");
+    });
+  });
+  $("#profileName").addEventListener("input",()=>{
+    if(!$("#profileName").value.trim())return;
+    $("#profileName").classList.remove("input-invalid");
+    $("#profileName").closest("label")?.classList.remove("field-invalid");
+  });
+}
+
+function bindSettingsEvents(){
+  $("#settingsBtn").onclick=()=>{
+    $("#settings").showModal();
+    if(state.project)$("#projectCache").value=state.project.cache_root;
+    $("#profileEditorSelect").value=state.project?.profile_id||state.profiles[0]?.id;
+    editorLoad($("#profileEditorSelect").value);
+  };
+  $$('[data-setting]').forEach(button=>button.onclick=()=>selectSettingsPage(button));
+  $("#autoAdvance").onchange=async event=>{
+    state.settings.auto_advance=event.target.checked;
+    await json("/api/settings",{auto_advance:event.target.checked});
+  };
+  $("#autoCheckUpdates").onchange=async event=>{
+    state.settings.auto_check_updates=event.target.checked;
+    await json("/api/settings",{auto_check_updates:event.target.checked});
+  };
+  $("#motionCoverWriteback").onchange=async event=>{
+    const previous=state.settings.motion_cover_writeback||"ask";
+    try{
+      const saved=await json("/api/settings",{motion_cover_writeback:event.target.value});
+      state.settings.motion_cover_writeback=saved.settings.motion_cover_writeback||event.target.value;
+    }catch(error){
+      event.target.value=previous;
+      toast(`保存原图修改设置失败：${error.message}`);
+    }
+  };
+  $("#checkUpdateBtn").onclick=()=>checkForUpdates(true);
+  $("#defaultCacheBtn").onclick=chooseDefaultCache;
+  $("#projectCacheBtn").onclick=migrateProjectCache;
+  $("#profileEditorSelect").onchange=event=>editorLoad(event.target.value);
+  $("#cloneProfile").onclick=cloneProfile;
+  $("#saveProfile").onclick=saveProfile;
+  $("#estimateBtn").onclick=estimate;
+  $("#deleteProfile").onclick=confirmDeleteProfile;
+  addProfileResetButtons();
+  configureProfileInputs();
+}
+

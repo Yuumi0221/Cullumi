@@ -13,13 +13,43 @@ from PIL import Image
 
 from cullumi import http_api as app
 from cullumi.config import ConfigStore
-from cullumi.media import ffmpeg_executable
+from cullumi.motion import ffmpeg_executable
 from cullumi.project_store import ProjectManager, connect_db
 from cullumi.scanner import Scanner
 from cullumi.similarity import SimilarityGroupCache
 
 
+def application_context(
+    config: ConfigStore | None = None,
+    manager: ProjectManager | None = None,
+    scanner: Scanner | None = None,
+    groups: SimilarityGroupCache | None = None,
+) -> app.ApplicationContext:
+    return app.ApplicationContext(
+        config or mock.Mock(spec=ConfigStore),
+        manager or mock.Mock(spec=ProjectManager),
+        scanner or mock.Mock(spec=Scanner),
+        groups or mock.Mock(spec=SimilarityGroupCache),
+        "test-token",
+        Path("web"),
+    )
+
+
 class AppSafetyTests(unittest.TestCase):
+    def test_handler_prefers_the_server_application_context(self):
+        config = mock.Mock(spec=ConfigStore)
+        manager = mock.Mock(spec=ProjectManager)
+        scanner = mock.Mock(spec=Scanner)
+        groups = mock.Mock(spec=SimilarityGroupCache)
+        server_context = app.ApplicationContext(
+            config, manager, scanner, groups, "token", Path("web")
+        )
+        fallback_context = application_context()
+        handler = object.__new__(app.Handler)
+        handler.server = mock.Mock(application=server_context)
+        with mock.patch.object(app, "APPLICATION", fallback_context):
+            self.assertIs(handler.application, server_context)
+
     def test_photo_payload_recomputes_legacy_zero_quality_score(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -47,11 +77,11 @@ class AppSafetyTests(unittest.TestCase):
                     "SELECT * FROM photos WHERE relative_path='ordinary.jpg'"
                 ).fetchone()
 
-            with (
-                mock.patch.object(app, "CONFIG", config, create=True),
-                mock.patch.object(app, "MANAGER", manager, create=True),
-            ):
-                payload = app.photo_payload(project.project_id, row)
+            payload = app.photo_payload(
+                project.project_id,
+                row,
+                application=application_context(config, manager),
+            )
 
             self.assertGreater(payload["quality_score"], 0)
             self.assertNotEqual(payload["quality_score"], row["quality_score"])
@@ -90,11 +120,10 @@ class AppSafetyTests(unittest.TestCase):
             handler = object.__new__(app.Handler)
             handler._send_json = mock.Mock()
 
-            with (
-                mock.patch.object(app, "CONFIG", config, create=True),
-                mock.patch.object(app, "MANAGER", manager, create=True),
-                mock.patch.object(app, "SCANNER", scanner, create=True),
-                mock.patch.object(app, "SIMILARITY_GROUPS", groups, create=True),
+            with mock.patch.object(
+                app,
+                "APPLICATION",
+                application_context(config, manager, scanner, groups),
             ):
                 with mock.patch.object(
                     app, "locate_motion_still_time", return_value=300
@@ -123,11 +152,10 @@ class AppSafetyTests(unittest.TestCase):
             self.assertGreaterEqual(payload["quality_score"], 0)
             self.assertIn(".cover-1.jpg", payload["thumbnail"])
 
-            with (
-                mock.patch.object(app, "CONFIG", config, create=True),
-                mock.patch.object(app, "MANAGER", manager, create=True),
-                mock.patch.object(app, "SCANNER", scanner, create=True),
-                mock.patch.object(app, "SIMILARITY_GROUPS", groups, create=True),
+            with mock.patch.object(
+                app,
+                "APPLICATION",
+                application_context(config, manager, scanner, groups),
             ):
                 handler.api_motion_cover({
                     "project_id": project.project_id,
@@ -147,10 +175,11 @@ class AppSafetyTests(unittest.TestCase):
 
             before_failed_write = (photos / "IMG_0010.JPG").read_bytes()
             with (
-                mock.patch.object(app, "CONFIG", config, create=True),
-                mock.patch.object(app, "MANAGER", manager, create=True),
-                mock.patch.object(app, "SCANNER", scanner, create=True),
-                mock.patch.object(app, "SIMILARITY_GROUPS", groups, create=True),
+                mock.patch.object(
+                    app,
+                    "APPLICATION",
+                    application_context(config, manager, scanner, groups),
+                ),
                 mock.patch.object(
                     scanner, "reclassify", side_effect=RuntimeError("reclassify failed")
                 ),
@@ -169,10 +198,11 @@ class AppSafetyTests(unittest.TestCase):
 
             before_failed_analysis = (photos / "IMG_0010.JPG").read_bytes()
             with (
-                mock.patch.object(app, "CONFIG", config, create=True),
-                mock.patch.object(app, "MANAGER", manager, create=True),
-                mock.patch.object(app, "SCANNER", scanner, create=True),
-                mock.patch.object(app, "SIMILARITY_GROUPS", groups, create=True),
+                mock.patch.object(
+                    app,
+                    "APPLICATION",
+                    application_context(config, manager, scanner, groups),
+                ),
                 mock.patch.object(
                     app, "quality_score", side_effect=RuntimeError("scoring failed")
                 ),
@@ -206,7 +236,9 @@ class AppSafetyTests(unittest.TestCase):
 
     def test_post_rejects_a_json_value_that_is_not_an_object(self):
         handler = object.__new__(app.Handler)
-        handler.path = f"/api/project/open?token={app.TOKEN}"
+        context = application_context()
+        handler.server = mock.Mock(application=context)
+        handler.path = f"/api/project/open?token={context.token}"
         handler.headers = {"Content-Length": "2"}
         handler.rfile = io.BytesIO(b"[]")
         handler._send_json = mock.Mock()
@@ -219,7 +251,9 @@ class AppSafetyTests(unittest.TestCase):
 
     def test_post_reports_a_missing_required_field(self):
         handler = object.__new__(app.Handler)
-        handler.path = f"/api/project/open?token={app.TOKEN}"
+        context = application_context()
+        handler.server = mock.Mock(application=context)
+        handler.path = f"/api/project/open?token={context.token}"
         handler.headers = {"Content-Length": "2"}
         handler.rfile = io.BytesIO(b"{}")
         handler._send_json = mock.Mock()
@@ -242,7 +276,9 @@ class AppSafetyTests(unittest.TestCase):
             handler._send_json = mock.Mock()
 
             with (
-                mock.patch.object(app, "CONFIG", config, create=True),
+                mock.patch.object(
+                    app, "APPLICATION", application_context(config, manager)
+                ),
                 mock.patch.object(
                     app,
                     "recent_project_payload",
@@ -280,8 +316,11 @@ class AppSafetyTests(unittest.TestCase):
             manager.cleanup_old_cache(project.project_id, migration["old_cache"])
             stored = config.snapshot()["projects"][project.project_id]
 
-            with mock.patch.object(app, "MANAGER", manager, create=True):
-                payload = app.recent_project_payload(project.project_id, stored)
+            payload = app.recent_project_payload(
+                project.project_id,
+                stored,
+                application_context(config, manager),
+            )
 
             self.assertTrue(payload["thumbnail_url"].startswith("/api/thumb?"))
             self.assertTrue(payload["stats_loaded"])
@@ -294,7 +333,9 @@ class AppSafetyTests(unittest.TestCase):
             handler = object.__new__(app.Handler)
             handler._send_json = mock.Mock()
 
-            with mock.patch.object(app, "CONFIG", config, create=True):
+            with mock.patch.object(
+                app, "APPLICATION", application_context(config)
+            ):
                 handler.api_bootstrap()
 
             payload = handler._send_json.call_args.args[0]
@@ -440,14 +481,16 @@ class AppSafetyTests(unittest.TestCase):
     def test_root_page_requires_the_application_token(self):
         handler = object.__new__(app.Handler)
         handler.headers = {}
+        context = application_context()
+        handler.server = mock.Mock(application=context)
 
         handler.path = "/"
         self.assertFalse(handler._authorized())
-        handler.path = f"/?token={app.TOKEN}"
+        handler.path = f"/?token={context.token}"
         self.assertTrue(handler._authorized())
         handler.path = "/api/bootstrap"
         self.assertFalse(handler._authorized())
-        handler.path = f"/api/bootstrap?token={app.TOKEN}"
+        handler.path = f"/api/bootstrap?token={context.token}"
         self.assertTrue(handler._authorized())
         handler.path = "/static/js/app.js"
         self.assertTrue(handler._authorized())
@@ -461,7 +504,9 @@ class AppSafetyTests(unittest.TestCase):
             handler = object.__new__(app.Handler)
             handler._send_json = mock.Mock()
 
-            with mock.patch.object(app, "CONFIG", config, create=True):
+            with mock.patch.object(
+                app, "APPLICATION", application_context(config)
+            ):
                 with self.assertRaisesRegex(ValueError, "主题"):
                     handler.api_settings(
                         {"default_cache_root": str(cache), "theme": "invalid"}
@@ -503,9 +548,11 @@ class AppSafetyTests(unittest.TestCase):
             handler._send_json = mock.Mock()
 
             with (
-                mock.patch.object(app, "CONFIG", config, create=True),
-                mock.patch.object(app, "MANAGER", manager, create=True),
-                mock.patch.object(app, "SCANNER", scanner, create=True),
+                mock.patch.object(
+                    app,
+                    "APPLICATION",
+                    application_context(config, manager, scanner),
+                ),
                 mock.patch.object(
                     scanner, "rebuild_similarity", side_effect=RuntimeError("failed")
                 ),
@@ -538,9 +585,11 @@ class AppSafetyTests(unittest.TestCase):
             handler._send_json = mock.Mock()
 
             with (
-                mock.patch.object(app, "CONFIG", config, create=True),
-                mock.patch.object(app, "MANAGER", manager, create=True),
-                mock.patch.object(app, "SCANNER", scanner, create=True),
+                mock.patch.object(
+                    app,
+                    "APPLICATION",
+                    application_context(config, manager, scanner),
+                ),
                 mock.patch.object(config, "save", side_effect=OSError("disk full")),
             ):
                 with self.assertRaisesRegex(OSError, "disk full"):
@@ -576,7 +625,9 @@ class AppSafetyTests(unittest.TestCase):
 
             handler = object.__new__(app.Handler)
             handler._send_json = mock.Mock()
-            with mock.patch.object(app, "MANAGER", manager, create=True):
+            with mock.patch.object(
+                app, "APPLICATION", application_context(config, manager)
+            ):
                 handler.api_decision({
                     "project_id": project.project_id,
                     "photo_id": photo_id,
@@ -605,7 +656,9 @@ class AppSafetyTests(unittest.TestCase):
             handler = object.__new__(app.Handler)
             handler._send_json = mock.Mock()
 
-            with mock.patch.object(app, "MANAGER", manager, create=True):
+            with mock.patch.object(
+                app, "APPLICATION", application_context(config, manager)
+            ):
                 with self.assertRaisesRegex(ValueError, "不存在或当前不可用"):
                     handler.api_decision({
                         "project_id": project.project_id,

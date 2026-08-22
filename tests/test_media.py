@@ -11,14 +11,16 @@ from PIL import Image
 from cullumi.media import (
     DISPLAY_PREVIEW_EXTENSIONS,
     DISPLAY_PREVIEW_MAX_SIZE,
-    MotionAsset,
     analyze_photo,
-    embedded_motion_asset,
     ensure_display_preview,
+    open_image,
+)
+from cullumi.motion import (
+    MotionAsset,
+    embedded_motion_asset,
     ensure_motion_video,
     extract_motion_frame,
     locate_motion_still_time,
-    open_image,
     paired_motion_asset,
     probe_motion,
     write_motion_cover_source,
@@ -164,7 +166,7 @@ class MediaPreviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "sample.mov"
-            from cullumi.media import ffmpeg_executable
+            from cullumi.motion import ffmpeg_executable
 
             subprocess.run(
                 [
@@ -204,7 +206,7 @@ class MediaPreviewTests(unittest.TestCase):
             root = Path(temporary)
             source = root / "sample.mov"
             still = root / "sample.jpg"
-            from cullumi.media import ffmpeg_executable
+            from cullumi.motion import ffmpeg_executable
 
             subprocess.run(
                 [

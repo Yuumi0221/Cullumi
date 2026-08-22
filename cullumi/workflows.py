@@ -11,15 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .project_store import (
-    Project,
-    _is_within,
-    connect_db,
-    safe_relative_path,
-)
-from .project_store import (
-    atomic_write_json as _atomic_write_json,
-)
+from .fs_utils import atomic_write_json, is_within
+from .project_store import Project, connect_db, safe_relative_path
 
 QUARANTINE_DIR = "_照片筛选隔离"
 
@@ -191,7 +184,7 @@ def apply_quarantine(project: Project) -> dict[str, Any]:
 
     batch_root.mkdir(parents=True, exist_ok=False)
     manifest_path = batch_root / "manifest.json"
-    _atomic_write_json(manifest_path, manifest)
+    atomic_write_json(manifest_path, manifest)
     _write_manifest_csv(batch_root, manifest)
     with closing(connect_db(project.db_path)) as conn:
         conn.execute(
@@ -202,7 +195,7 @@ def apply_quarantine(project: Project) -> dict[str, Any]:
         for entry, item, moves in prepared:
             if any(not source.exists() for source, _ in moves):
                 entry["status"] = "missing"
-                _atomic_write_json(manifest_path, manifest)
+                atomic_write_json(manifest_path, manifest)
                 continue
             expected = [
                 (int(item["size"] or 0), float(item["mtime"] or 0)),
@@ -220,7 +213,7 @@ def apply_quarantine(project: Project) -> dict[str, Any]:
                 )
             ):
                 entry["status"] = "changed"
-                _atomic_write_json(manifest_path, manifest)
+                atomic_write_json(manifest_path, manifest)
                 continue
             moved_paths: list[tuple[Path, Path]] = []
             try:
@@ -235,11 +228,11 @@ def apply_quarantine(project: Project) -> dict[str, Any]:
                         shutil.move(str(moved), str(original))
                 entry["status"] = "error"
                 entry["error"] = str(error)
-                _atomic_write_json(manifest_path, manifest)
+                atomic_write_json(manifest_path, manifest)
                 continue
             else:
                 entry["status"] = "moved"
-            _atomic_write_json(manifest_path, manifest)
+            atomic_write_json(manifest_path, manifest)
             conn.execute("UPDATE photos SET status='quarantined' WHERE id=?", (entry["photo_id"],))
             moved = [row for row in manifest if row["status"] == "moved"]
             conn.execute(
@@ -264,7 +257,7 @@ def restore_batch(project: Project, batch_id: str) -> dict[str, Any]:
             if raw_manifest_path.is_absolute()
             else safe_relative_path(project.root, str(raw_manifest_path), "清单路径")
         )
-        if manifest_path.name != "manifest.json" or not _is_within(manifest_path, batch_root):
+        if manifest_path.name != "manifest.json" or not is_within(manifest_path, batch_root):
             raise ValueError("隔离清单路径无效")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if not isinstance(manifest, list):
@@ -279,7 +272,7 @@ def restore_batch(project: Project, batch_id: str) -> dict[str, Any]:
             source = None
             if item.get("quarantine_path"):
                 source = safe_relative_path(project.root, item["quarantine_path"], "隔离文件路径")
-                if not _is_within(source, batch_root):
+                if not is_within(source, batch_root):
                     raise ValueError("隔离文件路径超出当前批次")
             restore_path = None
             if item.get("restore_path"):
@@ -294,7 +287,7 @@ def restore_batch(project: Project, batch_id: str) -> dict[str, Any]:
                 companion_source = safe_relative_path(
                     project.root, item["companion_quarantine_path"], "动态照片隔离文件路径"
                 )
-                if not _is_within(companion_source, batch_root):
+                if not is_within(companion_source, batch_root):
                     raise ValueError("动态照片隔离文件路径超出当前批次")
             if item.get("companion_restore_path"):
                 companion_restore = safe_relative_path(
@@ -333,7 +326,7 @@ def restore_batch(project: Project, batch_id: str) -> dict[str, Any]:
                 if not source.exists() and recorded_restore.exists():
                     destination = recorded_restore
                     item["status"] = "restored"
-                    _atomic_write_json(manifest_path, manifest)
+                    atomic_write_json(manifest_path, manifest)
                 elif source.exists():
                     destination = recorded_restore
                 else:
@@ -371,7 +364,7 @@ def restore_batch(project: Project, batch_id: str) -> dict[str, Any]:
                     item["companion_restore_path"] = companion_destination.relative_to(
                         project.root.resolve()
                     ).as_posix()
-                _atomic_write_json(manifest_path, manifest)
+                atomic_write_json(manifest_path, manifest)
                 shutil.move(str(source), str(destination))
                 try:
                     if companion_source is not None and companion_destination is not None:
@@ -383,7 +376,7 @@ def restore_batch(project: Project, batch_id: str) -> dict[str, Any]:
                     raise
                 item["status"] = "restored"
                 item.pop("error", None)
-                _atomic_write_json(manifest_path, manifest)
+                atomic_write_json(manifest_path, manifest)
                 restored += 1
             target_rel = destination.relative_to(project.root.resolve()).as_posix()
             companion_rel = (

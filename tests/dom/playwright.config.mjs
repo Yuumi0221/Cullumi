@@ -17,7 +17,12 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   timeout: 15_000,
-  expect: { timeout: 5_000 },
+  expect: {
+    timeout: 5_000,
+    // Edge rasterization can shift a few anti-aliased SVG pixels between
+    // patch releases. Keep the tolerance tiny while preserving useful diffs.
+    toHaveScreenshot: { maxDiffPixels: 100 },
+  },
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
     baseURL: `http://127.0.0.1:${port}`,

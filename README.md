@@ -36,7 +36,8 @@
 
 ## 开发与测试
 
-需要 Python 3.12 及以上。
+需要 Python 3.12 及以上。项目以 `requirements.txt`、`requirements-dev.txt`
+和 `requirements-build.txt` 作为运行、开发检查与构建依赖的唯一来源。
 
 主要代码按职责拆分：
 
@@ -45,7 +46,10 @@
 - `cullumi/scanner.py`：扫描、增量分析、重复确认和相似关系重建。
 - `cullumi/core.py`：旧版 Python 导入入口的兼容导出，不再承载具体实现。
 - `cullumi/project_store.py`：项目模型、SQLite 连接与迁移、缓存路径和写入一致性。
-- `cullumi/media.py`：图片解码、缩略图、高清预览、图像指标与感知哈希，以及动态照片探测、视频缓存和封面帧提取。
+- `cullumi/media.py`：图片解码、缩略图、高清预览、图像指标与感知哈希。
+- `cullumi/motion.py`：动态照片探测、视频缓存、帧提取与原图封面安全回写。
+- `cullumi/fs_utils.py`：跨模块共享的路径边界判断与原子 JSON 写入。
+- `cullumi/settings_service.py`：设置保存、模式应用与无副作用预估事务。
 - `cullumi/workflows.py`：决定导入导出、批量标记、隔离与恢复。
 - `cullumi/similarity.py`：相似候选索引、结构比较和分组算法。
 - `web/js/runtime.js`：共享状态、接口请求、提示与主题。
@@ -53,11 +57,11 @@
 - `web/js/similar.js`：相似照片列表与分组浏览。
 - `web/js/settings.js`：模式、设置、确认框和更新提示。
 - `web/js/gallery.js`：图库分页、照片卡片、查看器和决定状态同步。
-- `web/js/app.js`：页面事件绑定和应用启动入口。
-- `web/css/`：基础、工作区、主题、响应式和首页样式。
+- `web/js/app.js`：全局事件与应用启动入口；功能事件由对应脚本自行绑定。
+- `web/css/`：基础、工作区、预览器、设置、主题、响应式和首页样式。
 - `web/assets/`：按图片、字体和图标分类的静态资源。
 
-前端脚本是无需构建工具的经典脚本，并按 `runtime`、`session`、`similar`、`settings`、`gallery`、`app` 的顺序加载。样式按 `base`、`workspace`、`theme`、`responsive`、`home` 的顺序加载。新增跨模块功能时，应把实现放入对应职责文件，并保持依赖顺序。
+前端脚本是无需构建工具的经典脚本，并按 `runtime`、`session`、`similar`、`settings`、`gallery`、`app` 的顺序加载。样式按 `base`、`workspace`、`viewer`、`settings`、`theme`、`responsive`、`home` 的顺序加载。新增跨模块功能时，应把实现放入对应职责文件，并保持依赖顺序。
 
 ```powershell
 python -m venv .venv
