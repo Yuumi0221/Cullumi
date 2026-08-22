@@ -1385,3 +1385,423 @@ body.similar-side-open .similar-browser {
   border-color: #d84d43 !important;
   box-shadow: 0 0 0 2px rgba(216, 77, 67, 0.15);
 }
+
+/* Settings: sidebar navigation and grouped preference cards. */
+#settings.panel-dialog {
+  width:min(1080px,96vw);
+  height:min(780px,94vh);
+  max-height:94vh;
+  overflow:hidden;
+  border-radius:14px;
+}
+
+#settings .settings-shell {
+  display:grid;
+  grid-template-columns:196px minmax(0,1fr);
+  height:100%;
+  min-height:0;
+}
+
+#settings .settings-sidebar {
+  display:flex;
+  min-width:0;
+  min-height:0;
+  flex-direction:column;
+  position:relative;
+  top:auto;
+  height:auto;
+  padding:18px 13px 14px;
+  border-right:1px solid var(--line);
+  background:var(--card);
+}
+
+.settings-sidebar-title {
+  padding:0 12px 2px;
+  font-size:20px;
+  font-weight:750;
+}
+
+#settings .settings-tabs {
+  display:flex;
+  flex:1;
+  min-height:0;
+  flex-direction:column;
+  gap:0;
+  padding:15px 0 0;
+  border:0;
+  overflow-y:auto;
+}
+
+#settings .settings-tabs button {
+  position:relative;
+  justify-content:flex-start;
+  gap:11px;
+  min-height:40px;
+  margin:2px 0;
+  padding:9px 11px 9px 13px;
+  border:0;
+  border-radius:8px;
+  background:transparent;
+  color:var(--ink);
+  font-weight:500;
+}
+
+#settings .settings-tabs button svg {
+  width:20px;
+  height:20px;
+  flex:0 0 auto;
+  fill:currentColor;
+}
+
+#settings .settings-tabs button.active {
+  border:0;
+  background:var(--pink2);
+  color:var(--pink);
+  font-weight:700;
+}
+
+#settings .settings-tabs button:not(.active):hover:not(:disabled) {
+  background:var(--surface-hover);
+}
+
+#settings .settings-tabs button.active:hover:not(:disabled) {
+  background:var(--surface-hover);
+}
+
+#settings .settings-footer {
+  padding:14px 8px 0;
+  border:0;
+  color:var(--muted);
+  font-size:11px;
+  line-height:1.65;
+  text-align:left;
+}
+
+#settings .settings-main {
+  display:grid;
+  height:100%;
+  min-width:0;
+  min-height:0;
+  grid-template-rows:auto minmax(0,1fr);
+  overflow:hidden;
+  background:var(--bg);
+}
+
+#settings .dialog-head {
+  padding:22px 28px 18px;
+  border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);
+  background:var(--bg);
+}
+
+#settings .dialog-head h2 {
+  font-size:24px;
+  font-weight:750;
+}
+
+#settings .dialog-head button {
+  display:grid;
+  width:34px;
+  height:34px;
+  place-items:center;
+  padding:0;
+  border-radius:8px;
+  background:transparent;
+}
+
+#settings .dialog-head button:hover:not(:disabled) {
+  background:var(--surface-hover);
+}
+
+#settings .settings-page {
+  align-self:stretch;
+  height:100%;
+  min-width:0;
+  min-height:0;
+  max-height:none;
+  padding:24px 28px 64px;
+  overflow-x:hidden;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  scrollbar-gutter:stable;
+  background:transparent;
+}
+
+#generalSettings,
+#storageSettings {
+  max-width:none;
+}
+
+.settings-section + .settings-section {
+  margin-top:28px;
+}
+
+.settings-section h3 {
+  margin:0 0 9px;
+  font-size:15px;
+  font-weight:750;
+}
+
+.settings-group {
+  overflow:hidden;
+  border:1px solid color-mix(in srgb,var(--line) 72%,transparent);
+  border-radius:12px;
+  background:var(--card);
+}
+
+.settings-row {
+  display:flex;
+  min-height:50px;
+  align-items:center;
+  justify-content:space-between;
+  gap:20px;
+  padding:14px 18px;
+}
+
+.settings-row + .settings-row {
+  border-top:1px solid color-mix(in srgb,var(--line) 62%,transparent);
+}
+
+.setting-copy {
+  display:flex;
+  min-width:0;
+  flex:1;
+  flex-direction:column;
+  gap:3px;
+}
+
+.setting-copy > label,
+.setting-copy > span:first-child {
+  color:var(--ink);
+  font-size:14px;
+  font-weight:500;
+}
+
+.setting-copy small,
+#updateStatus {
+  color:var(--muted);
+  font-size:11px;
+  line-height:1.45;
+}
+
+.setting-actions {
+  display:flex;
+  flex:0 0 auto;
+  align-items:center;
+  gap:12px;
+}
+
+.setting-actions button,
+.storage-row > button,
+.old-cache-card button {
+  border-radius:999px;
+  padding:7px 13px;
+  background:transparent;
+  font-size:12px;
+  font-weight:500;
+}
+
+.setting-switch {
+  position:relative;
+  display:inline-flex;
+  width:38px;
+  height:22px;
+  flex:0 0 38px;
+  cursor:pointer;
+}
+
+.setting-switch > input {
+  position:absolute;
+  width:1px;
+  height:1px;
+  margin:-1px;
+  overflow:hidden;
+  clip:rect(0 0 0 0);
+  clip-path:inset(50%);
+  white-space:nowrap;
+}
+
+.setting-switch > span:last-child {
+  position:absolute;
+  inset:0;
+  border-radius:999px;
+  background:#c9c5c5;
+  transition:background-color .18s ease;
+}
+
+.setting-switch > span:last-child::after {
+  content:"";
+  position:absolute;
+  top:3px;
+  left:3px;
+  width:16px;
+  height:16px;
+  border-radius:50%;
+  background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.2);
+  transition:transform .18s ease;
+}
+
+.setting-switch > input:checked + span {
+  background:var(--pink);
+}
+
+.setting-switch > input:checked + span::after {
+  transform:translateX(16px);
+}
+
+.setting-switch > input:focus-visible + span {
+  outline:3px solid color-mix(in srgb,var(--pink) 28%,transparent);
+  outline-offset:2px;
+}
+
+.setting-switch > input:disabled + span {
+  cursor:not-allowed;
+  opacity:.5;
+}
+
+#settings .settings-choice {
+  display:flex;
+}
+
+#settings .settings-select {
+  width:min(220px,100%);
+  flex:0 0 220px;
+  margin:0;
+}
+
+#settings .settings-select select {
+  width:100%;
+  height:38px;
+  margin:0;
+  padding:0 34px 0 12px;
+  background:transparent;
+}
+
+#settings .update-row {
+  display:block;
+  margin:0;
+}
+
+.storage-row {
+  min-height:50px;
+}
+
+.storage-row .setting-copy input {
+  width:100%;
+  height:auto;
+  margin:0;
+  padding:0;
+  overflow:hidden;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  color:var(--muted);
+  font-size:12px;
+  text-overflow:ellipsis;
+}
+
+.old-cache-card {
+  display:flex;
+  min-height:64px;
+  align-items:center;
+  padding:14px 18px;
+}
+
+.old-cache-card .empty-cache {
+  color:var(--muted);
+}
+
+.old-cache-card .old-cache-row {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:18px;
+}
+
+.old-cache-card .old-cache-path {
+  min-width:0;
+  margin:0;
+  overflow-wrap:anywhere;
+  color:var(--muted);
+  font-size:12px;
+}
+
+#profileSettings > label {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-bottom:18px;
+}
+
+#profileSettings > label > input {
+  flex:1;
+}
+
+#settings .form-grid,
+#settings .check-grid {
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+}
+
+#settings .form-grid {
+  gap:13px;
+}
+
+#settings .check-grid {
+  gap:0;
+  margin:20px 0;
+  overflow:hidden;
+  border:1px solid color-mix(in srgb,var(--line) 72%,transparent);
+  border-radius:10px;
+  background:var(--card);
+}
+
+.mode-toggle {
+  display:flex;
+  min-width:0;
+  min-height:48px;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:10px 12px;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  color:var(--ink);
+  font-size:12px;
+  cursor:pointer;
+}
+
+.mode-toggle:nth-child(3n+2),
+.mode-toggle:nth-child(3n+3) {
+  border-left:1px solid color-mix(in srgb,var(--line) 62%,transparent);
+}
+
+.mode-toggle:nth-child(n+4) {
+  border-top:1px solid color-mix(in srgb,var(--line) 62%,transparent);
+}
+
+@media (max-width:700px) {
+  #settings .settings-shell {
+    grid-template-columns:136px minmax(0,1fr);
+  }
+
+  #settings .settings-sidebar {
+    padding-inline:8px;
+  }
+
+  #settings .settings-tabs button,
+  #settings .settings-tabs button.active {
+    padding-inline:10px;
+  }
+
+  #settings .settings-page,
+  #settings .dialog-head {
+    padding-inline:18px;
+  }
+
+  .settings-row {
+    gap:10px;
+    padding-inline:10px;
+  }
+}

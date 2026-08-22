@@ -60,9 +60,9 @@ async function downloadUpdate(){
 function confirmRemoveRecent(){
   const id=state.recentMenuId;const project=state.recentProjects.find(x=>x.id===id);closeRecentMenu();if(!project)return;
   $("#confirmTitle").textContent="从最近项目中移除？";
-  $("#confirmBody").innerHTML=`<p>“${esc(project.root.split(/[\\/]/).pop())}”将从首页列表移除。真实照片不会被删除或移动。</p><label class="toggle confirm-option"><input id="deleteProjectCache" type="checkbox"><span>同时删除项目缓存（包含源文件备份）</span></label><p class="confirm-note">不勾选时，数据库、缩略图和源文件备份会保留，今后重新打开该照片目录可继续使用。</p>`;
+  $("#confirmBody").innerHTML=`<p>“${esc(project.root.split(/[\\/]/).pop())}”将从首页列表移除。真实照片不会被删除或移动。</p><label class="toggle confirm-option"><input id="deleteProjectCache" type="checkbox"><span>同时删除项目缓存（包含原图备份）</span></label><p class="confirm-note">不勾选时，数据库、缩略图和原图备份会保留，今后重新打开该照片目录可继续使用。</p>`;
   $("#confirmOk").textContent="确认移除";
-  $("#confirmOk").onclick=async()=>{const deleteCache=$("#deleteProjectCache").checked;try{await json("/api/project/remove-recent",{project_id:id,delete_cache:deleteCache});$("#confirm").close();toast(deleteCache?"项目缓存和源文件备份已删除":"已从最近项目中移除");await boot()}catch(e){toast(e.message)}};
+  $("#confirmOk").onclick=async()=>{const deleteCache=$("#deleteProjectCache").checked;try{await json("/api/project/remove-recent",{project_id:id,delete_cache:deleteCache});$("#confirm").close();toast(deleteCache?"项目缓存和原图备份已删除":"已从最近项目中移除");await boot()}catch(e){toast(e.message)}};
   $("#confirm").showModal();
 }
 function projectsUsingProfile(profileId){

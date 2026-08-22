@@ -161,24 +161,79 @@
   </dialog>
 
   <dialog id="settings" class="panel-dialog">
-    <div class="dialog-head"><h2>设置与分析模式</h2>
-      <button data-close>
-        <svg width="16" height="16">
-          <line x1="3" y1="3" x2="13" y2="13"/>
-          <line x1="13" y1="3" x2="3" y2="13"/>
-        </svg></button></div>
-    <div class="settings-tabs"><button data-setting="general" class="active">常规与存储</button><button data-setting="profiles">自定义模式</button></div>
-    <section id="generalSettings" class="settings-page scroll-fade-region">
-      <label class="toggle"><input id="autoAdvance" type="checkbox"><span>标记后自动下一张</span></label>
-      <div class="update-row">
-        <label class="toggle"><input id="autoCheckUpdates" type="checkbox"><span>启动时自动检查更新</span><button id="checkUpdateBtn">检查更新</button><span id="updateStatus" role="status"></span></label>
-      </div>
-      <label class="settings-choice">Live Photo 当前封面写回源文件：<span class="select-field settings-select"><select id="motionCoverWriteback"><option value="never">不写回源文件</option><option value="ask">每次写回时提醒</option><option value="always">始终写回</option></select><svg class="select-chevron" viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#chevron-down"></use></svg></span><small>写回前会在项目缓存中备份源图片；视频帧的分辨率可能低于原始静态照片。</small></label>
-      <label>全局默认数据库与缩略图位置<div class="path-row"><input id="defaultCache" readonly><button id="defaultCacheBtn">选择</button></div></label>
-      <label>当前项目存储位置<div class="path-row"><input id="projectCache" readonly><button id="projectCacheBtn">迁移</button></div></label>
-      <div id="oldCaches"></div>
-    </section>
-    <section id="profileSettings" class="settings-page scroll-fade-region hidden">
+    <div class="settings-shell">
+      <aside class="settings-sidebar">
+        <div class="settings-sidebar-title">设置</div>
+        <nav class="settings-tabs" aria-label="设置分类">
+          <button data-setting="general" data-settings-title="通用" class="active" aria-current="page">
+            <svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=5#setting-general"></use></svg><span>通用</span>
+          </button>
+          <button data-setting="storage" data-settings-title="存储">
+            <svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=5#setting-store"></use></svg><span>存储</span>
+          </button>
+          <button data-setting="profiles" data-settings-title="模式">
+            <svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=5#setting-mode"></use></svg><span>模式</span>
+          </button>
+        </nav>
+        <footer class="settings-footer">© 2026 Cullumi <span id="appVersion"></span></footer>
+      </aside>
+
+      <div class="settings-main">
+        <div class="dialog-head"><h2 id="settingsPageTitle">通用</h2>
+          <button data-close aria-label="关闭设置">
+            <svg width="16" height="16" aria-hidden="true">
+              <line x1="3" y1="3" x2="13" y2="13"/>
+              <line x1="13" y1="3" x2="3" y2="13"/>
+            </svg>
+          </button>
+        </div>
+
+        <section id="generalSettings" class="settings-page scroll-fade-region" data-setting-page="general">
+          <div class="settings-section">
+            <h3>图片操作</h3>
+            <div class="settings-group">
+              <div class="settings-row">
+                <div class="setting-copy"><label for="autoAdvance">标记后下一张</label></div>
+                <label class="setting-switch" aria-label="标记后自动下一张"><input id="autoAdvance" type="checkbox"><span aria-hidden="true"></span></label>
+              </div>
+              <div class="settings-row settings-choice">
+                <div class="setting-copy"><label for="motionCoverWriteback">Live图处理方式</label><small>修改原图前会在项目缓存中备份；视频帧的分辨率可能低于原始静态照片。</small></div>
+                <span class="select-field settings-select"><select id="motionCoverWriteback"><option value="never">不修改原图</option><option value="ask">每次修改前提醒</option><option value="always">始终修改原图</option></select><svg class="select-chevron" viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#chevron-down"></use></svg></span>
+              </div>
+            </div>
+          </div>
+          <div class="settings-section">
+            <h3>软件更新</h3>
+            <div class="settings-group update-row">
+              <div class="settings-row">
+                <div class="setting-copy"><label for="autoCheckUpdates">启动时检查更新</label><span id="updateStatus" role="status"></span></div>
+                <div class="setting-actions"><button id="checkUpdateBtn">检查更新</button><label class="setting-switch" aria-label="启动时自动检查更新"><input id="autoCheckUpdates" type="checkbox"><span aria-hidden="true"></span></label></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="storageSettings" class="settings-page scroll-fade-region hidden" data-setting-page="storage">
+          <div class="settings-section">
+            <h3>保存位置</h3>
+            <div class="settings-group storage-group">
+              <div class="settings-row storage-row">
+                <div class="setting-copy"><label for="defaultCache">全局默认数据库与缩略图位置</label><input id="defaultCache" readonly aria-label="全局默认存储位置"></div>
+                <button id="defaultCacheBtn">更改存储路径</button>
+              </div>
+              <div class="settings-row storage-row">
+                <div class="setting-copy"><label for="projectCache">当前项目存储位置</label><input id="projectCache" readonly aria-label="当前项目存储位置"></div>
+                <button id="projectCacheBtn">迁移存储位置</button>
+              </div>
+            </div>
+          </div>
+          <div class="settings-section">
+            <h3>存储空间</h3>
+            <div id="oldCaches" class="settings-group old-cache-card"><span class="empty-cache">暂无待清理的旧缓存</span></div>
+          </div>
+        </section>
+
+        <section id="profileSettings" class="settings-page scroll-fade-region hidden" data-setting-page="profiles">
       <div class="profile-toolbar"><span class="select-field profile-editor-select"><select id="profileEditorSelect"></select><svg class="select-chevron" viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#chevron-down"></use></svg></span><button id="cloneProfile">复制为自定义</button><button id="deleteProfile" class="danger">删除</button></div>
       <label>配置名称：<input id="profileName" maxlength="40"></label>
       <div class="form-grid">
@@ -213,27 +268,28 @@
         <label>文件序列间隔<input type="number" data-p="similarity.sequence_gap"></label>
         <label>最小分组数量<input type="number" data-p="similarity.min_group_size" min="2"></label>
       </div>
-      <div class="check-grid">
-        <label><input type="checkbox" data-p="quality.enabled.sharpness">启用清晰度</label>
-        <label><input type="checkbox" data-p="quality.enabled.luminance">启用亮度/暗部</label>
-        <label><input type="checkbox" data-p="quality.enabled.bright_clip">启用高光溢出</label>
-        <label><input type="checkbox" data-p="quality.enabled.contrast">启用对比度</label>
-        <label><input type="checkbox" data-p="quality.enabled.entropy">启用细节量</label>
-        <label><input type="checkbox" data-p="quality.enabled.resolution">启用分辨率</label>
-        <label><input type="checkbox" data-p="quality.enabled.file_size">启用文件大小</label>
-        <label><input type="checkbox" data-p="similarity.exact_duplicates">检测完全重复</label>
-        <label><input type="checkbox" data-p="similarity.allow_cross_time_high_confidence">允许跨时间高置信匹配</label>
-        <label><input type="checkbox" data-p="similarity.face_safe">人物照片保守处理</label>
-      </div>
+          <div class="check-grid">
+            <label class="mode-toggle"><span>启用清晰度</span><span class="setting-switch"><input type="checkbox" data-p="quality.enabled.sharpness"><span aria-hidden="true"></span></span></label>
+            <label class="mode-toggle"><span>启用亮度/暗部</span><span class="setting-switch"><input type="checkbox" data-p="quality.enabled.luminance"><span aria-hidden="true"></span></span></label>
+            <label class="mode-toggle"><span>启用高光溢出</span><span class="setting-switch"><input type="checkbox" data-p="quality.enabled.bright_clip"><span aria-hidden="true"></span></span></label>
+            <label class="mode-toggle"><span>启用对比度</span><span class="setting-switch"><input type="checkbox" data-p="quality.enabled.contrast"><span aria-hidden="true"></span></span></label>
+            <label class="mode-toggle"><span>启用细节量</span><span class="setting-switch"><input type="checkbox" data-p="quality.enabled.entropy"><span aria-hidden="true"></span></span></label>
+            <label class="mode-toggle"><span>启用分辨率</span><span class="setting-switch"><input type="checkbox" data-p="quality.enabled.resolution"><span aria-hidden="true"></span></span></label>
+            <label class="mode-toggle"><span>启用文件大小</span><span class="setting-switch"><input type="checkbox" data-p="quality.enabled.file_size"><span aria-hidden="true"></span></span></label>
+            <label class="mode-toggle"><span>检测完全重复</span><span class="setting-switch"><input type="checkbox" data-p="similarity.exact_duplicates"><span aria-hidden="true"></span></span></label>
+            <label class="mode-toggle"><span>允许跨时间高置信匹配</span><span class="setting-switch"><input type="checkbox" data-p="similarity.allow_cross_time_high_confidence"><span aria-hidden="true"></span></span></label>
+            <label class="mode-toggle"><span>人物照片保守处理</span><span class="setting-switch"><input type="checkbox" data-p="similarity.face_safe"><span aria-hidden="true"></span></span></label>
+          </div>
       <div id="estimate" class="estimate">调整后可先预估影响。</div>
       <div id="profileSaveStatus" class="profile-save-status hidden" role="status"></div>
       <div class="dialog-actions"><button id="estimateBtn">预估当前项目</button><button id="saveProfile" class="primary">保存自定义模式</button></div>
-    </section>
-    <footer class="settings-footer">© 2026 Yuumi · Cullumi <span id="appVersion"></span></footer>
+        </section>
+      </div>
+    </div>
   </dialog>
 
   <dialog id="confirm" class="confirm"><h2 id="confirmTitle"></h2><div id="confirmBody"></div><footer><button data-close>取消</button><button id="confirmOk" class="danger">确认</button></footer></dialog>
-  <dialog id="motionWritebackConfirm" class="confirm"><h2>是否修改源文件</h2><div><p>确认后将备份并修改实际图片，使所选动态帧成为源文件封面。视频帧的分辨率可能低于原始照片。</p><label class="toggle confirm-option"><input id="motionWritebackDontAsk" type="checkbox"><span>不再提醒，可以在设置中重新修改</span></label></div><footer><button id="motionWritebackNo">不修改</button><button id="motionWritebackYes" class="primary">确认修改</button></footer></dialog>
+  <dialog id="motionWritebackConfirm" class="confirm"><h2>是否修改原图</h2><div><p>确认后将备份并修改原图，使所选动态帧成为当前封面。视频帧的分辨率可能低于原始照片。</p><label class="toggle confirm-option"><input id="motionWritebackDontAsk" type="checkbox"><span>不再提醒，可以在设置中重新修改</span></label></div><footer><button id="motionWritebackNo">不修改</button><button id="motionWritebackYes" class="primary">确认修改</button></footer></dialog>
   <dialog id="startupWarning" class="confirm" data-backdrop-close><h2>配置已安全恢复</h2><div id="startupWarningBody"></div><footer><button class="primary" data-close>知道了</button></footer></dialog>
   <dialog id="profileInUseWarning" class="confirm" data-backdrop-close><h2>此模式正在使用中</h2><div id="profileInUseWarningBody"></div><footer><button class="primary" data-close>知道了</button></footer></dialog>
   <dialog id="updateDialog" class="confirm"><h2 id="updateTitle">发现新版本</h2><div id="updateBody"></div><footer><button data-close>以后再说</button><button id="updateDownload" class="primary">下载更新</button></footer></dialog>

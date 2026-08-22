@@ -782,7 +782,7 @@ test("动态照片打开时定格当前封面并在修改后同步分析标识",
   await expect(page.locator("#viewerMeta")).toContainText("严重失焦");
 });
 
-test("动态封面写回提醒可以记住确认修改", async ({ page }) => {
+test("动态封面修改提醒可以记住确认修改", async ({ page }) => {
   const requests = await openApp(page, {
     motionPhoto: true,
     writebackMode: "ask",
@@ -798,7 +798,7 @@ test("动态封面写回提醒可以记住确认修改", async ({ page }) => {
   await page.locator("#motionWritebackDontAsk").check();
   await page.locator("#motionWritebackYes").click();
 
-  await expect(page.locator("#toast")).toContainText("源文件已备份并写回");
+  await expect(page.locator("#toast")).toContainText("原图已备份并修改");
   expect(requests.find(request => request.path === "/api/settings" && request.body?.motion_cover_writeback)?.body).toMatchObject({
     motion_cover_writeback: "always",
   });
@@ -813,7 +813,7 @@ test("动态封面写回提醒可以记住确认修改", async ({ page }) => {
   await expect(page.locator("#motionWritebackConfirm")).toBeHidden();
 });
 
-test("动态封面写回提醒可以记住不修改", async ({ page }) => {
+test("动态封面修改提醒可以记住不修改", async ({ page }) => {
   const requests = await openApp(page, {
     motionPhoto: true,
     writebackMode: "ask",

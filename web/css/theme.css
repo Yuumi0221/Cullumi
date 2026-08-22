@@ -129,28 +129,6 @@
   background: var(--surface-hover);
 }
 
-[data-theme="night"] .settings-tabs button:not(.active) {
-  border-color:var(--line);
-  background: transparent;
-}
-
-[data-theme="night"] .settings-tabs button:not(.active):hover {
-  border-color: var(--line);
-  background: var(--surface-hover);
-}
-
-[data-theme="night"] .settings-tabs button.active {
-  border-color: var(--pink);
-  background: transparent;
-  color: var(--pink);
-}
-
-[data-theme="night"] .settings-tabs button.active:hover {
-  border-color: var(--pink);
-  background: var(--surface-hover);
-  color: var(--pink);
-}
-
 [data-theme="night"] .logo {
   border-color: transparent;
   background: transparent;

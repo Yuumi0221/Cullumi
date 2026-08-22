@@ -364,7 +364,7 @@ def extract_motion_asset_frame(
 
 def _jpeg_metadata_and_image(data: bytes) -> tuple[list[bytes], bytes]:
     if not data.startswith(b"\xff\xd8"):
-        raise ValueError("源文件不是有效的 JPEG")
+        raise ValueError("原图不是有效的 JPEG")
     position = 2
     metadata: list[bytes] = []
     while position + 4 <= len(data) and data[position] == 0xFF:
@@ -421,7 +421,7 @@ def _motion_xmp_timestamp(segment: bytes, time_ms: int) -> bytes:
         )
     declared_length = len(result) - 2
     if declared_length > 0xFFFF:
-        raise ValueError("Motion Photo XMP 段过大，无法安全写回")
+        raise ValueError("Motion Photo XMP 段过大，无法安全修改原图")
     return result[:2] + declared_length.to_bytes(2, "big") + result[4:]
 
 
@@ -450,7 +450,7 @@ def _write_jpeg_motion_cover(
 
 def _write_heif_motion_cover(photo: Path, frame: Path, target: Path) -> None:
     if open_heif is None or from_pillow is None:
-        raise RuntimeError("HEIC/HEIF 写回组件未安装")
+        raise RuntimeError("HEIC/HEIF 原图修改组件未安装")
     original = open_heif(photo, convert_hdr_to_8bit=True, reload_size=True)
     original_info = dict(original[original.primary_index].info)
     with Image.open(frame) as source:
@@ -489,7 +489,7 @@ def write_motion_cover_source(
     """Safely replace the source still while retaining Live/Motion metadata."""
     suffix = photo.suffix.lower()
     if suffix not in {".jpg", ".jpeg", *HEIF_EXTENSIONS}:
-        raise ValueError("原片写回目前仅支持 JPEG、HEIC 和 HEIF 动态照片")
+        raise ValueError("原图修改目前仅支持 JPEG、HEIC 和 HEIF 动态照片")
     temporary = photo.with_name(
         f".{photo.name}.cullumi-{uuid.uuid4().hex}.tmp{photo.suffix}"
     )
@@ -511,7 +511,7 @@ def write_motion_cover_source(
         if asset.kind == "android_embedded" and (
             embedded is None or embedded.length != asset.length
         ):
-            raise RuntimeError("写回后的 Motion Photo 视频结构校验失败")
+            raise RuntimeError("修改后的 Motion Photo 视频结构校验失败")
         backup_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(photo, backup)
         temporary.replace(photo)

@@ -473,7 +473,7 @@ class AppSafetyTests(unittest.TestCase):
                     handler.api_settings({"auto_advance": "false"})
                 self.assertEqual(config.data, before)
 
-                with self.assertRaisesRegex(ValueError, "写回设置"):
+                with self.assertRaisesRegex(ValueError, "封面修改设置"):
                     handler.api_settings({"motion_cover_writeback": "sometimes"})
                 self.assertEqual(config.data, before)
 

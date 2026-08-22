@@ -210,7 +210,7 @@ class ConfigStore:
             normalized["motion_cover_writeback"] = writeback
         else:
             normalized["motion_cover_writeback"] = defaults["motion_cover_writeback"]
-            issues.append("动态照片封面写回设置无效")
+            issues.append("动态照片封面修改设置无效")
 
         theme = loaded.get("theme", defaults["theme"])
         if isinstance(theme, str) and theme.strip().lower() in {"day", "night"}:

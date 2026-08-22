@@ -63,10 +63,10 @@ $("#importBtn").onclick=async()=>{const f=await json("/api/choose-csv",{});if(!f
 $("#quarantineBtn").onclick=quarantine;
 $("#clearDecisionsBtn").onclick=confirmClearDecisions;
 $("#markAiRemoveBtn").onclick=confirmAiRemoveSuggestions;
-$$("[data-setting]").forEach(b=>b.onclick=()=>{$$("[data-setting]").forEach(x=>x.classList.remove("active"));b.classList.add("active");$("#generalSettings").classList.toggle("hidden",b.dataset.setting!=="general");$("#profileSettings").classList.toggle("hidden",b.dataset.setting!=="profiles")});
+$$("[data-setting]").forEach(b=>b.onclick=()=>{$$("[data-setting]").forEach(x=>{const active=x===b;x.classList.toggle("active",active);active?x.setAttribute("aria-current","page"):x.removeAttribute("aria-current")});$$("[data-setting-page]").forEach(page=>page.classList.toggle("hidden",page.dataset.settingPage!==b.dataset.setting));$("#settingsPageTitle").textContent=b.dataset.settingsTitle||b.textContent.trim()});
 $("#autoAdvance").onchange=async e=>{state.settings.auto_advance=e.target.checked;await json("/api/settings",{auto_advance:e.target.checked})};
 $("#autoCheckUpdates").onchange=async e=>{state.settings.auto_check_updates=e.target.checked;await json("/api/settings",{auto_check_updates:e.target.checked})};
-$("#motionCoverWriteback").onchange=async e=>{const previous=state.settings.motion_cover_writeback||"ask";try{const saved=await json("/api/settings",{motion_cover_writeback:e.target.value});state.settings.motion_cover_writeback=saved.settings.motion_cover_writeback||e.target.value}catch(error){e.target.value=previous;toast(`保存写回设置失败：${error.message}`)}};
+$("#motionCoverWriteback").onchange=async e=>{const previous=state.settings.motion_cover_writeback||"ask";try{const saved=await json("/api/settings",{motion_cover_writeback:e.target.value});state.settings.motion_cover_writeback=saved.settings.motion_cover_writeback||e.target.value}catch(error){e.target.value=previous;toast(`保存原图修改设置失败：${error.message}`)}};
 $("#checkUpdateBtn").onclick=()=>checkForUpdates(true);
 $("#defaultCacheBtn").onclick=async()=>{
   const button=$("#defaultCacheBtn");
@@ -89,8 +89,8 @@ $("#projectCacheBtn").onclick=async()=>{
     state.project.cache_root=migration.cache_root;
     $("#projectCache").value=migration.cache_root;
     if(migration.old_cache){
-      $("#oldCaches").innerHTML=`<p>旧缓存已保留：${esc(migration.old_cache)}</p><button id="cleanOld">确认清理旧缓存</button>`;
-      $("#cleanOld").onclick=async()=>{try{await json("/api/project/cache/cleanup",{project_id:state.project.id,path:migration.old_cache});$("#oldCaches").innerHTML="";toast("旧缓存已清理")}catch(e){toast(`清理失败：${e.message}`)}};
+      $("#oldCaches").innerHTML=`<div class="old-cache-row"><p class="old-cache-path">旧缓存已保留：${esc(migration.old_cache)}</p><button id="cleanOld">清理</button></div>`;
+      $("#cleanOld").onclick=async()=>{try{await json("/api/project/cache/cleanup",{project_id:state.project.id,path:migration.old_cache});$("#oldCaches").innerHTML='<span class="empty-cache">暂无待清理的旧缓存</span>';toast("旧缓存已清理")}catch(e){toast(`清理失败：${e.message}`)}};
     }
     toast(migration.changed?"迁移完成，旧缓存仍保留":"当前项目已使用此存储位置");
   }catch(e){toast(`迁移失败：${e.message}`)}finally{button.disabled=false}

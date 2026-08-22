@@ -662,7 +662,7 @@ class Handler(BaseHTTPRequestHandler):
         if source not in {"still", "motion"}:
             raise ValueError("封面来源无效")
         if write_source and source != "motion":
-            raise ValueError("只有动态帧可以写回源文件")
+            raise ValueError("只有动态帧可以修改原图")
         project = MANAGER.from_id(pid)
         profile = CONFIG.get_profile(project.profile_id)
         with MANAGER.data_operation(pid), SCANNER.project_operation(pid, "修改动态照片封面"):
@@ -990,7 +990,7 @@ class Handler(BaseHTTPRequestHandler):
         if "motion_cover_writeback" in body:
             writeback = str(body["motion_cover_writeback"])
             if writeback not in {"never", "ask", "always"}:
-                raise ValueError("动态照片封面写回设置无效")
+                raise ValueError("动态照片封面修改设置无效")
             updates["motion_cover_writeback"] = writeback
         cache_path = None
         if "default_cache_root" in body:
