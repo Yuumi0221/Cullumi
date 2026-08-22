@@ -1,12 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 msvcp140 = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "msvcp140.dll")
 fallback_internal = os.environ.get("CULLUMI_BUILD_INTERNAL", "")
 runtime_datas = []
 runtime_datas.extend(collect_data_files("imageio_ffmpeg"))
+runtime_binaries = collect_dynamic_libs("onnxruntime")
 if fallback_internal:
     for runtime_dir in ("clr_loader", "pythonnet", "webview", "rawpy"):
         source = os.path.join(fallback_internal, runtime_dir)
@@ -16,8 +17,8 @@ if fallback_internal:
 a = Analysis(
     ["app.py"],
     pathex=[],
-    binaries=[(msvcp140, ".")],
-    datas=[("web", "web"), *runtime_datas],
+    binaries=[(msvcp140, "."), *runtime_binaries],
+    datas=[("web", "web"), ("models", "models"), *runtime_datas],
     hiddenimports=[
         "clr",
         "webview",
@@ -26,6 +27,8 @@ a = Analysis(
         "pillow_heif",
         "rawpy",
         "imageio_ffmpeg",
+        "onnxruntime",
+        "onnxruntime.capi._pybind_state",
     ],
     hookspath=[],
     hooksconfig={},

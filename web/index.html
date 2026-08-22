@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Cullumi</title>
   <link rel="icon" href="/static/assets/images/brand-icon.png" type="image/png">
-  <link rel="stylesheet" href="/static/css/base.css?v=1.0.1-css-layout2">
-  <link rel="stylesheet" href="/static/css/workspace.css?v=1.0.1-css-layout22">
-  <link rel="stylesheet" href="/static/css/viewer.css?v=1.0.1-css-layout1">
-  <link rel="stylesheet" href="/static/css/settings.css?v=1.0.1-css-layout1">
-  <link rel="stylesheet" href="/static/css/theme.css?v=1.0.1-css-layout2">
-  <link rel="stylesheet" href="/static/css/responsive.css?v=1.0.1-css-layout1">
-  <link rel="stylesheet" href="/static/css/home.css?v=1.0.1-css-layout3">
+  <link rel="stylesheet" href="/static/css/base.css?v=1.0.2-css-layout2">
+  <link rel="stylesheet" href="/static/css/workspace.css?v=1.0.2-css-layout22">
+  <link rel="stylesheet" href="/static/css/viewer.css?v=1.0.2-css-layout1">
+  <link rel="stylesheet" href="/static/css/settings.css?v=1.0.2-css-layout1">
+  <link rel="stylesheet" href="/static/css/theme.css?v=1.0.2-css-layout2">
+  <link rel="stylesheet" href="/static/css/responsive.css?v=1.0.2-css-layout1">
+  <link rel="stylesheet" href="/static/css/home.css?v=1.0.2-css-layout3">
 </head>
 <body>
   <header class="topbar">
@@ -198,6 +198,10 @@
                 <div class="setting-copy"><label for="autoAdvance">标记后下一张</label></div>
                 <label class="setting-switch" aria-label="标记后自动下一张"><input id="autoAdvance" type="checkbox"><span aria-hidden="true"></span></label>
               </div>
+              <div class="settings-row">
+                <div class="setting-copy"><label for="blinkDetectionEnabled">启用眨眼检测</label></div>
+                <label class="setting-switch" aria-label="启用眨眼检测"><input id="blinkDetectionEnabled" type="checkbox"><span aria-hidden="true"></span></label>
+              </div>
               <div class="settings-row settings-choice">
                 <div class="setting-copy"><label for="motionCoverWriteback">Live图处理方式</label><small>修改原图前会在项目缓存中备份；视频帧的分辨率可能低于原始静态照片。</small></div>
                 <span class="select-field settings-select"><select id="motionCoverWriteback"><option value="never">不修改原图</option><option value="ask">每次修改前提醒</option><option value="always">始终修改原图</option></select><svg class="select-chevron" viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#chevron-down"></use></svg></span>
@@ -269,6 +273,11 @@
         <label>拍摄时间窗口(分钟)<input type="number" data-p="similarity.time_window_minutes"></label>
         <label>文件序列间隔<input type="number" data-p="similarity.sequence_gap"></label>
         <label>最小分组数量<input type="number" data-p="similarity.min_group_size" min="2"></label>
+        <label>最低人脸置信度<input type="number" step=".01" data-p="similarity.blink.face_confidence_min" min=".5" max=".99"></label>
+        <label>睁眼最低置信度<input type="number" step=".01" data-p="similarity.blink.open_confidence_min" min=".5" max=".99"></label>
+        <label>闭眼最低置信度<input type="number" step=".01" data-p="similarity.blink.closed_confidence_min" min=".5" max=".99"></label>
+        <label>最小可分析眼距<input type="number" step="1" data-p="similarity.blink.min_eye_distance_px" min="4" max="64"></label>
+        <label>最低可靠人脸覆盖率<input type="number" step=".01" data-p="similarity.blink.reliable_coverage_min" min=".5" max="1"></label>
       </div>
           <div class="check-grid">
             <label class="mode-toggle"><span>启用清晰度</span><span class="setting-switch"><input type="checkbox" data-p="quality.enabled.sharpness"><span aria-hidden="true"></span></span></label>
@@ -301,11 +310,11 @@
   </div>
   <div id="toast"></div>
   <script>window.APP_TOKEN="__APP_TOKEN__"</script>
-  <script src="/static/js/runtime.js?v=1.0.1-layout1"></script>
-  <script src="/static/js/session.js?v=1.0.1-layout3"></script>
-  <script src="/static/js/similar.js?v=1.0.1-layout2"></script>
-  <script src="/static/js/settings.js?v=1.0.1-layout2"></script>
-  <script src="/static/js/gallery.js?v=1.0.1-layout10"></script>
-  <script src="/static/js/app.js?v=1.0.1-layout7"></script>
+  <script src="/static/js/runtime.js?v=1.0.2-layout1"></script>
+  <script src="/static/js/session.js?v=1.0.2-layout3"></script>
+  <script src="/static/js/similar.js?v=1.0.2-layout2"></script>
+  <script src="/static/js/settings.js?v=1.0.2-layout2"></script>
+  <script src="/static/js/gallery.js?v=1.0.2-layout11"></script>
+  <script src="/static/js/app.js?v=1.0.2-layout7"></script>
 </body>
 </html>

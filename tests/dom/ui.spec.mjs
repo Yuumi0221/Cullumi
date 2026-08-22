@@ -6,8 +6,8 @@ const image = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' widt
 const runtimeProblems = new WeakMap();
 
 const profiles = [
-  { id: "conservative", name: "保守筛选", builtin: true },
-  { id: "custom-portrait", name: "人像精选", builtin: false, base_mode: "conservative" },
+  { id: "conservative", name: "保守筛选", builtin: true, similarity: { blink: { face_confidence_min: 0.85, open_confidence_min: 0.8, closed_confidence_min: 0.8, min_eye_distance_px: 12, reliable_coverage_min: 0.8 } } },
+  { id: "custom-portrait", name: "人像精选", builtin: false, base_mode: "conservative", similarity: { blink: { face_confidence_min: 0.85, open_confidence_min: 0.8, closed_confidence_min: 0.8, min_eye_distance_px: 12, reliable_coverage_min: 0.8 } } },
 ];
 
 function projectPayload(decision = "", photoCount = 2, decisions = null) {
@@ -95,6 +95,7 @@ function motionPhotoPayload(decision = "", id = 1, stillTime = 0) {
 async function installApi(page, options = {}) {
   let decision = "";
   let writebackMode = options.writebackMode || "never";
+  let blinkEnabled = options.blinkEnabled ?? true;
   const decisions = new Map();
   const requests = [];
   await page.route("**/api/**", async route => {
@@ -111,12 +112,13 @@ async function installApi(page, options = {}) {
 
     if (url.pathname === "/api/bootstrap") {
       return fulfill({
-        version: "1.0.1",
+        version: "1.0.2",
         profiles,
         settings: {
           theme: "day",
           auto_advance: false,
           auto_check_updates: false,
+          blink_detection_enabled: blinkEnabled,
           motion_cover_writeback: writebackMode,
           default_cache_root: "C:\\Cullumi缓存",
         },
@@ -178,7 +180,8 @@ async function installApi(page, options = {}) {
     }
     if (url.pathname === "/api/settings") {
       if (body.motion_cover_writeback) writebackMode = body.motion_cover_writeback;
-      return fulfill({ saved: true, settings: { theme: body.theme || "day", motion_cover_writeback: writebackMode } });
+      if (typeof body.blink_detection_enabled === "boolean") blinkEnabled = body.blink_detection_enabled;
+      return fulfill({ saved: true, settings: { theme: body.theme || "day", motion_cover_writeback: writebackMode, blink_detection_enabled: blinkEnabled } });
     }
     if (url.pathname === "/api/choose-cache") {
       return fulfill({ path: "D:\\新缓存" });
@@ -200,6 +203,10 @@ async function installApi(page, options = {}) {
       });
     }
     if (url.pathname === "/api/similar-groups") {
+      const similarPhoto = id => ({
+        ...photoPayload("", id),
+        ...(options.blinkSimilar ? { suggestion: "keep", reason: "", blink_status: "closed", blink_face_count: 1, blink_closed_face_count: 1, blink_uncertain_face_count: 0, blink_closed_ratio: 1 } : {}),
+      });
       return fulfill({
         total: 1,
         items: [{
@@ -207,12 +214,16 @@ async function installApi(page, options = {}) {
           count: 2,
           kind: "similar",
           face_safe: false,
-          recommended: photoPayload("", 1),
-          covers: [photoPayload("", 1), photoPayload("", 2)],
+          recommended: similarPhoto(1),
+          covers: [similarPhoto(1), similarPhoto(2)],
         }],
       });
     }
     if (url.pathname === "/api/similar-group") {
+      const similarPhoto = id => ({
+        ...photoPayload("", id),
+        ...(options.blinkSimilar ? { suggestion: "keep", reason: "", blink_status: "closed", blink_face_count: 1, blink_closed_face_count: 1, blink_uncertain_face_count: 0, blink_closed_ratio: 1 } : {}),
+      });
       return fulfill({
         id: "similar-1",
         count: 2,
@@ -220,8 +231,8 @@ async function installApi(page, options = {}) {
         face_safe: false,
         recommended_id: 1,
         members: [
-          { ...photoPayload("", 1), group_similarity: 1 },
-          { ...photoPayload("", 2), group_similarity: 0.91 },
+          { ...similarPhoto(1), group_similarity: 1 },
+          { ...similarPhoto(2), group_similarity: 0.91 },
         ],
       });
     }
@@ -266,7 +277,7 @@ test("首页加载全部脚本并异步渲染最近项目", async ({ page }) => 
   await openApp(page);
 
   await expect(page).toHaveTitle("Cullumi");
-  await expect(page.locator("#appVersion")).toHaveText("v1.0.1");
+  await expect(page.locator("#appVersion")).toHaveText("v1.0.2");
   await expect(page.locator("#chooseBtn svg use")).toHaveAttribute("href", "/static/assets/icons.svg?v=2#home-folder");
   await expect(page.locator("#recentList .recent-meta")).toContainText("2 张");
   await expect(page.locator("#recentList .recent-thumb img")).toHaveCount(1);
@@ -332,6 +343,51 @@ test("自定义模式恢复按钮使用统一图标并停留在字段标题行",
     return { resetBottom: reset.bottom, fieldTop: field.top };
   });
   expect(positions.resetBottom).toBeLessThanOrEqual(positions.fieldTop);
+});
+
+test("眨眼检测开关和自定义模式阈值可以编辑及单项重置", async ({ page }) => {
+  const requests = await openApp(page);
+  await openProject(page);
+  await page.locator("#settingsBtn").click();
+
+  const toggle = page.locator("#blinkDetectionEnabled");
+  await expect(toggle).toBeChecked();
+  await page.locator('label[aria-label="启用眨眼检测"]').click();
+  await expect(toggle).not.toBeChecked();
+  await expect.poll(() => requests.findLast(request => request.path === "/api/settings")?.body?.blink_detection_enabled).toBe(false);
+
+  await page.locator('[data-setting="profiles"]').click();
+  const threshold = page.locator('[data-p="similarity.blink.face_confidence_min"]');
+  await expect(threshold).toHaveAttribute("min", "0.5");
+  await expect(threshold).toHaveAttribute("max", "0.99");
+  await threshold.fill("0.7");
+  await threshold.locator("xpath=ancestor::label").locator(".field-reset").click();
+  await expect(threshold).toHaveValue("0.85");
+  await expect(page.locator('[data-p="similarity.blink.min_eye_distance_px"]')).toHaveAttribute("step", "1");
+});
+
+test("眨眼作为问题显示在非推荐照片的信息行并隐藏文件信息", async ({ page }) => {
+  await openApp(page, { blinkSimilar: true });
+  await openProject(page);
+  await page.locator('[data-nav="similar"]').click();
+  await page.locator('[data-similar-group="similar-1"]').click();
+
+  await expect(page.locator('[data-photo-id="1"]')).not.toContainText("眨眼");
+  const candidate = page.locator('[data-photo-id="2"]');
+  await expect(candidate.locator("small")).toHaveText("眨眼");
+  await expect(candidate.locator("small")).not.toContainText("4000×3000");
+  await expect(candidate.locator("small")).not.toContainText("MB");
+  await expect(candidate.locator(".similarity-score")).toHaveText("相似度 91%");
+  await expect(candidate.locator(".similarity-score")).not.toContainText("眨眼");
+  expect(await page.evaluate(() => cardDetailText({
+    reason: "严重失焦、对比度极低",
+    _blinkLabel: "眨眼",
+    width: 4000,
+    height: 3000,
+    size: 2_500_000,
+  }))).toBe("严重失焦、对比度极低、眨眼");
+  await page.locator('[data-photo-id="2"] .thumb').click();
+  await expect(page.locator("#viewerMeta")).toContainText("眨眼");
 });
 
 test("放大预览中的决定局部同步到图库且不刷新完整项目", async ({ page }) => {

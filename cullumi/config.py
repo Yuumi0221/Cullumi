@@ -16,6 +16,28 @@ from typing import Any
 
 APP_NAME = "Cullumi"
 
+BLINK_DEFAULTS = {
+    "face_confidence_min": 0.85,
+    "open_confidence_min": 0.80,
+    "closed_confidence_min": 0.80,
+    "min_eye_distance_px": 12,
+    "reliable_coverage_min": 0.80,
+}
+
+
+def normalize_profile(profile: dict[str, Any]) -> dict[str, Any]:
+    """Fill optional profile sections introduced after profile version 1."""
+    normalized = copy.deepcopy(profile)
+    similarity = normalized.setdefault("similarity", {})
+    if not isinstance(similarity, dict):
+        return normalized
+    blink = similarity.get("blink")
+    if not isinstance(blink, dict):
+        blink = {}
+    similarity["blink"] = {**BLINK_DEFAULTS, **blink}
+    return normalized
+
+
 def _profile(
     profile_id: str,
     name: str,
@@ -94,6 +116,7 @@ def _profile(
             # high-confidence match in the built-in modes.
             "allow_cross_time_high_confidence": True,
             "face_safe": True,
+            "blink": copy.deepcopy(BLINK_DEFAULTS),
         },
     }
 
@@ -156,6 +179,7 @@ class ConfigStore:
             "default_cache_root": str(default_cache),
             "auto_advance": True,
             "auto_check_updates": True,
+            "blink_detection_enabled": True,
             "motion_cover_writeback": "ask",
             "theme": "day",
             "projects": {},
@@ -198,7 +222,11 @@ class ConfigStore:
             normalized["default_cache_root"] = defaults["default_cache_root"]
             issues.append("默认缓存位置无效")
 
-        for key in ("auto_advance", "auto_check_updates"):
+        for key in (
+            "auto_advance",
+            "auto_check_updates",
+            "blink_detection_enabled",
+        ):
             if key in loaded and not isinstance(loaded[key], bool):
                 normalized[key] = defaults[key]
                 issues.append(f"{key} 类型无效")
@@ -236,7 +264,7 @@ class ConfigStore:
                 ):
                     issues.append("已忽略无效的自定义模式")
                     continue
-                profile = copy.deepcopy(raw_profile)
+                profile = normalize_profile(raw_profile)
                 try:
                     validate_profile(profile)
                 except (TypeError, ValueError):
@@ -419,6 +447,7 @@ class ConfigStore:
         return profiles.get(profile_id, profiles["conservative"])
 
     def save_custom_profile(self, profile: dict[str, Any]) -> dict[str, Any]:
+        profile = normalize_profile(profile)
         validate_profile(profile)
         now = datetime.now().isoformat(timespec="seconds")
         profile = copy.deepcopy(profile)
@@ -449,6 +478,8 @@ def validate_profile(profile: dict[str, Any]) -> None:
         raise ValueError("配置名称必须为 1–40 个字符")
     q = profile.get("quality", {})
     s = profile.get("similarity", {})
+    if not isinstance(s, dict):
+        raise ValueError("相似照片配置格式无效")
     if not isinstance(q, dict) or not isinstance(s, dict):
         raise ValueError("质量或相似度配置格式无效")
     if q.get("threshold_mode", "absolute") not in {"absolute", "percentile"}:
@@ -461,6 +492,10 @@ def validate_profile(profile: dict[str, Any]) -> None:
     for key in ("exact_duplicates", "allow_cross_time_high_confidence", "face_safe"):
         if key in s and not isinstance(s[key], bool):
             raise ValueError(f"{key} 必须为布尔值")
+
+    blink = s.get("blink", {})
+    if not isinstance(blink, dict):
+        raise ValueError("眨眼检测配置格式无效")
 
     def number(container: dict[str, Any], key: str, default: Any = None) -> float:
         if key not in container and default is None:
@@ -487,6 +522,29 @@ def validate_profile(profile: dict[str, Any]) -> None:
         value = number(q, key)
         if not low <= value <= high:
             raise ValueError(f"{key} 超出允许范围 {low}–{high}")
+
+    blink_ranges = {
+        "face_confidence_min": (0.5, 0.99),
+        "open_confidence_min": (0.5, 0.99),
+        "closed_confidence_min": (0.5, 0.99),
+        "min_eye_distance_px": (4, 64),
+        "reliable_coverage_min": (0.5, 1.0),
+    }
+    blink_values: dict[str, float] = {}
+    for key, (low, high) in blink_ranges.items():
+        value = number(blink, key)
+        if not low <= value <= high:
+            raise ValueError(f"{key} 超出允许范围 {low}–{high}")
+        blink_values[key] = value
+    eye_distance = blink["min_eye_distance_px"]
+    if type(eye_distance) is not int:
+        raise ValueError("min_eye_distance_px 必须是整数")
+    if (
+        blink_values["open_confidence_min"]
+        + blink_values["closed_confidence_min"]
+        <= 1
+    ):
+        raise ValueError("睁眼与闭眼置信度之和必须大于 1")
     for key, default in (("blur_review_percentile", 5), ("blur_remove_percentile", 1)):
         value = number(q, key, default)
         if not 0 <= value <= 100:

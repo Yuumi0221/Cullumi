@@ -22,6 +22,16 @@ function applySimilarMode(){
   document.body.classList.toggle("similar-detail-open",state.view==="similar"&&selected);
   document.body.classList.toggle("similar-side-open",state.view==="similar"&&selected&&!expanded);
 }
+function blinkStatusLabel(photo,recommended,kind){
+  if(recommended||kind!=="similar"||state.settings.blink_detection_enabled===false)return "";
+  if(photo.blink_status!=="closed"||(photo.blink_closed_face_count||0)<1)return "";
+  const faceCount=Math.max(0,Number(photo.blink_face_count)||0);
+  const uncertainCount=Math.max(0,Number(photo.blink_uncertain_face_count)||0);
+  if(!faceCount)return "";
+  const profile=state.profiles.find(item=>item.id===state.project?.profile_id);
+  const minimum=Number(profile?.similarity?.blink?.reliable_coverage_min??0.8);
+  return (faceCount-uncertainCount)/faceCount>=minimum?"眨眼":"";
+}
 async function loadSimilarView(){
   const listSearch=encodeURIComponent(state.similar.listSearch);
   const list=await json(`/api/similar-groups?project_id=${state.project.id}&search=${listSearch}`);
@@ -44,7 +54,8 @@ async function loadSimilarGroupMembers(){
   const detail=await json(`/api/similar-group?project_id=${state.project.id}&group_id=${encodeURIComponent(groupId)}&search=${search}`);
   const decorated=detail.members.map(photo=>{
     const recommended=photo.id===detail.recommended_id;
-    return {...photo,_viewerBadge:recommended?"推荐保留":"可考虑移除",_viewerKind:recommended?"recommended":"candidate-remove"};
+    const blinkLabel=blinkStatusLabel(photo,recommended,detail.kind);
+    return {...photo,_viewerBadge:recommended?"推荐保留":"可考虑移除",_viewerKind:recommended?"recommended":"candidate-remove",_blinkLabel:blinkLabel};
   });
   state.items=decorated;
   $("#viewSubtitle").textContent=`当前组 ${detail.count} 张${detail.face_safe?" · 人物照片请检查表情":""}${state.similar.memberSearch?` · 显示 ${decorated.length} 张`:""}`;

@@ -15,7 +15,7 @@ from typing import Any
 
 from .fs_utils import is_within
 
-DATABASE_SCHEMA_VERSION = 3
+DATABASE_SCHEMA_VERSION = 4
 _WAL_CONFIGURED_DATABASES: dict[Path, tuple[int, int]] = {}
 _INITIALIZED_DATABASES: dict[Path, tuple[int, int, int, int]] = {}
 _DATABASE_CONFIGURATION_LOCK = threading.RLock()
@@ -93,7 +93,17 @@ CREATE TABLE IF NOT EXISTS photos (
   motion_sha256 TEXT NOT NULL DEFAULT '', motion_still_time_ms INTEGER NOT NULL DEFAULT -1,
   cover_source TEXT NOT NULL DEFAULT 'still', cover_time_ms INTEGER NOT NULL DEFAULT 0,
   cover_frame_index INTEGER NOT NULL DEFAULT 0, cover_revision INTEGER NOT NULL DEFAULT 0,
-  quality_score REAL NOT NULL DEFAULT 0
+  quality_score REAL NOT NULL DEFAULT 0,
+  blink_status TEXT NOT NULL DEFAULT 'not_analyzed',
+  blink_face_count INTEGER NOT NULL DEFAULT 0,
+  blink_closed_face_count INTEGER NOT NULL DEFAULT 0,
+  blink_uncertain_face_count INTEGER NOT NULL DEFAULT 0,
+  blink_closed_ratio REAL NOT NULL DEFAULT -1,
+  blink_confidence REAL NOT NULL DEFAULT 0,
+  blink_model_version TEXT NOT NULL DEFAULT '',
+  blink_input_fingerprint TEXT NOT NULL DEFAULT '',
+  blink_analyzed_at TEXT NOT NULL DEFAULT '',
+  blink_error TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_photos_suggestion ON photos(suggestion);
 CREATE INDEX IF NOT EXISTS idx_photos_decision ON photos(decision);
@@ -132,6 +142,16 @@ PHOTO_SCHEMA_COLUMNS = {
     "cover_frame_index": "INTEGER NOT NULL DEFAULT 0",
     "cover_revision": "INTEGER NOT NULL DEFAULT 0",
     "quality_score": "REAL NOT NULL DEFAULT 0",
+    "blink_status": "TEXT NOT NULL DEFAULT 'not_analyzed'",
+    "blink_face_count": "INTEGER NOT NULL DEFAULT 0",
+    "blink_closed_face_count": "INTEGER NOT NULL DEFAULT 0",
+    "blink_uncertain_face_count": "INTEGER NOT NULL DEFAULT 0",
+    "blink_closed_ratio": "REAL NOT NULL DEFAULT -1",
+    "blink_confidence": "REAL NOT NULL DEFAULT 0",
+    "blink_model_version": "TEXT NOT NULL DEFAULT ''",
+    "blink_input_fingerprint": "TEXT NOT NULL DEFAULT ''",
+    "blink_analyzed_at": "TEXT NOT NULL DEFAULT ''",
+    "blink_error": "TEXT NOT NULL DEFAULT ''",
 }
 
 

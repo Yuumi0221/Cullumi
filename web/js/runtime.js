@@ -17,6 +17,6 @@ const toast=m=>{
   toastTimer=setTimeout(()=>t.classList.remove("show"),2400);
 };
 const formatSize=n=>n<1024?`${n} B`:n<1048576?`${(n/1024).toFixed(1)} KB`:`${(n/1048576).toFixed(1)} MB`;
-const stageName={starting:"准备扫描",discovering:"正在发现照片",analyzing:"正在解码与分析",hashing:"正在确认完全重复",grouping:"正在建立相似组",complete:"扫描完成",cancelled:"扫描已取消",error:"扫描出错"};
+const stageName={starting:"准备扫描",discovering:"正在发现照片",analyzing:"正在解码与分析",hashing:"正在确认完全重复",grouping:"正在建立相似组",blink_detection:"正在检测眨眼",complete:"扫描完成",cancelled:"扫描已取消",error:"扫描出错"};
 function applyTheme(theme,persist=false){state.theme=theme;document.documentElement.dataset.theme=theme;localStorage.setItem("Cullumi-theme",theme);const night=theme==="night",button=$("#themeBtn");button.title=night?"切换日间模式":"切换夜间模式";button.setAttribute("aria-label",button.title);if(persist)json("/api/settings",{theme}).catch(e=>toast(`主题保存失败：${e.message}`))}
 applyTheme(state.theme);

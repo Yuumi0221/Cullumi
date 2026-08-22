@@ -4,3 +4,7 @@ pillow-heif==1.1.1
 rawpy==0.25.1
 pywebview==6.1
 imageio-ffmpeg==0.6.0
+onnxruntime==1.29.0
+flatbuffers==25.12.19
+packaging==26.3
+protobuf==7.36.0

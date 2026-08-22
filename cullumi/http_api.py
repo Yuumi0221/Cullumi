@@ -28,6 +28,7 @@ from .classification import (
     project_photo_counts,
 )
 from .config import ConfigStore
+from .face_analysis import FaceAnalyzer
 from .media import (
     DISPLAY_PREVIEW_EXTENSIONS,
     analyze_photo,
@@ -129,6 +130,7 @@ class ApplicationContext:
     similarity_groups: SimilarityGroupCache
     token: str
     web_root: Path
+    face_analyzer: FaceAnalyzer | None = None
 
 
 def configure(
@@ -138,6 +140,7 @@ def configure(
     similarity_groups: SimilarityGroupCache | None = None,
     token: str | None = None,
     web_root: Path | None = None,
+    face_analyzer: FaceAnalyzer | None = None,
 ) -> ApplicationContext:
     """Install an explicit dependency context for the HTTP application.
 
@@ -160,6 +163,7 @@ def configure(
             similarity_groups,
             token,
             web_root,
+            face_analyzer,
         )
     APPLICATION = context
     # Retain these aliases for older embedders while request handling uses the
@@ -198,6 +202,9 @@ def photo_payload(
 ) -> dict[str, Any]:
     application = application or current_application()
     data = json_safe_row(row)
+    blink_ratio = data.get("blink_closed_ratio", -1)
+    if blink_ratio is None or float(blink_ratio) < 0:
+        data["blink_closed_ratio"] = None
     data["project_id"] = project_id
     if not str(row["error"] or ""):
         if profile is None:
@@ -243,7 +250,16 @@ def project_summary(
         photo_counts = project_photo_counts(conn)
         pairs = conn.execute("SELECT COUNT(*) FROM similar_pairs").fetchone()[0]
         profile = application.config.get_profile(project.profile_id)
-        similar_groups = application.similarity_groups.count(project_id, conn, profile)
+        similar_groups = application.similarity_groups.count(
+            project_id,
+            conn,
+            profile,
+            bool(
+                application.config.snapshot().get(
+                    "blink_detection_enabled", True
+                )
+            ),
+        )
     return {
         "id": project_id,
         "root": str(project.root),
@@ -600,8 +616,13 @@ class Handler(BaseHTTPRequestHandler):
         search = query.get("search", [""])[0].casefold()
         project = self.manager.from_id(pid)
         profile = self.config.get_profile(project.profile_id)
+        blink_enabled = bool(
+            self.config.snapshot().get("blink_detection_enabled", True)
+        )
         with closing(connect_db(project.db_path)) as conn:
-            groups = self.similarity_groups.get(pid, conn, profile)
+            groups = self.similarity_groups.get(
+                pid, conn, profile, blink_enabled
+            )
         items = []
         for group in groups:
             if search and not any(
@@ -633,11 +654,16 @@ class Handler(BaseHTTPRequestHandler):
         search = query.get("search", [""])[0].casefold()
         project = self.manager.from_id(pid)
         profile = self.config.get_profile(project.profile_id)
+        blink_enabled = bool(
+            self.config.snapshot().get("blink_detection_enabled", True)
+        )
         with closing(connect_db(project.db_path)) as conn:
             group = next(
                 (
                     item
-                    for item in self.similarity_groups.get(pid, conn, profile)
+                    for item in self.similarity_groups.get(
+                        pid, conn, profile, blink_enabled
+                    )
                     if item["id"] == group_id
                 ),
                 None,
@@ -885,6 +911,9 @@ class Handler(BaseHTTPRequestHandler):
                     )
                     self.scanner.reclassify(project, conn, profile, commit=False)
                     self.scanner.rebuild_similarity(project, conn, profile, commit=False)
+                    self.scanner.analyze_blinks(
+                        project, conn, profile, commit=False
+                    )
                     conn.commit()
                 except Exception:
                     conn.rollback()

@@ -517,7 +517,7 @@ nav button:hover:not(:disabled),
   right: 11px;
   bottom: 10px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   white-space: nowrap;
 }
 

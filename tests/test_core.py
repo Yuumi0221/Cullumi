@@ -75,7 +75,7 @@ class CullumiTests(unittest.TestCase):
         self.assertEqual(progress["stage"], "complete", progress)
 
     def test_profile_validation(self):
-        self.assertEqual(__version__, "1.0.1")
+        self.assertEqual(__version__, "1.0.2")
         self.assertEqual(self.config.data["theme"], "day")
         self.assertTrue(self.config.data["auto_check_updates"])
         validate_profile(BUILTIN_PROFILES["balanced"])

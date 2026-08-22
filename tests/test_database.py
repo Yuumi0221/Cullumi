@@ -128,6 +128,44 @@ class DatabaseMigrationTests(unittest.TestCase):
             )
             backup.close()
 
+    def test_v3_database_adds_blink_columns_with_safe_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "project.db"
+            legacy = connect_db(path)
+            legacy.execute(
+                "INSERT INTO photos(relative_path,status) VALUES('legacy.jpg','active')"
+            )
+            for column in (
+                "blink_status",
+                "blink_face_count",
+                "blink_closed_face_count",
+                "blink_uncertain_face_count",
+                "blink_closed_ratio",
+                "blink_confidence",
+                "blink_model_version",
+                "blink_input_fingerprint",
+                "blink_analyzed_at",
+                "blink_error",
+            ):
+                legacy.execute(f"ALTER TABLE photos DROP COLUMN {column}")
+            legacy.execute("PRAGMA user_version=3")
+            legacy.commit()
+            legacy.close()
+            project_store._INITIALIZED_DATABASES.pop(path.resolve(), None)
+
+            migrated = connect_db(path)
+            columns = {
+                row["name"]
+                for row in migrated.execute("PRAGMA table_info(photos)")
+            }
+            row = migrated.execute(
+                "SELECT blink_status,blink_closed_ratio,blink_error FROM photos"
+            ).fetchone()
+            migrated.close()
+
+        self.assertIn("blink_input_fingerprint", columns)
+        self.assertEqual(tuple(row), ("not_analyzed", -1.0, ""))
+
     def test_newer_database_version_is_rejected_without_downgrade(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "project.db"

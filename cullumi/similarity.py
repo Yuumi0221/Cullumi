@@ -146,8 +146,47 @@ def photo_shooting_key(row: sqlite3.Row | dict[str, Any]) -> tuple[Any, ...]:
     return (1, sequence if sequence >= 0 else math.inf, path.casefold())
 
 
+def blink_recommendation_key(
+    row: sqlite3.Row | dict[str, Any],
+    profile: dict[str, Any],
+    enabled: bool = True,
+) -> tuple[Any, ...]:
+    """Rank reliable open faces before neutral photos and closed eyes last."""
+    score = quality_score(row, profile)
+    path = str(row["relative_path"]).casefold()
+    if not enabled:
+        return (1, 0.0, 0, -score, path)
+    face_count = max(0, int(row["blink_face_count"] or 0))
+    uncertain_count = max(0, int(row["blink_uncertain_face_count"] or 0))
+    reliable_count = max(0, face_count - uncertain_count)
+    coverage = reliable_count / face_count if face_count else 0.0
+    coverage_min = float(
+        profile.get("similarity", {})
+        .get("blink", {})
+        .get("reliable_coverage_min", 0.8)
+    )
+    status = str(row["blink_status"] or "not_analyzed")
+    if status == "open" and face_count and coverage >= coverage_min:
+        category = 0
+    elif (
+        status == "closed"
+        and int(row["blink_closed_face_count"] or 0) > 0
+        and coverage >= coverage_min
+    ):
+        category = 2
+    else:
+        category = 1
+    if category == 2:
+        ratio = float(row["blink_closed_ratio"] or 0)
+        closed_count = int(row["blink_closed_face_count"] or 0)
+        return (category, ratio, closed_count, -score, path)
+    return (category, 0.0, 0, -score, path)
+
+
 def build_similarity_groups(
-    conn: sqlite3.Connection, profile: dict[str, Any]
+    conn: sqlite3.Connection,
+    profile: dict[str, Any],
+    blink_detection_enabled: bool = True,
 ) -> list[dict[str, Any]]:
     """Collapse active pair relations into deterministic connected photo groups."""
     rows = conn.execute(
@@ -199,18 +238,26 @@ def build_similarity_groups(
         if len(member_ids) < minimum:
             continue
         members = [photos[photo_id] for photo_id in member_ids]
-        quality = {
-            int(row["id"]): quality_score(row, profile)
-            for row in members
-        }
         shooting_keys = {
             int(row["id"]): photo_shooting_key(row)
             for row in members
         }
+        hashes = {
+            (str(row["sha256"]), str(row["motion_sha256"] or ""))
+            for row in members
+            if row["sha256"]
+        }
+        exact = (
+            len(hashes) == 1
+            and bool(hashes)
+            and all(row["sha256"] for row in members)
+        )
         ranked = sorted(
             members,
-            key=lambda row: (
-                -quality[int(row["id"])], str(row["relative_path"]).casefold()
+            key=lambda row: blink_recommendation_key(
+                row,
+                profile,
+                blink_detection_enabled and not exact,
             ),
         )
         recommended = ranked[0]
@@ -232,15 +279,6 @@ def build_similarity_groups(
                     confidence[neighbor] = candidate
                     heapq.heappush(pending, (-candidate, neighbor))
 
-        hashes = {
-            (str(row["sha256"]), str(row["motion_sha256"] or ""))
-            for row in members if row["sha256"]
-        }
-        exact = (
-            len(hashes) == 1
-            and bool(hashes)
-            and all(row["sha256"] for row in members)
-        )
         ordered = sorted(members, key=lambda row: shooting_keys[int(row["id"])])
         stable_ids = ",".join(str(photo_id) for photo_id in sorted(member_ids))
         group_id = "sg-" + hashlib.sha1(stable_ids.encode("ascii")).hexdigest()[:16]
@@ -273,21 +311,38 @@ class SimilarityGroupCache:
         self._lock = threading.RLock()
 
     @staticmethod
-    def _profile_fingerprint(profile: dict[str, Any]) -> str:
+    def _profile_fingerprint(
+        profile: dict[str, Any], blink_detection_enabled: bool
+    ) -> str:
         payload = json.dumps(
-            profile, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            {
+                "profile": profile,
+                "blink_detection_enabled": blink_detection_enabled,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
         ).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 
     def _topology(
-        self, project_id: str, conn: sqlite3.Connection, profile: dict[str, Any]
+        self,
+        project_id: str,
+        conn: sqlite3.Connection,
+        profile: dict[str, Any],
+        blink_detection_enabled: bool = True,
     ) -> list[dict[str, Any]]:
-        key = (project_id, self._profile_fingerprint(profile))
+        key = (
+            project_id,
+            self._profile_fingerprint(profile, blink_detection_enabled),
+        )
         with self._lock:
             cached = self._entries.get(key)
             if cached is not None:
                 return cached
-            groups = build_similarity_groups(conn, profile)
+            groups = build_similarity_groups(
+                conn, profile, blink_detection_enabled
+            )
             topology = [
                 {
                     "id": group["id"],
@@ -305,14 +360,28 @@ class SimilarityGroupCache:
             return topology
 
     def count(
-        self, project_id: str, conn: sqlite3.Connection, profile: dict[str, Any]
+        self,
+        project_id: str,
+        conn: sqlite3.Connection,
+        profile: dict[str, Any],
+        blink_detection_enabled: bool = True,
     ) -> int:
-        return len(self._topology(project_id, conn, profile))
+        return len(
+            self._topology(
+                project_id, conn, profile, blink_detection_enabled
+            )
+        )
 
     def get(
-        self, project_id: str, conn: sqlite3.Connection, profile: dict[str, Any]
+        self,
+        project_id: str,
+        conn: sqlite3.Connection,
+        profile: dict[str, Any],
+        blink_detection_enabled: bool = True,
     ) -> list[dict[str, Any]]:
-        topology = self._topology(project_id, conn, profile)
+        topology = self._topology(
+            project_id, conn, profile, blink_detection_enabled
+        )
         photo_ids = sorted(
             {photo_id for group in topology for photo_id in group["member_ids"]}
         )
@@ -358,6 +427,7 @@ __all__ = [
     "_structure_similarity",
     "_structure_vector",
     "build_similarity_groups",
+    "blink_recommendation_key",
     "filename_sequence",
     "hamming",
     "hamming_candidate_pairs",

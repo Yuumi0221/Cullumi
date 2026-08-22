@@ -20,7 +20,11 @@ def save_settings(config: ConfigStore, body: dict[str, Any]) -> dict[str, Any]:
         if theme not in {"day", "night"}:
             raise ValueError("主题必须为 day 或 night")
         updates["theme"] = theme
-    for key in ("auto_advance", "auto_check_updates"):
+    for key in (
+        "auto_advance",
+        "auto_check_updates",
+        "blink_detection_enabled",
+    ):
         if key in body:
             if not isinstance(body[key], bool):
                 raise ValueError(f"{key} 必须为布尔值")
@@ -76,6 +80,7 @@ def apply_profile(
                     )
                     scanner.reclassify(project, conn, profile, commit=False)
                     scanner.rebuild_similarity(project, conn, profile, commit=False)
+                    scanner.analyze_blinks(project, conn, profile, commit=False)
                     with config.edit() as data:
                         data["projects"][project.project_id]["profile_id"] = profile_id
                     config_saved = True

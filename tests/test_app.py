@@ -85,6 +85,7 @@ class AppSafetyTests(unittest.TestCase):
 
             self.assertGreater(payload["quality_score"], 0)
             self.assertNotEqual(payload["quality_score"], row["quality_score"])
+            self.assertIsNone(payload["blink_closed_ratio"])
 
     def test_motion_cover_at_video_end_uses_the_last_real_frame(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -516,6 +517,10 @@ class AppSafetyTests(unittest.TestCase):
 
                 with self.assertRaisesRegex(ValueError, "布尔值"):
                     handler.api_settings({"auto_advance": "false"})
+                self.assertEqual(config.data, before)
+
+                with self.assertRaisesRegex(ValueError, "布尔值"):
+                    handler.api_settings({"blink_detection_enabled": "false"})
                 self.assertEqual(config.data, before)
 
                 with self.assertRaisesRegex(ValueError, "封面修改设置"):

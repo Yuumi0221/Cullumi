@@ -176,6 +176,11 @@ function configureProfileInputs(){
     "similarity.time_window_minutes":[0,10080],
     "similarity.sequence_gap":[0,10000],
     "similarity.min_group_size":[2,1000],
+    "similarity.blink.face_confidence_min":[0.5,0.99],
+    "similarity.blink.open_confidence_min":[0.5,0.99],
+    "similarity.blink.closed_confidence_min":[0.5,0.99],
+    "similarity.blink.min_eye_distance_px":[4,64],
+    "similarity.blink.reliable_coverage_min":[0.5,1],
   };
   $$('.form-grid input[type="number"][data-p]').forEach(element=>{
     const range=numberRanges[element.dataset.p]||[element.min,element.max];
@@ -206,6 +211,17 @@ function bindSettingsEvents(){
   $("#autoAdvance").onchange=async event=>{
     state.settings.auto_advance=event.target.checked;
     await json("/api/settings",{auto_advance:event.target.checked});
+  };
+  $("#blinkDetectionEnabled").onchange=async event=>{
+    const previous=state.settings.blink_detection_enabled!==false;
+    try{
+      const saved=await json("/api/settings",{blink_detection_enabled:event.target.checked});
+      state.settings.blink_detection_enabled=saved.settings.blink_detection_enabled;
+      if(state.view==="similar")await loadView();
+    }catch(error){
+      event.target.checked=previous;
+      toast(`保存眨眼检测设置失败：${error.message}`);
+    }
   };
   $("#autoCheckUpdates").onchange=async event=>{
     state.settings.auto_check_updates=event.target.checked;

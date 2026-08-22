@@ -18,6 +18,10 @@ PHOTO_ANALYSIS_COLUMNS = (
     "motion_width", "motion_height", "motion_sha256", "motion_still_time_ms",
     "cover_source",
     "cover_time_ms", "cover_frame_index", "cover_revision", "quality_score",
+    "blink_status", "blink_face_count", "blink_closed_face_count",
+    "blink_uncertain_face_count", "blink_closed_ratio", "blink_confidence",
+    "blink_model_version", "blink_input_fingerprint", "blink_analyzed_at",
+    "blink_error",
 )
 PHOTO_UPSERT_SQL = f"""INSERT INTO photos({','.join(PHOTO_ANALYSIS_COLUMNS)})
     VALUES({','.join('?' for _ in PHOTO_ANALYSIS_COLUMNS)})

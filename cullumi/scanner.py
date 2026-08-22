@@ -20,6 +20,12 @@ from .classification import (
     classify,
 )
 from .config import ConfigStore
+from .face_analysis import (
+    MODEL_VERSION,
+    BlinkThresholds,
+    FaceAnalyzer,
+    empty_blink_values,
+)
 from .fs_utils import is_within
 from .media import (
     IMAGE_EXTENSIONS,
@@ -80,10 +86,12 @@ class Scanner:
         config: ConfigStore,
         manager: ProjectManager,
         similarity_groups: SimilarityGroupCache | None = None,
+        face_analyzer: FaceAnalyzer | None = None,
     ):
         self.config = config
         self.manager = manager
         self.similarity_groups = similarity_groups
+        self.face_analyzer = face_analyzer
         self.progress: dict[str, dict[str, Any]] = {}
         self.cancel_events: dict[str, threading.Event] = {}
         self.threads: dict[str, threading.Thread] = {}
@@ -302,6 +310,14 @@ class Scanner:
         self._set(project_id, stage="grouping")
         self.rebuild_similarity(project, conn, profile, cancel)
         _check_cancelled(cancel)
+        self.analyze_blinks(
+            project,
+            conn,
+            profile,
+            cancel,
+            progress_project_id=project_id,
+        )
+        _check_cancelled(cancel)
         self.reclassify(project, conn, profile, cancel)
 
     def _run(self, project_id: str, cancel: threading.Event) -> None:
@@ -465,6 +481,7 @@ class Scanner:
                         "suggestion": "keep", "reason": "",
                         "status": "active",
                         "analyzed_at": datetime.now().isoformat(timespec="microseconds"),
+                        **empty_blink_values(),
                     }
                     values["quality_score"] = round(
                         max(0.0, min(1.0, quality_score(values, profile))) * 100, 1
@@ -605,6 +622,80 @@ class Scanner:
         )
         if commit:
             conn.commit()
+
+    def analyze_blinks(
+        self,
+        project: Project,
+        conn: sqlite3.Connection,
+        profile: dict[str, Any],
+        cancel: threading.Event | None = None,
+        commit: bool = True,
+        progress_project_id: str | None = None,
+    ) -> int:
+        """Incrementally analyze non-exact similar candidates from thumbnails."""
+        if not self.config.snapshot().get("blink_detection_enabled", True):
+            return 0
+        if self.face_analyzer is None:
+            return 0
+        rows = conn.execute(
+            """SELECT DISTINCT photos.* FROM photos
+               JOIN (
+                 SELECT a_id AS photo_id FROM similar_pairs WHERE kind='similar'
+                 UNION
+                 SELECT b_id AS photo_id FROM similar_pairs WHERE kind='similar'
+               ) candidates ON candidates.photo_id=photos.id
+               WHERE photos.status='active' AND photos.error=''
+                 AND photos.thumbnail<>''
+               ORDER BY photos.id"""
+        ).fetchall()
+        if progress_project_id is not None:
+            self._set(
+                progress_project_id,
+                stage="blink_detection",
+                current=0,
+                total=len(rows),
+            )
+        thresholds = BlinkThresholds.from_profile(profile)
+        reusable_statuses = {"open", "closed", "uncertain", "no_face"}
+        analyzed = 0
+        for index, row in enumerate(rows, 1):
+            _check_cancelled(cancel)
+            thumbnail = project_thumbnail_path(project, row["thumbnail"])
+            fingerprint = ""
+            try:
+                fingerprint = self.face_analyzer.input_fingerprint(
+                    thumbnail, row, thresholds
+                )
+                if (
+                    row["blink_status"] in reusable_statuses
+                    and row["blink_model_version"] == MODEL_VERSION
+                    and row["blink_input_fingerprint"] == fingerprint
+                ):
+                    if progress_project_id is not None:
+                        self._set(progress_project_id, current=index)
+                    continue
+                result = self.face_analyzer.analyze(thumbnail, row, profile)
+            except Exception as error:
+                result = empty_blink_values("error", str(error)[:1000])
+                result["blink_input_fingerprint"] = fingerprint
+            columns = tuple(result)
+            assignments = ",".join(f"{column}=?" for column in columns)
+            conn.execute(
+                f"UPDATE photos SET {assignments} WHERE id=?",
+                [*[result[column] for column in columns], int(row["id"])],
+            )
+            analyzed += 1
+            if commit and index % 20 == 0:
+                conn.commit()
+            if progress_project_id is not None:
+                self._set(
+                    progress_project_id,
+                    current=index,
+                    file=str(row["relative_path"]),
+                )
+        if commit:
+            conn.commit()
+        return analyzed
 
     def rebuild_similarity(
         self,

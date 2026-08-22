@@ -12,6 +12,7 @@ from typing import Any
 
 from cullumi import http_api
 from cullumi.config import ConfigStore, app_data_dir
+from cullumi.face_analysis import FaceAnalyzer
 from cullumi.project_store import ProjectManager
 from cullumi.scanner import Scanner
 from cullumi.similarity import SimilarityGroupCache
@@ -25,12 +26,19 @@ def resource_path(relative: str) -> Path:
 CONFIG = ConfigStore()
 MANAGER = ProjectManager(CONFIG)
 SIMILARITY_GROUPS = SimilarityGroupCache()
-SCANNER = Scanner(CONFIG, MANAGER, SIMILARITY_GROUPS)
+FACE_ANALYZER = FaceAnalyzer(resource_path("models"))
+SCANNER = Scanner(CONFIG, MANAGER, SIMILARITY_GROUPS, FACE_ANALYZER)
 TOKEN = secrets.token_urlsafe(24)
 WEB_ROOT = resource_path("web")
 APP_ICON = WEB_ROOT / "assets" / "icons" / "brand-icon.ico"
 APPLICATION = http_api.ApplicationContext(
-    CONFIG, MANAGER, SCANNER, SIMILARITY_GROUPS, TOKEN, WEB_ROOT
+    CONFIG,
+    MANAGER,
+    SCANNER,
+    SIMILARITY_GROUPS,
+    TOKEN,
+    WEB_ROOT,
+    FACE_ANALYZER,
 )
 http_api.configure(APPLICATION)
 
@@ -56,6 +64,7 @@ def run() -> None:
     server.application = APPLICATION
     port = server.server_address[1]
     url = f"http://127.0.0.1:{port}/?token={TOKEN}"
+    print(url)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
