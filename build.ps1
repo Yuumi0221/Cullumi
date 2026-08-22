@@ -14,8 +14,8 @@ Push-Location $ProjectRoot
 try {
     $Version = (& $Python -c "from cullumi import __version__; print(__version__)").Trim()
     if (-not $Version) { throw "无法读取应用版本号。" }
-    & $Python -m unittest discover -s tests -v
-    if ($LASTEXITCODE -ne 0) { throw "测试失败，已停止构建。" }
+    & (Join-Path $ProjectRoot "verify.ps1")
+    if ($LASTEXITCODE -ne 0) { throw "发布检查失败，已停止构建。" }
     & $Python -m PyInstaller --noconfirm --clean --workpath $BuildWorkPath --distpath $BuildDistPath Cullumi.spec
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller 构建失败。" }
 
