@@ -345,6 +345,8 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('id="similarCollapseBtn"', markup)
         self.assertIn('id="similarExpandBtn"', markup)
         self.assertIn('id="similarBackBtn"', markup)
+        self.assertEqual(markup.count("/static/assets/icons.svg?v=6#similar-back"), 2)
+        self.assertIn("/static/assets/icons.svg?v=6#similar-open", markup)
         self.assertIn("/api/similar-groups", script)
         self.assertIn("/api/similar-group", script)
         self.assertNotIn('json(`/api/pairs?', script)
@@ -385,6 +387,10 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn(".similar-detail-gallery {", styles)
         self.assertIn("repeat(auto-fill, minmax(210px, 210px))", styles)
         self.assertIn("repeat(auto-fill, minmax(170px, 210px))", styles)
+        self.assertIn(".similar-browser.detail-expanded .similar-detail-gallery {", styles)
+        self.assertIn("padding:2px 40px 24px;", styles)
+        self.assertIn('[data-theme="day"] .viewer .viewer-badge.badge-candidate-remove', styles)
+        self.assertIn('[data-theme="day"] .viewer .viewer-badge.badge-recommended', styles)
 
     def test_similar_selection_outlines_have_safe_insets_and_subtle_scrollbars(self):
         markup = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")

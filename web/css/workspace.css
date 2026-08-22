@@ -532,6 +532,21 @@ nav button:hover:not(:disabled),
   margin-right: 12px;
 }
 
+.similar-toolbar-actions button {
+  display:grid;
+  width:38px;
+  height:38px;
+  place-items:center;
+  padding:0;
+}
+
+.similar-toolbar-actions button svg {
+  width:18px;
+  height:18px;
+  fill:currentColor;
+  pointer-events:none;
+}
+
 body.similar-side-open > main {
   overflow: hidden;
 }
@@ -737,6 +752,10 @@ body.similar-side-open .similar-browser {
 .similar-detail-gallery {
   grid-template-columns: repeat(auto-fill, minmax(210px, 210px));
   padding: 2px 2px 24px;
+}
+
+.similar-browser.detail-expanded .similar-detail-gallery {
+  padding:2px 40px 24px;
 }
 
 * {

@@ -171,10 +171,17 @@
   border: 1px solid #a66f00;
 }
 
-[data-theme="day"] .viewer .viewer-badge.badge-remove {
+[data-theme="day"] .viewer .viewer-badge.badge-remove,
+[data-theme="day"] .viewer .viewer-badge.badge-candidate-remove {
   color: var(--red);
   background: #fff;
   border: 1px solid var(--red);
+}
+
+[data-theme="day"] .viewer .viewer-badge.badge-recommended {
+  color:var(--keep);
+  background:#fff;
+  border:1px solid var(--keep);
 }
 
 [data-theme="day"] .viewer .viewer-live-mark {
