@@ -278,6 +278,8 @@ class FaceAnalyzer:
         thumbnail: Path,
         row: Any,
         profile: dict[str, Any],
+        *,
+        detailed: bool = False,
     ) -> dict[str, Any]:
         thresholds = BlinkThresholds.from_profile(profile)
         fingerprint = self.input_fingerprint(thumbnail, row, thresholds)
@@ -291,6 +293,8 @@ class FaceAnalyzer:
                 if not faces:
                     result = empty_blink_values("no_face")
                     result["blink_input_fingerprint"] = fingerprint
+                    if detailed:
+                        result["faces"] = []
                     return result
 
                 eye_inputs: list[NDArray[np.float32]] = []
@@ -319,25 +323,51 @@ class FaceAnalyzer:
                 closed_count = 0
                 uncertain_count = 0
                 evidence: list[float] = []
+                observations: list[dict[str, Any]] = []
                 for face, indices in zip(faces, face_eye_indices):
+                    observation = {
+                        "x": round(face.x, 3),
+                        "y": round(face.y, 3),
+                        "width": round(face.width, 3),
+                        "height": round(face.height, 3),
+                        "face_confidence": round(face.score, 6),
+                        "eye_open_probabilities": [],
+                        "status": "uncertain",
+                        "confidence": 0.0,
+                    }
                     if indices is None:
                         uncertain_count += 1
+                        observations.append(observation)
                         continue
                     eye_probabilities = [float(probabilities[index]) for index in indices]
+                    observation["eye_open_probabilities"] = [
+                        round(value, 6) for value in eye_probabilities
+                    ]
                     closed_evidence = [1 - probability for probability in eye_probabilities]
                     if any(
                         confidence >= thresholds.closed_confidence_min
                         for confidence in closed_evidence
                     ):
                         closed_count += 1
-                        evidence.append(min(face.score, max(closed_evidence)))
+                        confidence = min(face.score, max(closed_evidence))
+                        evidence.append(confidence)
+                        observation.update({
+                            "status": "closed",
+                            "confidence": round(confidence, 6),
+                        })
                     elif all(
                         probability >= thresholds.open_confidence_min
                         for probability in eye_probabilities
                     ):
-                        evidence.append(min(face.score, min(eye_probabilities)))
+                        confidence = min(face.score, min(eye_probabilities))
+                        evidence.append(confidence)
+                        observation.update({
+                            "status": "open",
+                            "confidence": round(confidence, 6),
+                        })
                     else:
                         uncertain_count += 1
+                    observations.append(observation)
 
                 reliable_count = len(faces) - uncertain_count
                 ratio = closed_count / reliable_count if reliable_count else -1.0
@@ -346,7 +376,7 @@ class FaceAnalyzer:
                     else "open" if reliable_count == len(faces)
                     else "uncertain"
                 )
-                return {
+                result = {
                     "blink_status": status,
                     "blink_face_count": len(faces),
                     "blink_closed_face_count": closed_count,
@@ -358,8 +388,20 @@ class FaceAnalyzer:
                     "blink_analyzed_at": datetime.now().isoformat(timespec="microseconds"),
                     "blink_error": "",
                 }
+                if detailed:
+                    result["faces"] = observations
+                return result
             finally:
                 canvas.close()
+
+    def analyze_detailed(
+        self,
+        thumbnail: Path,
+        row: Any,
+        profile: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return aggregate fields plus per-face observations for evaluation."""
+        return self.analyze(thumbnail, row, profile, detailed=True)
 
 
 __all__ = [

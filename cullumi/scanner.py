@@ -607,9 +607,16 @@ class Scanner:
         profile: dict[str, Any],
         cancel: threading.Event | None = None,
         commit: bool = True,
+        photo_ids: set[int] | None = None,
     ) -> None:
-        rows = conn.execute("SELECT * FROM photos WHERE status='active'").fetchall()
-        percentiles = classification_percentiles(rows, profile)
+        active_rows = conn.execute(
+            "SELECT * FROM photos WHERE status='active'"
+        ).fetchall()
+        percentiles = classification_percentiles(active_rows, profile)
+        if photo_ids is not None and profile["quality"].get("threshold_mode") != "percentile":
+            rows = [row for row in active_rows if int(row["id"]) in photo_ids]
+        else:
+            rows = active_rows
         updates: list[tuple[str, str, float, int]] = []
         for row in rows:
             _check_cancelled(cancel)
@@ -623,6 +630,62 @@ class Scanner:
         if commit:
             conn.commit()
 
+    @staticmethod
+    def _blink_candidate_rows(
+        conn: sqlite3.Connection,
+        photo_ids: set[int] | None = None,
+    ) -> list[sqlite3.Row]:
+        params: list[Any] = []
+        id_filter = ""
+        if photo_ids is not None:
+            if not photo_ids:
+                return []
+            placeholders = ",".join("?" for _ in photo_ids)
+            id_filter = f" AND photos.id IN ({placeholders})"
+            params.extend(sorted(photo_ids))
+        return conn.execute(
+            f"""SELECT DISTINCT photos.* FROM photos
+                JOIN (
+                  SELECT a_id AS photo_id FROM similar_pairs WHERE kind='similar'
+                  UNION
+                  SELECT b_id AS photo_id FROM similar_pairs WHERE kind='similar'
+                ) candidates ON candidates.photo_id=photos.id
+                WHERE photos.status='active' AND photos.error=''
+                  AND photos.thumbnail<>''{id_filter}
+                ORDER BY photos.id""",
+            params,
+        ).fetchall()
+
+    def blink_rescan_required(
+        self,
+        project: Project,
+        conn: sqlite3.Connection,
+        profile: dict[str, Any],
+    ) -> bool:
+        """Check cached blink fingerprints without creating ONNX sessions."""
+        if not self.config.snapshot().get("blink_detection_enabled", True):
+            return False
+        thresholds = BlinkThresholds.from_profile(profile)
+        reusable_statuses = {"open", "closed", "uncertain", "no_face"}
+        for row in self._blink_candidate_rows(conn):
+            if (
+                row["blink_status"] not in reusable_statuses
+                or row["blink_model_version"] != MODEL_VERSION
+            ):
+                return True
+            try:
+                fingerprint_builder = self.face_analyzer or FaceAnalyzer
+                fingerprint = fingerprint_builder.input_fingerprint(
+                    project_thumbnail_path(project, row["thumbnail"]),
+                    row,
+                    thresholds,
+                )
+            except OSError:
+                return True
+            if row["blink_input_fingerprint"] != fingerprint:
+                return True
+        return False
+
     def analyze_blinks(
         self,
         project: Project,
@@ -631,23 +694,14 @@ class Scanner:
         cancel: threading.Event | None = None,
         commit: bool = True,
         progress_project_id: str | None = None,
+        photo_ids: set[int] | None = None,
     ) -> int:
         """Incrementally analyze non-exact similar candidates from thumbnails."""
         if not self.config.snapshot().get("blink_detection_enabled", True):
             return 0
         if self.face_analyzer is None:
             return 0
-        rows = conn.execute(
-            """SELECT DISTINCT photos.* FROM photos
-               JOIN (
-                 SELECT a_id AS photo_id FROM similar_pairs WHERE kind='similar'
-                 UNION
-                 SELECT b_id AS photo_id FROM similar_pairs WHERE kind='similar'
-               ) candidates ON candidates.photo_id=photos.id
-               WHERE photos.status='active' AND photos.error=''
-                 AND photos.thumbnail<>''
-               ORDER BY photos.id"""
-        ).fetchall()
+        rows = self._blink_candidate_rows(conn, photo_ids)
         if progress_project_id is not None:
             self._set(
                 progress_project_id,
@@ -704,6 +758,7 @@ class Scanner:
         profile: dict[str, Any],
         cancel: threading.Event | None = None,
         commit: bool = True,
+        photo_ids: set[int] | None = None,
     ) -> None:
         _check_cancelled(cancel)
         rows = conn.execute("SELECT * FROM photos WHERE status='active' AND error=''").fetchall()
@@ -736,9 +791,19 @@ class Scanner:
                 )
             return structure_vectors[photo_id]
 
+        target_ids = None if photo_ids is None else {int(value) for value in photo_ids}
+        if target_ids == set():
+            return
         pairs: list[tuple[int, int, float, str, int, int]] = []
         seen: set[tuple[int, int]] = set()
-        if sim.get("exact_duplicates", True):
+        if target_ids is not None:
+            seen.update(
+                (int(row["a_id"]), int(row["b_id"]))
+                for row in conn.execute(
+                    "SELECT a_id,b_id FROM similar_pairs WHERE kind='exact'"
+                )
+            )
+        if target_ids is None and sim.get("exact_duplicates", True):
             by_hash: dict[tuple[str, str], list[sqlite3.Row]] = {}
             for row in rows:
                 _check_cancelled(cancel)
@@ -762,6 +827,10 @@ class Scanner:
                     pairs.append((key[0], key[1], 1.0, "exact", best["id"], 0))
 
         def compare_pair(a: sqlite3.Row, b: sqlite3.Row) -> None:
+            if target_ids is not None and not {
+                int(a["id"]), int(b["id"])
+            }.intersection(target_ids):
+                return
             aspect_a = derived[int(a["id"])]["aspect"]
             aspect_b = derived[int(b["id"])]["aspect"]
             if abs(aspect_a - aspect_b) / max(aspect_a, aspect_b) > sim["aspect_tolerance"]:
@@ -818,7 +887,16 @@ class Scanner:
                     compare_pair(a, b)
         _check_cancelled(cancel)
         def replace_pairs() -> None:
-            conn.execute("DELETE FROM similar_pairs")
+            if target_ids is None:
+                conn.execute("DELETE FROM similar_pairs")
+            else:
+                placeholders = ",".join("?" for _ in target_ids)
+                params = sorted(target_ids)
+                conn.execute(
+                    f"""DELETE FROM similar_pairs WHERE kind='similar'
+                        AND (a_id IN ({placeholders}) OR b_id IN ({placeholders}))""",
+                    [*params, *params],
+                )
             conn.executemany(
                 "INSERT OR IGNORE INTO similar_pairs(a_id,b_id,score,kind,recommended_id,face_safe) VALUES(?,?,?,?,?,?)",
                 pairs,
@@ -828,6 +906,26 @@ class Scanner:
                 replace_pairs()
         else:
             replace_pairs()
+
+    @staticmethod
+    def related_photo_ids(
+        conn: sqlite3.Connection,
+        photo_ids: set[int],
+        kind: str = "similar",
+    ) -> set[int]:
+        if not photo_ids:
+            return set()
+        placeholders = ",".join("?" for _ in photo_ids)
+        params = sorted(photo_ids)
+        rows = conn.execute(
+            f"""SELECT a_id,b_id FROM similar_pairs WHERE kind=?
+                AND (a_id IN ({placeholders}) OR b_id IN ({placeholders}))""",
+            [kind, *params, *params],
+        )
+        related = set(photo_ids)
+        for row in rows:
+            related.update((int(row["a_id"]), int(row["b_id"])))
+        return related
 
     def _auto_import_csv(self, project: Project) -> None:
         with closing(connect_db(project.db_path)) as conn:

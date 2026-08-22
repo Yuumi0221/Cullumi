@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import math
 import mimetypes
 import os
 import re
@@ -13,20 +11,12 @@ import urllib.parse
 import webbrowser
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import datetime
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .classification import (
-    PHOTO_AI_FILTERS,
-    PHOTO_DECISION_FILTERS,
-    classify,
-    parse_photo_filter,
-    photo_filter_where,
-    project_photo_counts,
-)
+from .classification import project_photo_counts
 from .config import ConfigStore
 from .face_analysis import FaceAnalyzer
 from .media import (
@@ -36,25 +26,28 @@ from .media import (
 )
 from .motion import (
     ensure_motion_video,
-    extract_motion_asset_frame,
     extract_motion_frame,
     locate_motion_still_time,
     motion_asset_from_row,
     motion_fingerprint,
-    restore_motion_source,
-    write_motion_cover_source,
 )
+from .motion_cover_service import update_motion_cover
 from .native_dialogs import choose_csv, choose_directory, choose_save_csv
+from .photo_query_service import PhotoQueryService
 from .project_store import (
     ProjectManager,
     connect_db,
     project_id_for,
     project_thumbnail_path,
-    project_thumbnail_storage_path,
     safe_relative_path,
 )
 from .scanner import Scanner
-from .settings_service import apply_profile, estimate_profile, save_settings
+from .settings_service import (
+    apply_profile,
+    estimate_profile,
+    save_profile,
+    save_settings,
+)
 from .similarity import SimilarityGroupCache, quality_score
 from .updates import RELEASES_PAGE_URL, check_for_update, download_release_asset
 from .workflows import (
@@ -131,6 +124,20 @@ class ApplicationContext:
     token: str
     web_root: Path
     face_analyzer: FaceAnalyzer | None = None
+    photo_queries: PhotoQueryService | None = None
+
+    def __post_init__(self) -> None:
+        if self.photo_queries is None:
+            object.__setattr__(
+                self,
+                "photo_queries",
+                PhotoQueryService(
+                    self.config,
+                    self.manager,
+                    self.similarity_groups,
+                    self.token,
+                ),
+            )
 
 
 def configure(
@@ -201,44 +208,8 @@ def photo_payload(
     application: ApplicationContext | None = None,
 ) -> dict[str, Any]:
     application = application or current_application()
-    data = json_safe_row(row)
-    blink_ratio = data.get("blink_closed_ratio", -1)
-    if blink_ratio is None or float(blink_ratio) < 0:
-        data["blink_closed_ratio"] = None
-    data["project_id"] = project_id
-    if not str(row["error"] or ""):
-        if profile is None:
-            project = application.manager.from_id(project_id)
-            profile = application.config.get_profile(project.profile_id)
-        data["quality_score"] = round(
-            max(0.0, min(1.0, quality_score(row, profile))) * 100, 1
-        )
-    else:
-        data["quality_score"] = None
-    revision = int(row["cover_revision"] or 0)
-    suffix = f"&v={revision}"
-    token = application.token
-    data["thumb_url"] = f"/api/thumb?project_id={project_id}&id={row['id']}&token={token}{suffix}"
-    data["photo_url"] = f"/api/photo?project_id={project_id}&id={row['id']}&token={token}{suffix}"
-    if row["media_type"] == "motion_photo":
-        data["motion"] = {
-            "kind": row["motion_kind"],
-            "duration_ms": int(row["motion_duration_ms"] or 0),
-            "fps": float(row["motion_fps"] or 0),
-            "frame_count": int(row["motion_frame_count"] or 0),
-            "width": int(row["motion_width"] or 0),
-            "height": int(row["motion_height"] or 0),
-            "still_time_ms": int(row["motion_still_time_ms"] or 0),
-            "cover_source": row["cover_source"],
-            "cover_time_ms": int(row["cover_time_ms"] or 0),
-            "cover_frame_index": int(row["cover_frame_index"] or 0),
-            "error": row["motion_error"],
-            "video_url": (
-                f"/api/motion/video?project_id={project_id}&id={row['id']}"
-                f"&token={token}{suffix}"
-            ),
-        }
-    return data
+    assert application.photo_queries is not None
+    return application.photo_queries.photo_payload(project_id, row, profile)
 
 
 def project_summary(
@@ -250,15 +221,19 @@ def project_summary(
         photo_counts = project_photo_counts(conn)
         pairs = conn.execute("SELECT COUNT(*) FROM similar_pairs").fetchone()[0]
         profile = application.config.get_profile(project.profile_id)
+        blink_enabled = bool(
+            application.config.snapshot().get("blink_detection_enabled", True)
+        )
         similar_groups = application.similarity_groups.count(
             project_id,
             conn,
             profile,
-            bool(
-                application.config.snapshot().get(
-                    "blink_detection_enabled", True
-                )
-            ),
+            blink_enabled,
+        )
+        blink_rescan_required = (
+            application.scanner.blink_rescan_required(project, conn, profile)
+            if blink_enabled
+            else False
         )
     return {
         "id": project_id,
@@ -268,6 +243,7 @@ def project_summary(
         **photo_counts,
         "pairs": pairs,
         "similar_groups": similar_groups,
+        "blink_rescan_required": blink_rescan_required,
     }
 
 
@@ -553,6 +529,9 @@ class Handler(BaseHTTPRequestHandler):
                 "motion_cover_writeback": config_data.get(
                     "motion_cover_writeback", "ask"
                 ),
+                "blink_detection_enabled": config_data.get(
+                    "blink_detection_enabled", True
+                ),
                 "theme": config_data.get("theme", "day"),
             },
             "recent_projects": recent,
@@ -575,117 +554,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(self.scanner.get_progress(pid))
 
     def api_photos(self) -> None:
-        query = self._query()
-        pid = query.get("project_id", [""])[0]
-        search = query.get("search", [""])[0]
-        limit = min(500, max(1, int(query.get("limit", ["200"])[0])))
-        offset = max(0, int(query.get("offset", ["0"])[0]))
-        project = self.manager.from_id(pid)
-        profile = self.config.get_profile(project.profile_id)
-
-        file_state = query.get("file", ["readable"])[0]
-        raw_decisions = query.get("decisions", [None])[0]
-        raw_ai = query.get("ai_states", [None])[0]
-
-        decisions = parse_photo_filter(
-            raw_decisions, PHOTO_DECISION_FILTERS, "decisions"
-        )
-        ai_states = parse_photo_filter(raw_ai, PHOTO_AI_FILTERS, "ai_states")
-        where, params = photo_filter_where(file_state, decisions, ai_states)
-        if search:
-            where += " AND relative_path LIKE ?"
-            params.append(f"%{search}%")
-        with closing(connect_db(project.db_path)) as conn:
-            total = conn.execute(f"SELECT COUNT(*) FROM photos WHERE {where}", params).fetchone()[0]
-            rows = conn.execute(
-                f"""SELECT * FROM photos WHERE {where}
-                    ORDER BY CASE suggestion WHEN 'remove' THEN 0 WHEN 'review' THEN 1 WHEN 'unreadable' THEN 2 ELSE 3 END,
-                    relative_path LIMIT ? OFFSET ?""",
-                [*params, limit, offset],
-            ).fetchall()
-        self._send_json({
-            "total": total,
-            "items": [
-                photo_payload(pid, row, profile, self.application) for row in rows
-            ],
-        })
+        assert self.application.photo_queries is not None
+        self._send_json(self.application.photo_queries.photos(self._query()))
 
     def api_similar_groups(self) -> None:
-        query = self._query()
-        pid = query.get("project_id", [""])[0]
-        search = query.get("search", [""])[0].casefold()
-        project = self.manager.from_id(pid)
-        profile = self.config.get_profile(project.profile_id)
-        blink_enabled = bool(
-            self.config.snapshot().get("blink_detection_enabled", True)
-        )
-        with closing(connect_db(project.db_path)) as conn:
-            groups = self.similarity_groups.get(
-                pid, conn, profile, blink_enabled
-            )
-        items = []
-        for group in groups:
-            if search and not any(
-                search in str(row["relative_path"]).casefold() for row in group["members"]
-            ):
-                continue
-            items.append(
-                {
-                    "id": group["id"],
-                    "count": len(group["members"]),
-                    "kind": group["kind"],
-                    "recommended_id": group["recommended_id"],
-                    "recommended": photo_payload(
-                        pid, group["recommended"], profile, self.application
-                    ),
-                    "covers": [
-                        photo_payload(pid, row, profile, self.application)
-                        for row in group["covers"]
-                    ],
-                    "face_safe": group["face_safe"],
-                }
-            )
-        self._send_json({"total": len(items), "items": items})
+        assert self.application.photo_queries is not None
+        self._send_json(self.application.photo_queries.similar_groups(self._query()))
 
     def api_similar_group(self) -> None:
-        query = self._query()
-        pid = query.get("project_id", [""])[0]
-        group_id = query.get("group_id", [""])[0]
-        search = query.get("search", [""])[0].casefold()
-        project = self.manager.from_id(pid)
-        profile = self.config.get_profile(project.profile_id)
-        blink_enabled = bool(
-            self.config.snapshot().get("blink_detection_enabled", True)
-        )
-        with closing(connect_db(project.db_path)) as conn:
-            group = next(
-                (
-                    item
-                    for item in self.similarity_groups.get(
-                        pid, conn, profile, blink_enabled
-                    )
-                    if item["id"] == group_id
-                ),
-                None,
-            )
-        if not group:
-            raise ValueError("相似照片组不存在或已发生变化")
-        members = []
-        for row in group["members"]:
-            if search and search not in str(row["relative_path"]).casefold():
-                continue
-            item = photo_payload(pid, row, profile, self.application)
-            item["group_similarity"] = group["confidence"].get(int(row["id"]), 0.0)
-            members.append(item)
-        result = {
-            "id": group["id"],
-            "count": len(group["members"]),
-            "kind": group["kind"],
-            "recommended_id": group["recommended_id"],
-            "face_safe": group["face_safe"],
-            "members": members,
-        }
-        self._send_json(result)
+        assert self.application.photo_queries is not None
+        self._send_json(self.application.photo_queries.similar_group(self._query()))
 
     def _photo_row(self):
         query = self._query()
@@ -782,156 +660,23 @@ class Handler(BaseHTTPRequestHandler):
         write_source = body.get("write_source", False)
         if not isinstance(write_source, bool):
             raise ValueError("write_source 必须为布尔值")
-        if source not in {"still", "motion"}:
-            raise ValueError("封面来源无效")
-        if write_source and source != "motion":
-            raise ValueError("只有动态帧可以修改原图")
-        project = self.manager.from_id(pid)
-        profile = self.config.get_profile(project.profile_id)
-        with self.manager.data_operation(pid), self.scanner.project_operation(
-            pid, "修改动态照片封面"
-        ):
-            with closing(connect_db(project.db_path)) as conn:
-                row = conn.execute(
-                    "SELECT * FROM photos WHERE id=? AND status='active'", (photo_id,)
-                ).fetchone()
-                if not row or row["media_type"] != "motion_photo":
-                    raise ValueError("动态照片不存在")
-                revision = int(row["cover_revision"] or 0) + 1
-                thumb_name = (
-                    f"{hashlib.sha1(str(row['relative_path']).encode('utf-8')).hexdigest()}"
-                    f".cover-{revision}.jpg"
-                )
-                new_thumb = project.thumb_dir / thumb_name
-                time_ms = 0
-                frame_index = 0
-                writeback_result = None
-                if source == "motion":
-                    time_ms = int(body.get("time_ms", -1))
-                    duration = int(row["motion_duration_ms"] or 0)
-                    if duration <= 0 or time_ms < 0 or time_ms > duration:
-                        raise ValueError("所选封面时间超出动态照片范围")
-                    fps = float(row["motion_fps"] or 0)
-                    frame_duration_ms = max(1, math.ceil(1000 / fps)) if fps > 0 else 1
-                    time_ms = min(time_ms, max(0, duration - frame_duration_ms))
-                    asset = motion_asset_from_row(project.root, row)
-                    motion_dir = project.motion_dir or project.project_dir / "motion"
-                    video = ensure_motion_video(asset, motion_dir)
-                    frame = motion_dir / (
-                        f"{motion_fingerprint(asset)}.motion-cover-{time_ms}.jpg"
-                    )
-                    if write_source:
-                        extract_motion_asset_frame(asset, time_ms, frame)
-                    else:
-                        extract_motion_frame(video, time_ms, frame)
-                    metrics = analyze_photo(frame, new_thumb)
-                    frame_index = round(time_ms * fps / 1000)
-                else:
-                    original = safe_relative_path(
-                        project.root, row["relative_path"], "照片路径"
-                    )
-                    metrics = analyze_photo(original, new_thumb)
-                if metrics["error"]:
-                    new_thumb.unlink(missing_ok=True)
-                    raise RuntimeError(metrics["error"])
-                if write_source:
-                    original = safe_relative_path(
-                        project.root, row["relative_path"], "照片路径"
-                    )
-                    writeback_result = write_motion_cover_source(
-                        original,
-                        frame,
-                        asset,
-                        time_ms,
-                        project.project_dir / "source-backups",
-                        revision,
-                    )
-                try:
-                    stored_source = "still" if writeback_result else source
-                    stored_time_ms = 0 if writeback_result else time_ms
-                    stored_frame_index = 0 if writeback_result else frame_index
-                    values = dict(metrics)
-                    values.update({
-                        "extension": row["extension"], "size": row["size"],
-                        "mtime": row["mtime"], "taken": row["taken"],
-                        "sha256": row["sha256"],
-                        "motion_offset": row["motion_offset"],
-                        "motion_length": row["motion_length"],
-                        "motion_size": row["motion_size"],
-                        "motion_mtime": row["motion_mtime"],
-                        "motion_still_time_ms": row["motion_still_time_ms"],
-                        "cover_source": stored_source,
-                        "cover_time_ms": stored_time_ms,
-                        "cover_frame_index": stored_frame_index,
-                        "thumbnail": project_thumbnail_storage_path(new_thumb),
-                        "quality_score": 0,
-                    })
-                    if writeback_result:
-                        source_stat = writeback_result["stat"]
-                        written_asset = writeback_result["asset"]
-                        asset_values = written_asset.storage_values(project.root)
-                        values.update({
-                            "size": source_stat.st_size,
-                            "mtime": source_stat.st_mtime,
-                            "sha256": "",
-                            "motion_offset": asset_values["motion_offset"],
-                            "motion_length": asset_values["motion_length"],
-                            "motion_size": asset_values["motion_size"],
-                            "motion_mtime": asset_values["motion_mtime"],
-                            "motion_still_time_ms": time_ms,
-                        })
-                    values["quality_score"] = round(
-                        max(0.0, min(1.0, quality_score(values, profile))) * 100, 1
-                    )
-                    values["suggestion"], values["reason"] = classify(values, profile)
-                    metric_columns = (
-                        "width", "height", "megapixels", "luminance", "contrast",
-                        "dark_clip", "bright_clip", "sharpness", "entropy", "phash",
-                        "dhash", "thumbnail", "suggestion", "reason", "quality_score",
-                        "size", "mtime", "sha256", "motion_offset", "motion_length",
-                        "motion_size", "motion_mtime", "motion_still_time_ms",
-                        "cover_source", "cover_time_ms", "cover_frame_index",
-                    )
-                    assignments = ",".join(f"{column}=?" for column in metric_columns)
-                except Exception:
-                    new_thumb.unlink(missing_ok=True)
-                    if writeback_result:
-                        restore_motion_source(writeback_result["backup"], original)
-                    raise
-                try:
-                    conn.execute("BEGIN IMMEDIATE")
-                    conn.execute(
-                        f"UPDATE photos SET {assignments},cover_revision=?,analyzed_at=? WHERE id=?",
-                        [
-                            *[values[column] for column in metric_columns],
-                            revision,
-                            datetime.now().isoformat(timespec="microseconds"),
-                            photo_id,
-                        ],
-                    )
-                    self.scanner.reclassify(project, conn, profile, commit=False)
-                    self.scanner.rebuild_similarity(project, conn, profile, commit=False)
-                    self.scanner.analyze_blinks(
-                        project, conn, profile, commit=False
-                    )
-                    conn.commit()
-                except Exception:
-                    conn.rollback()
-                    new_thumb.unlink(missing_ok=True)
-                    if writeback_result:
-                        restore_motion_source(writeback_result["backup"], original)
-                    raise
-                updated = conn.execute(
-                    "SELECT * FROM photos WHERE id=?", (photo_id,)
-                ).fetchone()
-                project_counts = project_photo_counts(conn)
-        self.similarity_groups.invalidate(pid)
+        result = update_motion_cover(
+            self.config,
+            self.manager,
+            self.scanner,
+            self.similarity_groups,
+            pid,
+            photo_id,
+            source,
+            int(body.get("time_ms", -1)),
+            write_source,
+        )
         self._send_json({
             "saved": True,
-            "source_written": bool(writeback_result),
-            "source_backup": str(writeback_result["backup"]) if writeback_result else "",
-            "photo": photo_payload(pid, updated, profile, self.application),
-            "project_counts": project_counts,
+            "source_written": result.source_written,
+            "source_backup": result.source_backup,
+            "photo": photo_payload(pid, result.row, result.profile, self.application),
+            "project_counts": result.project_counts,
         })
 
     def api_motion_recommend(self, body: dict[str, Any]) -> None:
@@ -1105,10 +850,32 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_settings(self, body: dict[str, Any]) -> None:
         settings = save_settings(self.config, body)
-        self._send_json({"saved": True, "settings": settings})
+        rescan_required = False
+        project_id = str(body.get("project_id") or "")
+        if project_id and settings.get("blink_detection_enabled", True):
+            project = self.manager.from_id(project_id)
+            profile = self.config.get_profile(project.profile_id)
+            with closing(connect_db(project.db_path)) as conn:
+                rescan_required = self.scanner.blink_rescan_required(
+                    project, conn, profile
+                )
+        if project_id:
+            self.similarity_groups.invalidate(project_id)
+        self._send_json({
+            "saved": True,
+            "settings": settings,
+            "blink_rescan_required": rescan_required,
+        })
 
     def api_profile_save(self, body: dict[str, Any]) -> None:
-        self._send_json(self.config.save_custom_profile(body["profile"]))
+        self._send_json(save_profile(
+            self.config,
+            self.manager,
+            self.scanner,
+            self.similarity_groups,
+            body["profile"],
+            str(body.get("project_id") or "") or None,
+        ))
 
     def api_profile_delete(self, body: dict[str, Any]) -> None:
         self.config.delete_custom_profile(body["profile_id"])

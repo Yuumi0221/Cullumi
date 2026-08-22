@@ -5,6 +5,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from .analysis_refresh import execute_refresh, plan_profile_change
 from .classification import classification_percentiles, classify
 from .config import ConfigStore, validate_profile
 from .project_store import Project, ProjectManager, connect_db
@@ -57,6 +58,7 @@ def apply_profile(
     similarity_groups: SimilarityGroupCache,
     project_id: str,
     profile_id: str,
+    previous_profile: dict[str, Any] | None = None,
 ) -> Project:
     """Apply a profile while keeping the database and configuration in sync."""
     project = manager.from_id(project_id)
@@ -70,6 +72,7 @@ def apply_profile(
                 old_profile_id = config.data["projects"][project.project_id].get(
                     "profile_id", "conservative"
                 )
+            old_profile = previous_profile or config.get_profile(old_profile_id)
             with closing(connect_db(project.db_path)) as conn:
                 config_saved = False
                 try:
@@ -78,9 +81,13 @@ def apply_profile(
                         "WHERE id=1",
                         (profile_id,),
                     )
-                    scanner.reclassify(project, conn, profile, commit=False)
-                    scanner.rebuild_similarity(project, conn, profile, commit=False)
-                    scanner.analyze_blinks(project, conn, profile, commit=False)
+                    execute_refresh(
+                        scanner,
+                        project,
+                        conn,
+                        profile,
+                        plan_profile_change(old_profile, profile),
+                    )
                     with config.edit() as data:
                         data["projects"][project.project_id]["profile_id"] = profile_id
                     config_saved = True
@@ -95,6 +102,44 @@ def apply_profile(
                     raise
     similarity_groups.invalidate(project.project_id)
     return manager.from_id(project.project_id)
+
+
+def save_profile(
+    config: ConfigStore,
+    manager: ProjectManager,
+    scanner: Scanner,
+    similarity_groups: SimilarityGroupCache,
+    profile: dict[str, Any],
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    """Save a custom profile and reapply changed analysis settings when active."""
+    original_id = str(profile.get("id") or "")
+    original = config.profiles().get(original_id) if original_id else None
+    saved = config.save_custom_profile(profile)
+    if not project_id or not original or saved["id"] != original_id:
+        return saved
+    project = manager.from_id(project_id)
+    analysis_changed = any(
+        original.get(key) != saved.get(key)
+        for key in ("quality", "similarity", "people_conservative")
+    )
+    if project.profile_id != saved["id"] or not analysis_changed:
+        return saved
+    try:
+        apply_profile(
+            config,
+            manager,
+            scanner,
+            similarity_groups,
+            project_id,
+            saved["id"],
+            previous_profile=original,
+        )
+    except Exception:
+        with config.edit() as data:
+            data.setdefault("custom_profiles", {})[original_id] = original
+        raise
+    return saved
 
 
 def estimate_profile(

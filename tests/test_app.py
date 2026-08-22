@@ -12,6 +12,7 @@ from unittest import mock
 from PIL import Image
 
 from cullumi import http_api as app
+from cullumi import motion_cover_service
 from cullumi.config import ConfigStore
 from cullumi.motion import ffmpeg_executable
 from cullumi.project_store import ProjectManager, connect_db
@@ -205,7 +206,9 @@ class AppSafetyTests(unittest.TestCase):
                     application_context(config, manager, scanner, groups),
                 ),
                 mock.patch.object(
-                    app, "quality_score", side_effect=RuntimeError("scoring failed")
+                    motion_cover_service,
+                    "quality_score",
+                    side_effect=RuntimeError("scoring failed"),
                 ),
             ):
                 with self.assertRaisesRegex(RuntimeError, "scoring failed"):
@@ -342,6 +345,7 @@ class AppSafetyTests(unittest.TestCase):
             payload = handler._send_json.call_args.args[0]
             self.assertEqual(payload["startup_warning"], config.load_warning)
             self.assertIn("已备份", payload["startup_warning"])
+            self.assertTrue(payload["settings"]["blink_detection_enabled"])
 
     def test_api_photo_builds_a_high_resolution_tiff_preview(self):
         with tempfile.TemporaryDirectory() as temporary:

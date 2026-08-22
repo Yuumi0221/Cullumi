@@ -308,6 +308,7 @@ class SimilarityGroupCache:
 
     def __init__(self) -> None:
         self._entries: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self._indexes: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
         self._lock = threading.RLock()
 
     @staticmethod
@@ -357,7 +358,19 @@ class SimilarityGroupCache:
                 for group in groups
             ]
             self._entries[key] = topology
+            self._indexes[key] = {group["id"]: group for group in topology}
             return topology
+
+    def _key(
+        self,
+        project_id: str,
+        profile: dict[str, Any],
+        blink_detection_enabled: bool,
+    ) -> tuple[str, str]:
+        return (
+            project_id,
+            self._profile_fingerprint(profile, blink_detection_enabled),
+        )
 
     def count(
         self,
@@ -382,6 +395,13 @@ class SimilarityGroupCache:
         topology = self._topology(
             project_id, conn, profile, blink_detection_enabled
         )
+        return self._hydrate(conn, topology)
+
+    @staticmethod
+    def _hydrate(
+        conn: sqlite3.Connection,
+        topology: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         photo_ids = sorted(
             {photo_id for group in topology for photo_id in group["member_ids"]}
         )
@@ -415,11 +435,29 @@ class SimilarityGroupCache:
             )
         return hydrated
 
+    def get_one(
+        self,
+        project_id: str,
+        group_id: str,
+        conn: sqlite3.Connection,
+        profile: dict[str, Any],
+        blink_detection_enabled: bool = True,
+    ) -> dict[str, Any] | None:
+        self._topology(project_id, conn, profile, blink_detection_enabled)
+        key = self._key(project_id, profile, blink_detection_enabled)
+        with self._lock:
+            group = self._indexes.get(key, {}).get(group_id)
+        if group is None:
+            return None
+        hydrated = self._hydrate(conn, [group])
+        return hydrated[0] if hydrated else None
+
     def invalidate(self, project_id: str) -> None:
         with self._lock:
             keys = [key for key in self._entries if key[0] == project_id]
             for key in keys:
                 del self._entries[key]
+                self._indexes.pop(key, None)
 
 
 __all__ = [

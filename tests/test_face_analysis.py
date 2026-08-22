@@ -130,6 +130,43 @@ class FaceAnalysisTests(unittest.TestCase):
         self.assertEqual(result["blink_uncertain_face_count"], 0)
         self.assertEqual(result["blink_closed_ratio"], 0.5)
 
+    def test_detailed_analysis_exposes_faces_only_for_offline_evaluation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            thumbnail = Path(temporary) / "thumb.jpg"
+            Image.new("RGB", (100, 100), (120, 100, 90)).save(thumbnail)
+            analyzer = FaceAnalyzer(Path(temporary))
+            faces = [face(100, 100), face(300, 300)]
+            row = {
+                "cover_source": "still",
+                "cover_time_ms": 0,
+                "cover_revision": 0,
+            }
+            with (
+                mock.patch.object(
+                    analyzer,
+                    "_sessions",
+                    return_value=(object(), EyeSession([0.95, 0.92, 0.1, 0.2])),
+                ),
+                mock.patch.object(analyzer, "_detect_faces", return_value=faces),
+            ):
+                regular = analyzer.analyze(
+                    thumbnail, row, BUILTIN_PROFILES["balanced"]
+                )
+                detailed = analyzer.analyze_detailed(
+                    thumbnail, row, BUILTIN_PROFILES["balanced"]
+                )
+
+        self.assertNotIn("faces", regular)
+        self.assertEqual(
+            [observation["status"] for observation in detailed["faces"]],
+            ["open", "closed"],
+        )
+        self.assertEqual(
+            detailed["faces"][0]["eye_open_probabilities"],
+            [0.95, 0.92],
+        )
+        self.assertEqual(detailed["faces"][1]["confidence"], 0.9)
+
     def test_ocec_eye_crop_preserves_rgb_channel_order(self):
         image = Image.new("RGB", (100, 100), (204, 102, 51))
         try:
@@ -223,6 +260,21 @@ class BlinkScannerTests(unittest.TestCase):
             statuses,
             {"a.jpg": "open", "b.jpg": "open", "c.jpg": "not_analyzed"},
         )
+
+    def test_rescan_requirement_uses_cache_fingerprints_without_model_loading(self):
+        analyzer = FakeFaceAnalyzer()
+        scanner = Scanner(self.config, self.manager, face_analyzer=analyzer)
+        profile = BUILTIN_PROFILES["balanced"]
+        with closing(connect_db(self.project.db_path)) as conn:
+            self.assertTrue(scanner.blink_rescan_required(self.project, conn, profile))
+            scanner.analyze_blinks(self.project, conn, profile)
+            self.assertFalse(scanner.blink_rescan_required(self.project, conn, profile))
+            conn.execute(
+                "UPDATE photos SET cover_revision=cover_revision+1 WHERE id=1"
+            )
+            conn.commit()
+            self.assertTrue(scanner.blink_rescan_required(self.project, conn, profile))
+        self.assertEqual(analyzer.calls, 2)
 
     def test_disabled_or_cancelled_analysis_never_loads_the_model(self):
         analyzer = FakeFaceAnalyzer()

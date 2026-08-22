@@ -130,6 +130,60 @@ class SimilarityIndexTests(unittest.TestCase):
             brute.close()
             self.assertEqual(indexed_rows, brute_rows)
 
+    def test_partial_rebuild_preserves_unrelated_edges(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"
+            photos.mkdir()
+            config = ConfigStore(root / "config.json")
+            config.data["default_cache_root"] = str(root / "cache")
+            config.save()
+            manager = ProjectManager(config)
+            project = manager.open(str(photos))
+            scanner = Scanner(config, manager)
+            thumbnail = project.thumb_dir / "shared.jpg"
+            Image.new("RGB", (16, 16), "gray").save(thumbnail, "JPEG")
+
+            with closing(connect_db(project.db_path)) as conn:
+                conn.executemany(
+                    """INSERT INTO photos(
+                           relative_path,status,error,width,height,phash,dhash,
+                           thumbnail,sharpness,luminance,contrast,dark_clip,
+                           bright_clip,entropy,megapixels
+                       ) VALUES(?, 'active', '', 1200, 800, ?, ?, ?, ?, 110,
+                                40, 0, 0, 6, 2)""",
+                    [
+                        ("IMG_0001.jpg", "0" * 16, "0" * 16, str(thumbnail), 10),
+                        ("IMG_0002.jpg", "0" * 16, "0" * 16, str(thumbnail), 20),
+                        ("IMG_0101.jpg", "f" * 16, "f" * 16, str(thumbnail), 30),
+                        ("IMG_0102.jpg", "f" * 16, "f" * 16, str(thumbnail), 40),
+                    ],
+                )
+                conn.executemany(
+                    """INSERT INTO similar_pairs(
+                           a_id,b_id,score,kind,recommended_id,face_safe
+                       ) VALUES(?,?,0.9,'similar',?,1)""",
+                    [(1, 2, 2), (3, 4, 4)],
+                )
+                conn.commit()
+                profile = copy.deepcopy(BUILTIN_PROFILES["balanced"])
+                profile["similarity"]["exact_duplicates"] = False
+                profile["similarity"]["structure_min"] = -1
+
+                scanner.rebuild_similarity(
+                    project, conn, profile, photo_ids={1}
+                )
+                pairs = [
+                    tuple(row)
+                    for row in conn.execute(
+                        "SELECT a_id,b_id FROM similar_pairs ORDER BY a_id,b_id"
+                    )
+                ]
+
+            self.assertIn((1, 2), pairs)
+            self.assertIn((3, 4), pairs)
+            self.assertEqual(scanner.related_photo_ids(conn, set()), set())
+
 
 if __name__ == "__main__":
     unittest.main()
