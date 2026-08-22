@@ -75,7 +75,7 @@ async function loadView(){
   if(!state.project)return;const search=encodeURIComponent($("#searchInput").value.trim());
   document.body.classList.toggle("similar-view-open",state.view==="similar");
   applySimilarMode();
-  const libraryTitle={library:"照片库",ai:"AI 建议",undecided:"待决定",keep:"已保留",remove:"已移除"}[state.activeNav]||"照片库";
+  const libraryTitle={library:"照片库",ai:"智能建议",undecided:"待决定",keep:"已保留",remove:"已移除"}[state.activeNav]||"照片库";
   $("#viewTitle").textContent=state.view==="library"?libraryTitle:{similar:"相似连拍",unreadable:"无法读取",quarantine:"隔离历史"}[state.view];
   $("#libraryFilters").classList.toggle("hidden",state.view!=="library");
   $("#aiBatchAction").classList.toggle("hidden",state.view!=="library"||state.activeNav!=="ai");

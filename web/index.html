@@ -59,7 +59,7 @@
         <nav id="nav" class="scroll-fade-region">
           <button data-nav="library" data-preset="library" class="active">照片库 <em id="libraryCount">0</em></button>
           <span class="nav-section-label">智能整理</span>
-          <button data-nav="ai" data-preset="ai">AI 建议 <em id="aiCount">0</em></button>
+          <button data-nav="ai" data-preset="ai">智能建议 <em id="aiCount">0</em></button>
           <button data-nav="similar" data-view="similar">相似连拍 <em id="pairCount">0</em></button>
           <span class="nav-section-label">我的处理</span>
           <button data-nav="undecided" data-preset="undecided">待决定 <em id="undecidedCount">0</em></button>
@@ -100,10 +100,10 @@
             </div>
             <div class="multi-filter" data-filter-menu="ai">
               <button class="multi-filter-trigger" type="button" aria-expanded="false" aria-controls="aiFilterPanel">
-                <span>AI 分析</span><b id="aiFilterSummary">全部</b><svg class="filter-chevron" viewBox="0 0 1024 1024" aria-hidden="true"><use class="filter-chevron-down" href="/static/assets/icons.svg?v=1#chevron-down"></use></svg>
+                <span>分析结果</span><b id="aiFilterSummary">全部</b><svg class="filter-chevron" viewBox="0 0 1024 1024" aria-hidden="true"><use class="filter-chevron-down" href="/static/assets/icons.svg?v=1#chevron-down"></use></svg>
               </button>
               <div id="aiFilterPanel" class="multi-filter-panel hidden">
-                <div class="multi-filter-head"><b>AI 分析</b><button type="button" data-select-all="ai">全选</button></div>
+                <div class="multi-filter-head"><b>分析结果</b><button type="button" data-select-all="ai">全选</button></div>
                 <label><input type="checkbox" data-filter-group="ai" value="remove" checked>建议移除</label>
                 <label><input type="checkbox" data-filter-group="ai" value="review" checked>人工复查</label>
                 <label><input type="checkbox" data-filter-group="ai" value="no_suggestion" checked>无建议</label>
@@ -111,7 +111,7 @@
             </div>
           </div>
           <div id="aiBatchAction" class="ai-batch-action hidden">
-            <button id="markAiRemoveBtn" class="ai-sweep-button" type="button" aria-label="将所有 AI 建议移除的未决定照片标记为移除" title="仅标记为移除，不会立即移动照片文件">
+            <button id="markAiRemoveBtn" class="ai-sweep-button" type="button" aria-label="将所有建议移除的未决定照片标记为移除" title="仅标记为移除，不会立即移动照片文件">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V5h6v2M8 10v7M12 10v7M16 10v7M7 7l1 13h8l1-13"/></svg>
               <span>一键移除</span>
               <em id="aiRemovePendingCount">0</em>
