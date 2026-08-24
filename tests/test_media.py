@@ -254,6 +254,35 @@ class MediaPreviewTests(unittest.TestCase):
             decoded.copy.assert_not_called()
             self.assertTrue((root / "thumb.jpg").is_file())
 
+    def test_jpeg_scaled_decode_preserves_original_dimensions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "large.jpg"
+            thumbnail = root / "thumb.jpg"
+            with Image.new("RGB", (4000, 3000), "navy") as image:
+                image.save(source, "JPEG", quality=88)
+
+            result = analyze_photo(source, thumbnail)
+
+            self.assertEqual(result["error"], "")
+            self.assertEqual((result["width"], result["height"]), (4000, 3000))
+            with Image.open(thumbnail) as image:
+                self.assertLessEqual(max(image.size), 512)
+
+    def test_jpeg_scaled_decode_preserves_oriented_dimensions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "portrait.jpg"
+            exif = Image.Exif()
+            exif[274] = 6
+            with Image.new("RGB", (1200, 800), "navy") as image:
+                image.save(source, "JPEG", quality=88, exif=exif)
+
+            result = analyze_photo(source, root / "thumb.jpg")
+
+            self.assertEqual(result["error"], "")
+            self.assertEqual((result["width"], result["height"]), (800, 1200))
+
     def test_special_formats_include_tiff_raw_and_heif(self):
         self.assertIn(".tiff", DISPLAY_PREVIEW_EXTENSIONS)
         self.assertIn(".dng", DISPLAY_PREVIEW_EXTENSIONS)

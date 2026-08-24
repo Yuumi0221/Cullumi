@@ -2,7 +2,7 @@
 
 Cullumi 是一款仅在本机运行的 Windows 照片筛选应用。它会递归扫描照片目录，生成不裁切的缩略图，检查画质，寻找完全重复照片和相似连拍，最后由用户决定保留或隔离哪些照片。
 
-当前版本：v1.0.2
+当前版本：v1.0.3
 
 ## 使用
 
@@ -57,7 +57,8 @@ Cullumi 只监听 `127.0.0.1`，接口使用每次启动随机生成的会话令
 
 - `cullumi/config.py` 负责Cullumi 配置、模式定义和参数校验。
 - `cullumi/classification.py` 负责照片筛选条件、项目统计和画质分类。
-- `cullumi/scanner.py` 协调照片发现、增量分析、完全重复确认、相似关系与眨眼分析。
+- `cullumi/scanner.py` 协调快速照片发现、增量分析、完全重复确认、相似关系与眨眼分析。
+- `cullumi/analysis_worker.py` 在受限的独立进程中执行扫描期图片解码，负责超时、取消与异常恢复。
 - `cullumi/analysis_refresh.py` 根据配置或单张照片的变化决定需要刷新的分析阶段。
 - `cullumi/project_store.py` 负责项目模型、SQLite 连接与迁移、缓存路径和写入一致性。
 - `cullumi/media.py` 负责图片解码、缩略图、高清预览、图像指标与感知哈希。
@@ -115,4 +116,4 @@ npm ci
 .\build.ps1
 ```
 
-构建结果位于 `dist\Cullumi-v1.0.2\`，同时生成 `dist\Cullumi-v1.0.2-Windows-Portable.zip`。
+构建结果位于 `dist\Cullumi-v1.0.3\`，同时生成 `dist\Cullumi-v1.0.3-Windows-Portable.zip`。

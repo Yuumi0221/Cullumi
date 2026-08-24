@@ -366,6 +366,21 @@ nav button.active em {
   transition:.25s
 }
 
+.progress-track i.indeterminate {
+  animation:progress-indeterminate 1.15s ease-in-out infinite;
+  transform-origin:left center
+}
+
+@keyframes progress-indeterminate {
+  0% { transform:translateX(-120%) scaleX(.45) }
+  55% { transform:translateX(145%) scaleX(1) }
+  100% { transform:translateX(340%) scaleX(.45) }
+}
+
+@media (prefers-reduced-motion:reduce) {
+  .progress-track i.indeterminate { animation:none }
+}
+
 .gallery {
   display:grid;
   grid-template-columns:repeat(auto-fill,minmax(210px,1fr));

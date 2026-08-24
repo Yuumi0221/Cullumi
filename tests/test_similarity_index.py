@@ -50,6 +50,18 @@ class SimilarityIndexTests(unittest.TestCase):
         self.assertGreater(vectorized_count.call_count, 0)
         self.assertLess(len(candidates), all_pairs // 100)
 
+    def test_candidate_output_can_be_bounded_per_photo(self) -> None:
+        hashes = ["0" * 16 for _ in range(200)]
+
+        candidates = list(hamming_candidate_pairs(hashes, 14, max_neighbors=12))
+        counts: dict[int, int] = {}
+        for left, _right in candidates:
+            counts[left] = counts.get(left, 0) + 1
+
+        self.assertTrue(candidates)
+        self.assertLessEqual(max(counts.values()), 12)
+        self.assertLessEqual(len(candidates), len(hashes) * 12)
+
     def test_indexed_similarity_rebuild_matches_full_pair_scan(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -107,7 +119,7 @@ class SimilarityIndexTests(unittest.TestCase):
             scanner.rebuild_similarity(project, indexed, profile)
             with mock.patch(
                 "cullumi.scanner.hamming_candidate_pairs",
-                side_effect=lambda values, radius: itertools.combinations(
+                side_effect=lambda values, radius, **_options: itertools.combinations(
                     range(len(values)), 2
                 ),
             ):

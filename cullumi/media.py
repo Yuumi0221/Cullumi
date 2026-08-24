@@ -119,7 +119,10 @@ def _open_heif(path: Path) -> Image.Image:
     raise UnidentifiedImageError(f"HEIC/HEIF 解码失败：{errors[0]}") from errors[0]
 
 
-def open_image(path: Path) -> tuple[Image.Image, str]:
+def open_image(
+    path: Path,
+    decode_size: tuple[int, int] | None = None,
+) -> tuple[Image.Image, str]:
     if path.suffix.lower() in RAW_EXTENSIONS:
         return _open_raw(path), ""
     if path.suffix.lower() in HEIF_EXTENSIONS:
@@ -136,12 +139,22 @@ def open_image(path: Path) -> tuple[Image.Image, str]:
         finally:
             source.close()
     with Image.open(path) as source:
+        original_size = source.size
+        if decode_size is not None and path.suffix.lower() in {".jpg", ".jpeg"}:
+            source.draft("RGB", decode_size)
         source.load()
         exif = source.getexif()
         taken = str(exif.get(36867, "") or exif.get(306, ""))
+        display_size = (
+            (original_size[1], original_size[0])
+            if exif.get(274) in {5, 6, 7, 8}
+            else original_size
+        )
         oriented = ImageOps.exif_transpose(source)
         try:
-            return oriented.convert("RGB"), taken
+            converted = oriented.convert("RGB")
+            converted.info["cullumi_original_size"] = display_size
+            return converted, taken
         finally:
             if oriented is not source:
                 oriented.close()
@@ -189,18 +202,32 @@ def ensure_display_preview(source: Path, thumbnail: Path) -> Path:
     return target
 
 
-def analyze_photo(
-    path: Path,
-    thumb_path: Path,
-    stat: os.stat_result | None = None,
-) -> dict[str, Any]:
-    base = {
+def _photo_analysis_base(path: Path, thumb_path: Path) -> dict[str, Any]:
+    return {
         "extension": path.suffix.lower(), "size": 0, "mtime": 0,
         "width": 0, "height": 0, "megapixels": 0, "taken": "",
         "luminance": None, "contrast": None, "dark_clip": None, "bright_clip": None,
         "sharpness": None, "entropy": None, "phash": "", "dhash": "",
         "sha256": "", "thumbnail": str(thumb_path), "error": "",
     }
+
+
+def failed_photo_analysis(
+    path: Path,
+    thumb_path: Path,
+    error: str,
+) -> dict[str, Any]:
+    result = _photo_analysis_base(path, thumb_path)
+    result["error"] = error
+    return result
+
+
+def analyze_photo(
+    path: Path,
+    thumb_path: Path,
+    stat: os.stat_result | None = None,
+) -> dict[str, Any]:
+    base = _photo_analysis_base(path, thumb_path)
     image: Image.Image | None = None
     preview: Image.Image | None = None
     gray: Image.Image | None = None
@@ -208,8 +235,8 @@ def analyze_photo(
     try:
         stat = stat or path.stat()
         base.update({"size": stat.st_size, "mtime": stat.st_mtime})
-        image, taken = open_image(path)
-        width, height = image.size
+        image, taken = open_image(path, (512, 512))
+        width, height = image.info.pop("cullumi_original_size", image.size)
         preview = image
         image = None
         preview.thumbnail((512, 512), Image.Resampling.LANCZOS)

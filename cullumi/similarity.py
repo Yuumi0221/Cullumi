@@ -21,9 +21,9 @@ def hamming(a: str, b: str) -> int:
 
 
 def hamming_candidate_pairs(
-    hashes: list[str], radius: float
+    hashes: list[str], radius: float, max_neighbors: int | None = None
 ) -> Iterator[tuple[int, int]]:
-    """Vectorize the exact hash prefilter while keeping memory bounded."""
+    """Vectorize the hash prefilter with optional per-photo output bounds."""
     if math.isnan(radius):
         return
     parsed: list[int] = []
@@ -41,9 +41,16 @@ def hamming_candidate_pairs(
 
     if wide_hash:
         for left in range(len(hashes)):
+            candidates: list[tuple[int, int]] = []
             for right in range(left + 1, len(hashes)):
-                if hamming(hashes[left], hashes[right]) <= radius:
-                    yield left, right
+                distance = hamming(hashes[left], hashes[right])
+                if distance <= radius:
+                    candidates.append((distance, right))
+            candidates.sort()
+            if max_neighbors is not None:
+                candidates = candidates[:max_neighbors]
+            for _distance, right in candidates:
+                yield left, right
         return
 
     values = np.asarray(parsed, dtype=np.uint64)
@@ -67,7 +74,12 @@ def hamming_candidate_pairs(
         for local_left, row_matches in enumerate(matches):
             row_matches[:local_left] = False
             left = start + local_left
-            for offset in np.flatnonzero(row_matches):
+            offsets = np.flatnonzero(row_matches)
+            if max_neighbors is not None and len(offsets) > max_neighbors:
+                row_distances = distances[local_left, offsets]
+                order = np.lexsort((offsets, row_distances))[:max_neighbors]
+                offsets = offsets[order]
+            for offset in offsets:
                 yield left, right_start + int(offset)
 
 

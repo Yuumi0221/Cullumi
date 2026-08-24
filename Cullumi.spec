@@ -21,6 +21,7 @@ a = Analysis(
     datas=[("web", "web"), ("models", "models"), *runtime_datas],
     hiddenimports=[
         "clr",
+        "cullumi.analysis_worker",
         "webview",
         "webview.platforms.edgechromium",
         "webview.platforms.winforms",

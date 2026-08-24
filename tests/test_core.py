@@ -76,7 +76,7 @@ class CullumiTests(unittest.TestCase):
         self.assertEqual(progress["stage"], "complete", progress)
 
     def test_profile_validation(self):
-        self.assertEqual(__version__, "1.0.2")
+        self.assertEqual(__version__, "1.0.3")
         self.assertEqual(self.config.data["theme"], "day")
         self.assertTrue(self.config.data["auto_check_updates"])
         validate_profile(BUILTIN_PROFILES["balanced"])
@@ -452,6 +452,10 @@ class CullumiTests(unittest.TestCase):
             discovery.unsupported_extensions,
             {".txt": 1, "无扩展名": 1, ".mp4": 1},
         )
+        progress = scanner.get_progress(self.project.project_id)
+        self.assertEqual(progress["discovered_total"], 4)
+        self.assertEqual(progress["photo_count"], 1)
+        self.assertEqual(progress["inaccessible_count"], 0)
 
     def test_discovery_does_not_follow_a_file_symlink_outside_project(self):
         outside = self.base / "outside.jpg"
@@ -489,6 +493,24 @@ class CullumiTests(unittest.TestCase):
         conn = connect_db(self.project.db_path)
         self.assertEqual(conn.execute("SELECT analyzed_at FROM photos WHERE relative_path='IMG_0001.jpg'").fetchone()[0], analyzed)
         conn.close()
+
+    def test_exact_duplicates_do_not_expand_into_quadratic_similar_edges(self):
+        self.make_photo("DUP_0001.jpg")
+        original = (self.photos / "DUP_0001.jpg").read_bytes()
+        for index in range(2, 7):
+            (self.photos / f"DUP_{index:04d}.jpg").write_bytes(original)
+
+        self.scan()
+
+        conn = connect_db(self.project.db_path)
+        counts = {
+            row["kind"]: row["count"]
+            for row in conn.execute(
+                "SELECT kind,COUNT(*) count FROM similar_pairs GROUP BY kind"
+            )
+        }
+        conn.close()
+        self.assertEqual(counts, {"exact": 5})
 
     def test_changed_file_replaces_stale_sha_and_exact_pair(self):
         self.make_photo("DUP_0001.bmp")

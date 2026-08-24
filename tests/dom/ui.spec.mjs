@@ -112,7 +112,7 @@ async function installApi(page, options = {}) {
 
     if (url.pathname === "/api/bootstrap") {
       return fulfill({
-        version: "1.0.2",
+        version: "1.0.3",
         profiles,
         settings: {
           theme: "day",
@@ -277,7 +277,7 @@ test("首页加载全部脚本并异步渲染最近项目", async ({ page }) => 
   await openApp(page);
 
   await expect(page).toHaveTitle("Cullumi");
-  await expect(page.locator("#appVersion")).toHaveText("v1.0.2");
+  await expect(page.locator("#appVersion")).toHaveText("v1.0.3");
   await expect(page.locator("#chooseBtn svg use")).toHaveAttribute("href", "/static/assets/icons.svg?v=2#home-folder");
   await expect(page.locator("#recentList .recent-meta")).toContainText("2 张");
   await expect(page.locator("#recentList .recent-thumb img")).toHaveCount(1);

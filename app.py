@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import multiprocessing
 import secrets
 import sys
 import threading
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from cullumi import http_api
+from cullumi.analysis_worker import PhotoAnalysisRunner
 from cullumi.config import ConfigStore, app_data_dir
 from cullumi.face_analysis import FaceAnalyzer
 from cullumi.project_store import ProjectManager
@@ -27,7 +29,14 @@ CONFIG = ConfigStore()
 MANAGER = ProjectManager(CONFIG)
 SIMILARITY_GROUPS = SimilarityGroupCache()
 FACE_ANALYZER = FaceAnalyzer(resource_path("models"))
-SCANNER = Scanner(CONFIG, MANAGER, SIMILARITY_GROUPS, FACE_ANALYZER)
+ANALYSIS_RUNNER = PhotoAnalysisRunner()
+SCANNER = Scanner(
+    CONFIG,
+    MANAGER,
+    SIMILARITY_GROUPS,
+    FACE_ANALYZER,
+    ANALYSIS_RUNNER,
+)
 TOKEN = secrets.token_urlsafe(24)
 WEB_ROOT = resource_path("web")
 APP_ICON = WEB_ROOT / "assets" / "icons" / "brand-icon.ico"
@@ -90,8 +99,10 @@ def run() -> None:
         except KeyboardInterrupt:
             pass
     finally:
+        ANALYSIS_RUNNER.close()
         server.shutdown()
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     run()

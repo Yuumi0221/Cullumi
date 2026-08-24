@@ -77,9 +77,15 @@ async function pollProgress(){
   try{
     while(generation===state.poll&&state.project?.id===projectId){
       const p=await json(`/api/progress?project_id=${projectId}`);if(generation!==state.poll||state.project?.id!==projectId)return;
-      $("#progressTitle").textContent=stageName[p.stage]||p.stage;$("#progressDetail").textContent=p.file||`${p.current||0} / ${p.total||0}`;
-      $("#progressBar").style.width=p.total?`${Math.round(100*(p.current||0)/p.total)}%`:(p.done?"100%":"5%");
-      if(p.done){state.lastScan=p;if(p.error)toast(p.error);else if(!p.total&&p.video_count)toast(`未发现照片；发现 ${p.video_count} 个视频，当前版本不支持视频`);else if(!p.total)toast("未发现支持的照片文件");else if(p.unavailable_count)toast(`扫描完成，${p.unavailable_count} 张照片在扫描期间不可用，已安全跳过`);else toast(stageName[p.stage]||"扫描结束");await refreshProject();if(generation!==state.poll)return;await loadView();setTimeout(()=>{if(generation===state.poll)$("#progressPanel").classList.add("hidden")},2500);return}
+      $("#progressTitle").textContent=stageName[p.stage]||p.stage;
+      if(p.stage==="discovering"){
+        const location=p.current_directory&&p.current_directory!=="."?` · ${p.current_directory}`:"";
+        $("#progressDetail").textContent=`已检查 ${p.discovered_total||0} 个文件 · ${p.photo_count||0} 张照片${location}`;
+      }else $("#progressDetail").textContent=p.file||`${p.current||0} / ${p.total||0}`;
+      const indeterminate=!p.done&&!p.total;
+      $("#progressBar").classList.toggle("indeterminate",indeterminate);
+      $("#progressBar").style.width=p.total?`${Math.round(100*(p.current||0)/p.total)}%`:(p.done?"100%":"35%");
+      if(p.done){state.lastScan=p;if(p.error)toast(p.error);else if(!p.total&&p.video_count)toast(`未发现照片；发现 ${p.video_count} 个视频，当前版本不支持视频`);else if(!p.total)toast("未发现支持的照片文件");else if(p.unavailable_count||p.inaccessible_count){const skipped=[];if(p.unavailable_count)skipped.push(`${p.unavailable_count} 张照片在扫描期间不可用`);if(p.inaccessible_count)skipped.push(`${p.inaccessible_count} 个文件或目录无法访问`);toast(`扫描完成，${skipped.join("，")}，已安全跳过`)}else toast(stageName[p.stage]||"扫描结束");await refreshProject();if(generation!==state.poll)return;await loadView();setTimeout(()=>{if(generation===state.poll)$("#progressPanel").classList.add("hidden")},2500);return}
       await wait(700);
     }
   }catch(error){if(generation===state.poll)toast(`读取扫描进度失败：${error.message}`)}

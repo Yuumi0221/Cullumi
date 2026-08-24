@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 import os
 import sqlite3
 import subprocess
 import threading
+import time
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -13,6 +15,7 @@ from typing import Any
 
 import numpy as np
 
+from .analysis_worker import AnalysisCancelled, PhotoAnalysisRunner
 from .classification import (
     PHOTO_ANALYSIS_COLUMNS,
     PHOTO_UPSERT_SQL,
@@ -75,6 +78,7 @@ class DiscoveryResult:
     video_count: int
     unsupported_extensions: dict[str, int]
     videos: list[Path] = field(default_factory=list)
+    inaccessible_count: int = 0
 
 def _check_cancelled(cancel: threading.Event | None) -> None:
     if cancel is not None and cancel.is_set():
@@ -87,11 +91,13 @@ class Scanner:
         manager: ProjectManager,
         similarity_groups: SimilarityGroupCache | None = None,
         face_analyzer: FaceAnalyzer | None = None,
+        analysis_runner: PhotoAnalysisRunner | None = None,
     ):
         self.config = config
         self.manager = manager
         self.similarity_groups = similarity_groups
         self.face_analyzer = face_analyzer
+        self.analysis_runner = analysis_runner
         self.progress: dict[str, dict[str, Any]] = {}
         self.cancel_events: dict[str, threading.Event] = {}
         self.threads: dict[str, threading.Thread] = {}
@@ -164,46 +170,113 @@ class Scanner:
         with self._lock:
             return dict(self.progress.get(project_id, {"stage": "idle", "done": True}))
 
+    def _analyze_photo(
+        self,
+        path: Path,
+        thumbnail: Path,
+        cancel: threading.Event,
+        stat: os.stat_result | None = None,
+    ) -> dict[str, Any]:
+        if self.analysis_runner is None:
+            return analyze_photo(path, thumbnail, stat)
+        try:
+            return self.analysis_runner.analyze(path, thumbnail, cancel)
+        except AnalysisCancelled as error:
+            raise ScanCancelled from error
+
     def _discover(self, project: Project, cancel: threading.Event) -> DiscoveryResult:
         stored = self.config.snapshot().get("projects", {}).get(project.project_id, {})
         excluded = [project.root / QUARANTINE_DIR, project.project_dir]
         excluded.extend(Path(item) for item in stored.get("old_caches", []))
         excluded = [path.resolve() for path in excluded if is_within(path, project.root)]
         project_root = project.root.resolve()
+        excluded_keys = {
+            os.path.normcase(os.path.abspath(path)) for path in excluded
+        }
 
-        def is_excluded(path: Path) -> bool:
-            resolved = path.resolve()
-            return any(resolved == root or root in resolved.parents for root in excluded)
+        def path_key(path: str | Path) -> str:
+            return os.path.normcase(os.path.abspath(path))
+
+        is_junction = getattr(os.path, "isjunction", lambda _path: False)
 
         photos: list[Path] = []
         videos: list[Path] = []
         discovered_total = 0
         unsupported_count = 0
         video_count = 0
+        inaccessible_count = 0
         unsupported_extensions: dict[str, int] = {}
-        for current, directories, filenames in os.walk(project.root, followlinks=False):
+        pending = [project_root]
+        last_progress = 0.0
+        current_directory = "."
+        while pending:
             _check_cancelled(cancel)
-            current_path = Path(current)
-            directories[:] = [
-                name
-                for name in directories
-                if not is_excluded(current_path / name)
-            ]
-            for name in filenames:
-                path = current_path / name
-                resolved = path.resolve()
-                if path.is_file() and project_root in resolved.parents:
-                    discovered_total += 1
-                    extension = path.suffix.lower()
-                    if extension in IMAGE_EXTENSIONS:
-                        photos.append(path)
-                    else:
-                        unsupported_count += 1
-                        key = extension or "无扩展名"
-                        unsupported_extensions[key] = unsupported_extensions.get(key, 0) + 1
-                        if extension in VIDEO_EXTENSIONS:
-                            video_count += 1
-                            videos.append(path)
+            current_path = pending.pop()
+            try:
+                current_directory = current_path.relative_to(project_root).as_posix() or "."
+            except ValueError:
+                inaccessible_count += 1
+                continue
+            directories: list[Path] = []
+            try:
+                with os.scandir(current_path) as entries:
+                    for entry in entries:
+                        _check_cancelled(cancel)
+                        try:
+                            if entry.is_symlink():
+                                continue
+                            if entry.is_dir(follow_symlinks=False):
+                                if is_junction(entry.path):
+                                    continue
+                                if path_key(entry.path) not in excluded_keys:
+                                    directories.append(Path(entry.path))
+                                continue
+                            if not entry.is_file(follow_symlinks=False):
+                                continue
+                        except OSError:
+                            inaccessible_count += 1
+                            continue
+
+                        path = Path(entry.path)
+                        discovered_total += 1
+                        extension = path.suffix.lower()
+                        if extension in IMAGE_EXTENSIONS:
+                            photos.append(path)
+                        else:
+                            unsupported_count += 1
+                            key = extension or "无扩展名"
+                            unsupported_extensions[key] = (
+                                unsupported_extensions.get(key, 0) + 1
+                            )
+                            if extension in VIDEO_EXTENSIONS:
+                                video_count += 1
+                                videos.append(path)
+
+                        now = time.monotonic()
+                        if now - last_progress >= 0.2:
+                            self._set(
+                                project.project_id,
+                                current=discovered_total,
+                                discovered_total=discovered_total,
+                                photo_count=len(photos),
+                                video_count=video_count,
+                                inaccessible_count=inaccessible_count,
+                                current_directory=current_directory,
+                            )
+                            last_progress = now
+            except OSError:
+                inaccessible_count += 1
+            pending.extend(reversed(directories))
+
+        self._set(
+            project.project_id,
+            current=discovered_total,
+            discovered_total=discovered_total,
+            photo_count=len(photos),
+            video_count=video_count,
+            inaccessible_count=inaccessible_count,
+            current_directory=current_directory,
+        )
         return DiscoveryResult(
             photos=photos,
             videos=videos,
@@ -211,6 +284,7 @@ class Scanner:
             unsupported_count=unsupported_count,
             video_count=video_count,
             unsupported_extensions=unsupported_extensions,
+            inaccessible_count=inaccessible_count,
         )
 
     def _prepare_scan(
@@ -219,7 +293,18 @@ class Scanner:
         """Discover files and pair motion sidecars before database work begins."""
         project = self.manager.from_id(project_id)
         profile = self.config.get_profile(project.profile_id)
-        self._set(project_id, stage="discovering")
+        self._set(
+            project_id,
+            stage="discovering",
+            current=0,
+            total=0,
+            file="",
+            discovered_total=0,
+            photo_count=0,
+            video_count=0,
+            inaccessible_count=0,
+            current_directory=".",
+        )
         discovery = self._discover(project, cancel)
         files = discovery.photos
         sidecars = {
@@ -259,6 +344,9 @@ class Scanner:
             video_count=video_count,
             unsupported_extensions=unsupported_extensions,
             unavailable_count=0,
+            inaccessible_count=discovery.inaccessible_count,
+            file="",
+            current_directory="",
         )
         return project, profile, files, motion_assets
 
@@ -280,6 +368,7 @@ class Scanner:
             current=len(files),
             total=len(files),
             unavailable_count=unavailable_count,
+            file="",
         )
 
     def _confirm_exact_duplicates(
@@ -292,7 +381,7 @@ class Scanner:
     ) -> int:
         """Confirm byte-identical candidates after incremental analysis."""
         _check_cancelled(cancel)
-        self._set(project_id, stage="hashing")
+        self._set(project_id, stage="hashing", current=0, total=0, file="")
         unavailable_count += self._exact_hashes(project, conn, cancel)
         self._set(project_id, unavailable_count=unavailable_count)
         return unavailable_count
@@ -307,7 +396,7 @@ class Scanner:
     ) -> None:
         """Rebuild similarity topology and dependent classifications."""
         _check_cancelled(cancel)
-        self._set(project_id, stage="grouping")
+        self._set(project_id, stage="grouping", current=0, total=0, file="")
         self.rebuild_similarity(project, conn, profile, cancel)
         _check_cancelled(cancel)
         self.analyze_blinks(
@@ -444,7 +533,11 @@ class Scanner:
                                 f"{motion_fingerprint(asset)}.motion-cover-{cover_time_ms}.jpg"
                             )
                             extract_motion_frame(video, cover_time_ms, frame)
-                            metrics = analyze_photo(frame, project.thumb_dir / thumb_name)
+                            metrics = self._analyze_photo(
+                                frame,
+                                project.thumb_dir / thumb_name,
+                                cancel,
+                            )
                             metrics.update({
                                 "extension": path.suffix.lower(), "size": stat.st_size,
                                 "mtime": stat.st_mtime, "taken": old["taken"],
@@ -456,7 +549,12 @@ class Scanner:
                         except (OSError, RuntimeError, subprocess.SubprocessError) as error:
                             motion_values["motion_error"] = str(error)
                     if metrics is None:
-                        metrics = analyze_photo(path, project.thumb_dir / thumb_name, stat)
+                        metrics = self._analyze_photo(
+                            path,
+                            project.thumb_dir / thumb_name,
+                            cancel,
+                            stat,
+                        )
                     if not path.is_file():
                         seen.discard(rel)
                         unavailable_count += 1
@@ -762,9 +860,6 @@ class Scanner:
     ) -> None:
         _check_cancelled(cancel)
         rows = conn.execute("SELECT * FROM photos WHERE status='active' AND error=''").fetchall()
-        by_dir: dict[str, list[sqlite3.Row]] = {}
-        for row in rows:
-            by_dir.setdefault(str(Path(row["relative_path"]).parent).casefold(), []).append(row)
         sim = profile["similarity"]
         derived = {
             int(row["id"]): {
@@ -795,25 +890,29 @@ class Scanner:
         if target_ids == set():
             return
         pairs: list[tuple[int, int, float, str, int, int]] = []
-        seen: set[tuple[int, int]] = set()
+        exact_pair_keys: set[tuple[int, int]] = set()
         if target_ids is not None:
-            seen.update(
+            exact_pair_keys.update(
                 (int(row["a_id"]), int(row["b_id"]))
                 for row in conn.execute(
                     "SELECT a_id,b_id FROM similar_pairs WHERE kind='exact'"
                 )
             )
-        if target_ids is None and sim.get("exact_duplicates", True):
-            by_hash: dict[tuple[str, str], list[sqlite3.Row]] = {}
+        exact_enabled = bool(sim.get("exact_duplicates", True))
+        by_hash: dict[tuple[str, str], list[sqlite3.Row]] = {}
+        exact_identity_by_id: dict[int, tuple[str, str]] = {}
+        if exact_enabled:
             for row in rows:
                 _check_cancelled(cancel)
                 motion_hash = str(row["motion_sha256"] or "")
                 if row["sha256"] and (
                     row["media_type"] != "motion_photo" or motion_hash
                 ):
-                    by_hash.setdefault(
-                        (str(row["sha256"]), motion_hash), []
-                    ).append(row)
+                    identity = (str(row["sha256"]), motion_hash)
+                    by_hash.setdefault(identity, []).append(row)
+                    exact_identity_by_id[int(row["id"])] = identity
+
+        if target_ids is None and exact_enabled:
             for group in by_hash.values():
                 _check_cancelled(cancel)
                 if len(group) < 2:
@@ -823,34 +922,91 @@ class Scanner:
                     if row["id"] == best["id"]:
                         continue
                     key = tuple(sorted((best["id"], row["id"])))
-                    seen.add(key)
+                    exact_pair_keys.add(key)
                     pairs.append((key[0], key[1], 1.0, "exact", best["id"], 0))
 
+        # Only one byte-identical photo per directory participates in visual
+        # matching. Exact edges still connect copies across all directories.
+        directory_candidates: dict[
+            str, dict[tuple[str, str, str], sqlite3.Row]
+        ] = {}
+        for row in rows:
+            photo_id = int(row["id"])
+            directory = str(Path(row["relative_path"]).parent).casefold()
+            exact_identity = exact_identity_by_id.get(photo_id)
+            candidate_key = (
+                "exact",
+                exact_identity[0],
+                exact_identity[1],
+            ) if exact_identity else ("photo", str(photo_id), "")
+            candidates = directory_candidates.setdefault(directory, {})
+            current = candidates.get(candidate_key)
+            if current is None or row_quality(row) > row_quality(current):
+                candidates[candidate_key] = row
+        by_dir = [list(candidates.values()) for candidates in directory_candidates.values()]
+
+        similar_heaps: dict[
+            int,
+            list[
+                tuple[
+                    float,
+                    int,
+                    int,
+                    int,
+                    tuple[int, int, float, str, int, int],
+                ]
+            ],
+        ] = {}
+
+        def retain_similar_edge(
+            edge: tuple[int, int, float, str, int, int]
+        ) -> None:
+            left, right, score = edge[0], edge[1], edge[2]
+            for photo_id, other_id in ((left, right), (right, left)):
+                heap = similar_heaps.setdefault(photo_id, [])
+                item = (score, -other_id, left, right, edge)
+                if len(heap) < 8:
+                    heapq.heappush(heap, item)
+                elif item > heap[0]:
+                    heapq.heapreplace(heap, item)
+
         def compare_pair(a: sqlite3.Row, b: sqlite3.Row) -> None:
-            if target_ids is not None and not {
-                int(a["id"]), int(b["id"])
-            }.intersection(target_ids):
+            a_id, b_id = int(a["id"]), int(b["id"])
+            if target_ids is not None and not {a_id, b_id}.intersection(target_ids):
                 return
-            aspect_a = derived[int(a["id"])]["aspect"]
-            aspect_b = derived[int(b["id"])]["aspect"]
+            if (
+                exact_identity_by_id.get(a_id) is not None
+                and exact_identity_by_id.get(a_id) == exact_identity_by_id.get(b_id)
+            ):
+                return
+            aspect_a = derived[a_id]["aspect"]
+            aspect_b = derived[b_id]["aspect"]
             if abs(aspect_a - aspect_b) / max(aspect_a, aspect_b) > sim["aspect_tolerance"]:
                 return
             ph = hamming(a["phash"], b["phash"])
             dh = hamming(a["dhash"], b["dhash"])
             if ph > sim["phash_max"] or dh > sim["dhash_max"]:
                 return
-            key = tuple(sorted((a["id"], b["id"])))
-            if key in seen:
+            key = tuple(sorted((a_id, b_id)))
+            if key in exact_pair_keys:
                 return
             structure = _structure_similarity(row_structure(a), row_structure(b))
             if structure < sim["structure_min"]:
                 return
             recommended = a if row_quality(a) >= row_quality(b) else b
             score = 0.45 * (1 - ph / 64) + 0.25 * (1 - dh / 64) + 0.30 * structure
-            pairs.append((key[0], key[1], score, "similar", recommended["id"], int(sim.get("face_safe", True))))
-            seen.add(key)
+            retain_similar_edge(
+                (
+                    key[0],
+                    key[1],
+                    score,
+                    "similar",
+                    int(recommended["id"]),
+                    int(sim.get("face_safe", True)),
+                )
+            )
 
-        for group in by_dir.values():
+        for group in by_dir:
             structure_vectors.clear()
             group.sort(
                 key=lambda row: (
@@ -865,7 +1021,9 @@ class Scanner:
                 )
                 radius = sim[f"{index_field}_max"]
                 hashes = [str(row[index_field] or "") for row in group]
-                for left, right in hamming_candidate_pairs(hashes, radius):
+                for left, right in hamming_candidate_pairs(
+                    hashes, radius, max_neighbors=64
+                ):
                     _check_cancelled(cancel)
                     compare_pair(group[left], group[right])
                 continue
@@ -885,6 +1043,14 @@ class Scanner:
                             break
                         continue
                     compare_pair(a, b)
+        selected_similar: dict[
+            tuple[int, int], tuple[int, int, float, str, int, int]
+        ] = {}
+        for heap in similar_heaps.values():
+            for item in heap:
+                edge = item[-1]
+                selected_similar[(edge[0], edge[1])] = edge
+        pairs.extend(selected_similar[key] for key in sorted(selected_similar))
         _check_cancelled(cancel)
         def replace_pairs() -> None:
             if target_ids is None:
