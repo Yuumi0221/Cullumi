@@ -406,7 +406,9 @@ function confirmAiRemoveSuggestions() {
   }
   $("#confirmTitle").textContent = `标记 ${count} 张建议移除照片？`;
   $("#confirmBody").textContent =
-    "这些照片会统一标记为“移除”。照片文件不会立即移动，之后仍需点击“隔离已标记移除”确认处理。";
+    state.settings.sync_variant_decisions !== false
+      ? "这些照片及其关联格式会统一标记为“移除”；含有已保留文件的关联组会安全跳过。照片文件不会立即移动，之后仍需点击“隔离已标记移除”确认处理。"
+      : "这些照片会标记为“移除”。照片文件不会立即移动，之后仍需点击“隔离已标记移除”确认处理。";
   const button = $("#confirmOk");
   button.textContent = "全部标记移除";
   button.onclick = async () => {
@@ -416,7 +418,9 @@ function confirmAiRemoveSuggestions() {
         project_id: state.project.id,
       });
       $("#confirm").close();
-      toast(`已将 ${r.marked} 张照片标记为移除`);
+      toast(
+        `已将 ${r.marked} 张照片标记为移除${r.skipped_kept_groups ? `，跳过 ${r.skipped_kept_groups} 个含已保留照片的关联组` : ""}`,
+      );
       applyProjectCounts(r.project_counts);
       await loadView();
     } catch (e) {
@@ -579,6 +583,19 @@ function bindSettingsEvents() {
   $("#autoAdvance").onchange = async (event) => {
     state.settings.auto_advance = event.target.checked;
     await json("/api/settings", { auto_advance: event.target.checked });
+  };
+  $("#syncVariantDecisions").onchange = async (event) => {
+    const previous = state.settings.sync_variant_decisions !== false;
+    try {
+      const saved = await json("/api/settings", {
+        sync_variant_decisions: event.target.checked,
+      });
+      state.settings.sync_variant_decisions =
+        saved.settings.sync_variant_decisions;
+    } catch (error) {
+      event.target.checked = previous;
+      toast(`保存同步决定设置失败：${error.message}`);
+    }
   };
   $("#blinkDetectionEnabled").onchange = async (event) => {
     const previous = state.settings.blink_detection_enabled !== false;

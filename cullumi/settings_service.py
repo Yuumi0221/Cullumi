@@ -28,6 +28,7 @@ def save_settings(config: ConfigStore, body: dict[str, Any]) -> dict[str, Any]:
         "auto_advance",
         "auto_check_updates",
         "blink_detection_enabled",
+        "sync_variant_decisions",
     ):
         if key in body:
             if not isinstance(body[key], bool):

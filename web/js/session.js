@@ -92,6 +92,8 @@ async function boot() {
   $("#autoAdvance").checked = !!b.settings.auto_advance;
   $("#blinkDetectionEnabled").checked =
     b.settings.blink_detection_enabled !== false;
+  $("#syncVariantDecisions").checked =
+    b.settings.sync_variant_decisions !== false;
   $("#autoCheckUpdates").checked = !!b.settings.auto_check_updates;
   $("#motionCoverWriteback").value = b.settings.motion_cover_writeback || "ask";
   $("#defaultCache").value = b.settings.default_cache_root;
@@ -139,13 +141,23 @@ async function showProject(p) {
   state.filters = {
     decisions: new Set(DECISION_VALUES),
     ai: new Set(AI_VALUES),
+    formats: new Set((p.format_categories || []).map((item) => item.id)),
   };
+  state.librarySort = "suggestion";
+  state.librarySortDirection = "asc";
   state.similar = {
     groups: [],
     selectedId: "",
     mode: "closed",
     listSearch: "",
     memberSearch: "",
+    detail: null,
+    formatCategories: [],
+    decisions: new Set(DECISION_VALUES),
+    ai: new Set(AI_VALUES),
+    formats: new Set(),
+    sort: "suggestion",
+    sortDirection: "asc",
   };
   document.body.classList.add("project-open");
   $("#home").classList.add("hidden");
@@ -155,7 +167,9 @@ async function showProject(p) {
   $("#projectCache").value = p.cache_root;
   $("#profileSelect").value = p.profile_id;
   $("#searchInput").value = "";
+  renderFormatFilterOptions();
   syncFilterControls();
+  syncSortControls();
   updateCounts(p);
   setBlinkRescanRequired(p.blink_rescan_required);
   setActiveNav("library");
@@ -185,7 +199,19 @@ function applyProjectCounts(counts) {
 }
 async function refreshProject() {
   if (!state.project) return;
+  const previousFormats = projectFormatValues(),
+    selectedAll = setEquals(state.filters.formats, previousFormats);
   state.project = await json(`/api/project?project_id=${state.project.id}`);
+  const availableFormats = projectFormatValues();
+  state.filters.formats = selectedAll
+    ? new Set(availableFormats)
+    : new Set(
+        [...state.filters.formats].filter((value) =>
+          availableFormats.includes(value),
+        ),
+      );
+  renderFormatFilterOptions();
+  syncFilterControls();
   updateCounts(state.project);
   setBlinkRescanRequired(state.project.blink_rescan_required);
 }
@@ -225,6 +251,10 @@ async function pollProgress() {
       if (p.done) {
         state.lastScan = p;
         if (p.error) toast(p.error);
+        else if (p.csv_import_requires_attention)
+          toast(
+            `扫描完成；自动 CSV 有 ${p.csv_import_conflicting_groups || 0} 个多格式决定冲突，请手动导入处理`,
+          );
         else if (!p.total && p.video_count)
           toast(`未发现照片；发现 ${p.video_count} 个视频，当前版本不支持视频`);
         else if (!p.total) toast("未发现支持的照片文件");

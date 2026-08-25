@@ -3,6 +3,12 @@ from __future__ import annotations
 from contextlib import closing
 from typing import Any
 
+from .capture_variants import (
+    FORMAT_CATEGORY_IDS,
+    active_variant_rows,
+    format_category,
+    variant_metadata,
+)
 from .classification import (
     PHOTO_AI_FILTERS,
     PHOTO_DECISION_FILTERS,
@@ -12,6 +18,69 @@ from .classification import (
 from .config import ConfigStore
 from .project_store import ProjectManager, connect_db
 from .similarity import SimilarityGroupCache, quality_score
+
+PHOTO_SORT_EXPRESSIONS = {
+    "suggestion": """CASE suggestion
+        WHEN 'remove' THEN 0 WHEN 'review' THEN 1
+        WHEN 'unreadable' THEN 2 ELSE 3 END""",
+    "filename": """LOWER(SUBSTR(
+        relative_path,
+        LENGTH(RTRIM(relative_path, REPLACE(relative_path, '/', ''))) + 1
+      ))""",
+    "size": "COALESCE(size, 0)",
+    "taken": "taken",
+}
+PHOTO_SORT_DIRECTIONS = {"asc": "ASC", "desc": "DESC"}
+
+
+def photo_sort_order(sort: str, direction: str = "asc") -> str:
+    try:
+        expression = PHOTO_SORT_EXPRESSIONS[sort]
+    except KeyError as error:
+        raise ValueError("sort 必须是 suggestion、filename、size 或 taken") from error
+    try:
+        sql_direction = PHOTO_SORT_DIRECTIONS[direction]
+    except KeyError as error:
+        raise ValueError("direction 必须是 asc 或 desc") from error
+    empty_taken = (
+        "CASE WHEN COALESCE(taken, '')='' THEN 1 ELSE 0 END, "
+        if sort == "taken"
+        else ""
+    )
+    return (
+        f"{empty_taken}{expression} {sql_direction}, "
+        "relative_path COLLATE NOCASE, id"
+    )
+
+
+def expanded_similarity_members(
+    group: dict[str, Any], variants: dict[int, list[Any]]
+) -> list[tuple[Any, int]]:
+    members = list(group["members"])
+    if group["kind"] != "similar":
+        return [(row, int(row["id"])) for row in members]
+    recommended_id = int(group["recommended_id"])
+    owners: dict[int, int] = {}
+    priority = sorted(
+        members,
+        key=lambda row: (int(row["id"]) != recommended_id),
+    )
+    for source in priority:
+        source_id = int(source["id"])
+        for row in variants.get(source_id) or [source]:
+            owners.setdefault(int(row["id"]), source_id)
+
+    expanded: list[tuple[Any, int]] = []
+    emitted: set[int] = set()
+    for source in members:
+        source_id = int(source["id"])
+        for row in variants.get(source_id) or [source]:
+            photo_id = int(row["id"])
+            if owners.get(photo_id) != source_id or photo_id in emitted:
+                continue
+            emitted.add(photo_id)
+            expanded.append((row, source_id))
+    return expanded
 
 
 class PhotoQueryService:
@@ -34,12 +103,24 @@ class PhotoQueryService:
         project_id: str,
         row: Any,
         profile: dict[str, Any] | None = None,
+        variant_extensions: list[str] | None = None,
     ) -> dict[str, Any]:
         data = {key: row[key] for key in row.keys()}
+        data.pop("capture_representative_id", None)
         blink_ratio = data.get("blink_closed_ratio", -1)
         if blink_ratio is None or float(blink_ratio) < 0:
             data["blink_closed_ratio"] = None
         data["project_id"] = project_id
+        data["format_category"] = format_category(
+            data.get("extension"), data.get("relative_path")
+        )
+        if variant_extensions is None:
+            project = self.manager.from_id(project_id)
+            with closing(connect_db(project.db_path)) as conn:
+                variant_extensions = variant_metadata(
+                    conn, [int(row["id"])]
+                ).get(int(row["id"]), [])
+        data["variant_extensions"] = variant_extensions
         if not str(row["error"] or ""):
             if profile is None:
                 project = self.manager.from_id(project_id)
@@ -85,6 +166,10 @@ class PhotoQueryService:
         search = query.get("search", [""])[0]
         limit = min(500, max(1, int(query.get("limit", ["200"])[0])))
         offset = max(0, int(query.get("offset", ["0"])[0]))
+        order_by = photo_sort_order(
+            query.get("sort", ["suggestion"])[0],
+            query.get("direction", ["asc"])[0],
+        )
         project = self.manager.from_id(project_id)
         profile = self.config.get_profile(project.profile_id)
         decisions = parse_photo_filter(
@@ -97,8 +182,13 @@ class PhotoQueryService:
             PHOTO_AI_FILTERS,
             "ai_states",
         )
+        formats = parse_photo_filter(
+            query.get("formats", [None])[0],
+            FORMAT_CATEGORY_IDS,
+            "formats",
+        )
         where, params = photo_filter_where(
-            query.get("file", ["readable"])[0], decisions, ai_states
+            query.get("file", ["readable"])[0], decisions, ai_states, formats
         )
         if search:
             where += " AND relative_path LIKE ?"
@@ -109,16 +199,20 @@ class PhotoQueryService:
             ).fetchone()[0]
             rows = conn.execute(
                 f"""SELECT * FROM photos WHERE {where}
-                    ORDER BY CASE suggestion
-                        WHEN 'remove' THEN 0 WHEN 'review' THEN 1
-                        WHEN 'unreadable' THEN 2 ELSE 3 END,
-                    relative_path LIMIT ? OFFSET ?""",
+                    ORDER BY {order_by} LIMIT ? OFFSET ?""",
                 [*params, limit, offset],
             ).fetchall()
+            variants = variant_metadata(conn, (int(row["id"]) for row in rows))
         return {
             "total": total,
             "items": [
-                self.photo_payload(project_id, row, profile) for row in rows
+                self.photo_payload(
+                    project_id,
+                    row,
+                    profile,
+                    variants.get(int(row["id"]), []),
+                )
+                for row in rows
             ],
         }
 
@@ -134,23 +228,49 @@ class PhotoQueryService:
             groups = self.similarity_groups.get(
                 project_id, conn, profile, blink_enabled
             )
+            variant_rows = active_variant_rows(
+                conn,
+                (
+                    int(row["id"])
+                    for group in groups
+                    for row in group["members"]
+                ),
+            )
+            variants = variant_metadata(
+                conn,
+                (
+                    int(row["id"])
+                    for group in groups
+                    for row in group["members"]
+                ),
+            )
         items = []
         for group in groups:
+            expanded = expanded_similarity_members(group, variant_rows)
             if search and not any(
                 search in str(row["relative_path"]).casefold()
-                for row in group["members"]
+                for row, _source_id in expanded
             ):
                 continue
             items.append({
                 "id": group["id"],
-                "count": len(group["members"]),
+                "count": len(expanded),
+                "capture_count": len(group["members"]),
                 "kind": group["kind"],
                 "recommended_id": group["recommended_id"],
                 "recommended": self.photo_payload(
-                    project_id, group["recommended"], profile
+                    project_id,
+                    group["recommended"],
+                    profile,
+                    variants.get(int(group["recommended"]["id"]), []),
                 ),
                 "covers": [
-                    self.photo_payload(project_id, row, profile)
+                    self.photo_payload(
+                        project_id,
+                        row,
+                        profile,
+                        variants.get(int(row["id"]), []),
+                    )
                     for row in group["covers"]
                 ],
                 "face_safe": group["face_safe"],
@@ -170,20 +290,39 @@ class PhotoQueryService:
             group = self.similarity_groups.get_one(
                 project_id, group_id, conn, profile, blink_enabled
             )
+            if group:
+                variant_rows = active_variant_rows(
+                    conn, (int(row["id"]) for row in group["members"])
+                )
+                expanded = expanded_similarity_members(group, variant_rows)
+                variants = variant_metadata(
+                    conn, (int(row["id"]) for row, _source_id in expanded)
+                )
+            else:
+                expanded = []
+                variants = {}
         if not group:
             raise ValueError("相似照片组不存在或已发生变化")
         members = []
-        for row in group["members"]:
+        for row, source_id in expanded:
             if search and search not in str(row["relative_path"]).casefold():
                 continue
-            item = self.photo_payload(project_id, row, profile)
-            item["group_similarity"] = group["confidence"].get(
-                int(row["id"]), 0.0
+            item = self.photo_payload(
+                project_id,
+                row,
+                profile,
+                variants.get(int(row["id"]), []),
             )
+            item["group_similarity"] = group["confidence"].get(
+                source_id, 0.0
+            )
+            item["similarity_source_id"] = source_id
+            item["is_capture_variant"] = int(row["id"]) != source_id
             members.append(item)
         return {
             "id": group["id"],
-            "count": len(group["members"]),
+            "count": len(expanded),
+            "capture_count": len(group["members"]),
             "kind": group["kind"],
             "recommended_id": group["recommended_id"],
             "face_safe": group["face_safe"],
@@ -191,4 +330,4 @@ class PhotoQueryService:
         }
 
 
-__all__ = ["PhotoQueryService"]
+__all__ = ["PhotoQueryService", "photo_sort_order"]

@@ -16,6 +16,11 @@ from typing import Any
 
 from . import __version__
 from .analysis_worker import PhotoAnalysisRunner
+from .capture_variants import (
+    active_variant_photo_ids,
+    format_category_counts,
+    variant_metadata,
+)
 from .classification import project_photo_counts
 from .config import ConfigStore
 from .face_analysis import FaceAnalyzer
@@ -247,6 +252,7 @@ def project_summary(
             if blink_enabled
             else False
         )
+        formats = format_category_counts(conn)
     return {
         "id": project_id,
         "root": str(project.root),
@@ -256,6 +262,7 @@ def project_summary(
         "pairs": pairs,
         "similar_groups": similar_groups,
         "blink_rescan_required": blink_rescan_required,
+        "format_categories": formats,
     }
 
 
@@ -544,6 +551,9 @@ class Handler(BaseHTTPRequestHandler):
                 "blink_detection_enabled": config_data.get(
                     "blink_detection_enabled", True
                 ),
+                "sync_variant_decisions": config_data.get(
+                    "sync_variant_decisions", True
+                ),
                 "theme": config_data.get("theme", "day"),
             },
             "recent_projects": recent,
@@ -771,18 +781,60 @@ class Handler(BaseHTTPRequestHandler):
             project = self.manager.from_id(project_id)
             with closing(connect_db(project.db_path)) as conn:
                 photo_id = int(body["photo_id"])
-                cursor = conn.execute(
-                    "UPDATE photos SET decision=? WHERE id=? AND status='active'",
-                    (decision, photo_id),
-                )
-                if not cursor.rowcount:
+                source = conn.execute(
+                    "SELECT id FROM photos WHERE id=? AND status='active'",
+                    (photo_id,),
+                ).fetchone()
+                if not source:
                     raise ValueError("照片不存在或当前不可用")
+                sync_variants = bool(
+                    self.config.snapshot().get("sync_variant_decisions", True)
+                )
+                target_ids = active_variant_photo_ids(
+                    conn, photo_id, sync_variants
+                )
+                placeholders = ",".join("?" for _ in target_ids)
+                previous = {
+                    int(row["id"]): str(row["decision"] or "")
+                    for row in conn.execute(
+                        f"""SELECT id,decision FROM photos
+                              WHERE id IN ({placeholders}) AND status='active'""",
+                        target_ids,
+                    )
+                }
+                conn.execute(
+                    f"""UPDATE photos SET decision=?
+                          WHERE id IN ({placeholders}) AND status='active'""",
+                    [decision, *target_ids],
+                )
                 conn.commit()
+                rows = conn.execute(
+                    f"""SELECT * FROM photos
+                          WHERE id IN ({placeholders}) AND status='active'
+                          ORDER BY id""",
+                    target_ids,
+                ).fetchall()
+                variants = variant_metadata(
+                    conn, (int(row["id"]) for row in rows)
+                )
                 counts = project_photo_counts(conn)
+                profile = self.config.get_profile(project.profile_id)
+                assert self.application.photo_queries is not None
+                affected_photos = []
+                for row in rows:
+                    item = self.application.photo_queries.photo_payload(
+                        project_id,
+                        row,
+                        profile,
+                        variants.get(int(row["id"]), []),
+                    )
+                    item["previous_decision"] = previous.get(int(row["id"]), "")
+                    affected_photos.append(item)
         self._send_json({
             "saved": True,
             "photo_id": photo_id,
             "decision": decision,
+            "affected_photos": affected_photos,
             "project_counts": counts,
         })
 
@@ -799,10 +851,18 @@ class Handler(BaseHTTPRequestHandler):
         project_id = body["project_id"]
         with self.manager.data_operation(project_id):
             project = self.manager.from_id(project_id)
-            result = mark_ai_remove_suggestions(project)
+            result = mark_ai_remove_suggestions(
+                project,
+                bool(
+                    self.config.snapshot().get(
+                        "sync_variant_decisions", True
+                    )
+                ),
+                detailed=True,
+            )
             with closing(connect_db(project.db_path)) as conn:
                 counts = project_photo_counts(conn)
-        self._send_json({"marked": result, "project_counts": counts})
+        self._send_json({**result, "project_counts": counts})
 
     def api_settings(self, body: dict[str, Any]) -> None:
         settings = save_settings(self.config, body)
@@ -874,7 +934,16 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("CSV 文件不存在")
         with self.manager.data_operation(project_id):
             project = self.manager.from_id(project_id)
-            result = import_decisions(project, csv_path)
+            result = import_decisions(
+                project,
+                csv_path,
+                bool(
+                    self.config.snapshot().get(
+                        "sync_variant_decisions", True
+                    )
+                ),
+                detailed=True,
+            )
         self._send_json(result)
 
     def api_quarantine_apply(self, body: dict[str, Any]) -> None:

@@ -334,6 +334,7 @@ function openViewer(i) {
     suggestion = viewerSuggestion(p),
     badge = $("#viewerBadge"),
     analysisBadge = $("#viewerAnalysisBadge"),
+    variantBadge = $("#viewerVariantBadge"),
     img = $("#viewerImage");
   resetViewerTransform();
   img.classList.remove("hidden");
@@ -352,6 +353,12 @@ function openViewer(i) {
     analysisBadge.className = "viewer-badge hidden";
   }
   badge.className = `viewer-badge ${p.media_type === "motion_photo" ? "viewer-live-mark" : suggestion.kind ? `badge-${suggestion.kind}` : "hidden"}`;
+  const variantText = variantFormatText(p, true);
+  variantBadge.textContent = variantText;
+  variantBadge.title = variantText
+    ? `关联格式：${variantFormatText(p)}`
+    : "";
+  variantBadge.classList.toggle("hidden", !variantText);
   updateViewerDecision(p);
   $("#viewerIndex").textContent =
     `${state.viewerIndex + 1} / ${state.items.length}`;

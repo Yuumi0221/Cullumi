@@ -33,6 +33,7 @@ function projectPayload(decision = "", photoCount = 2, decisions = null) {
       remove: removed,
       unreadable: 0,
     },
+    format_categories: [{ id: "jpeg", label: "JPEG", count: photoCount }],
   };
 }
 
@@ -67,6 +68,9 @@ function photoPayload(decision = "", id = 1) {
     suggestion: "review",
     reason: "建议人工复查",
     decision,
+    media_type: "image",
+    format_category: "jpeg",
+    variant_extensions: [],
     thumb_url: image,
     photo_url: image,
   };
@@ -96,13 +100,68 @@ async function installApi(page, options = {}) {
   let decision = "";
   let writebackMode = options.writebackMode || "never";
   let blinkEnabled = options.blinkEnabled ?? true;
+  let syncVariantDecisions = options.syncVariantDecisions ?? true;
   const decisions = new Map();
   const requests = [];
+  const similarPhoto = id => {
+    const photo = photoPayload("", id);
+    photo.size = id * 10_000;
+    photo.taken = `2026-08-${String((id % 28) + 1).padStart(2, "0")} 10:00:00`;
+    const category = options.similarFormats?.[id - 1] || "jpeg";
+    if (options.similarFormats) {
+      const extension = {
+        raw: "CR3",
+        jpeg: "JPG",
+        heif: "HEIC",
+        png: "PNG",
+        other: "WEBP",
+      }[category];
+      photo.relative_path = `旅行/海边-${id}.${extension}`;
+      photo.format_category = category;
+    }
+    if (options.similarVariantExtensions)
+      photo.variant_extensions = [...options.similarVariantExtensions];
+    if (options.blinkSimilar)
+      Object.assign(photo, {
+        suggestion: "keep",
+        reason: "",
+        blink_status: "closed",
+        blink_face_count: 1,
+        blink_closed_face_count: 1,
+        blink_uncertain_face_count: 0,
+        blink_closed_ratio: 1,
+      });
+    return photo;
+  };
+  const similarMembers = () => {
+    const sources = [similarPhoto(1), similarPhoto(2)];
+    if (!options.similarVariantPairs) return sources;
+    return sources.flatMap((source, index) => {
+      const sourceId = source.id;
+      source.relative_path = `旅行/IMG_10${index + 1}.JPG`;
+      source.format_category = "jpeg";
+      source.variant_extensions = ["CR3", "JPG"];
+      source.similarity_source_id = sourceId;
+      source.is_capture_variant = false;
+      const raw = similarPhoto(101 + index);
+      raw.relative_path = `旅行/IMG_10${index + 1}.CR3`;
+      raw.format_category = "raw";
+      raw.variant_extensions = ["CR3", "JPG"];
+      raw.similarity_source_id = sourceId;
+      raw.is_capture_variant = true;
+      return [source, raw];
+    });
+  };
   await page.route("**/api/**", async route => {
     const request = route.request();
     const url = new URL(request.url());
     const body = request.postDataJSON?.() || null;
-    requests.push({ path: url.pathname, method: request.method(), body });
+    requests.push({
+      path: url.pathname,
+      method: request.method(),
+      body,
+      query: Object.fromEntries(url.searchParams),
+    });
 
     const fulfill = (payload, status = 200) => route.fulfill({
       status,
@@ -116,9 +175,10 @@ async function installApi(page, options = {}) {
         profiles,
         settings: {
           theme: "day",
-          auto_advance: false,
+          auto_advance: options.autoAdvance ?? false,
           auto_check_updates: false,
           blink_detection_enabled: blinkEnabled,
+          sync_variant_decisions: syncVariantDecisions,
           motion_cover_writeback: writebackMode,
           default_cache_root: "C:\\Cullumi缓存",
         },
@@ -128,19 +188,38 @@ async function installApi(page, options = {}) {
     }
     if (url.pathname === "/api/recent-project") return fulfill(recentPayload(true));
     if (url.pathname === "/api/project") {
-      return fulfill(projectPayload(decision, options.photoCount || 2, decisions));
+      const project = projectPayload(decision, options.photoCount || 2, decisions);
+      if (options.variantPair) {
+        project.format_categories = [
+          { id: "raw", label: "RAW", count: 1 },
+          { id: "jpeg", label: "JPEG", count: 1 },
+        ];
+      }
+      return fulfill(project);
     }
     if (url.pathname === "/api/photos") {
       const selected = url.searchParams.get("decisions") || "all";
       const photoCount = options.photoCount || 1;
       const matching = Array.from({ length: photoCount }, (_, index) => {
         const id = index + 1;
-        return options.motionPhoto
+        const photo = options.motionPhoto
           ? motionPhotoPayload(decisions.get(id) || "", id, options.motionStillTime || 0)
           : photoPayload(decisions.get(id) || "", id);
+        if (options.variantPair && id <= 2) {
+          const raw = id === 2;
+          photo.relative_path = raw ? "旅行/IMG_0042.CR3" : "旅行/IMG_0042.JPG";
+          photo.format_category = raw ? "raw" : "jpeg";
+          photo.variant_extensions = ["CR3", "JPG"];
+        }
+        return photo;
       }).filter(photo => {
         const current = photo.decision || "undecided";
-        return selected === "all" || selected.split(",").includes(current);
+        const selectedFormats = url.searchParams.get("formats") || "all";
+        return (
+          (selected === "all" || selected.split(",").includes(current)) &&
+          (selectedFormats === "all" ||
+            selectedFormats.split(",").includes(photo.format_category))
+        );
       });
       const offset = Number(url.searchParams.get("offset") || 0);
       const limit = Number(url.searchParams.get("limit") || 200);
@@ -149,11 +228,28 @@ async function installApi(page, options = {}) {
     if (url.pathname === "/api/decision") {
       if (options.decisionFails) return fulfill({ error: "数据库暂时不可写" }, 500);
       decision = body.decision;
-      decisions.set(body.photo_id, decision);
+      const targets =
+        options.variantPair && syncVariantDecisions && body.photo_id <= 2
+          ? [1, 2]
+          : [body.photo_id];
+      const previous = new Map(targets.map(id => [id, decisions.get(id) || ""]));
+      targets.forEach(id => decisions.set(id, decision));
+      const affected = targets.map(id => {
+        const photo = photoPayload(decision, id);
+        if (options.variantPair) {
+          const raw = id === 2;
+          photo.relative_path = raw ? "旅行/IMG_0042.CR3" : "旅行/IMG_0042.JPG";
+          photo.format_category = raw ? "raw" : "jpeg";
+          photo.variant_extensions = ["CR3", "JPG"];
+        }
+        photo.previous_decision = previous.get(id);
+        return photo;
+      });
       return fulfill({
         saved: true,
         photo_id: body.photo_id,
         decision,
+        affected_photos: affected,
         project_counts: projectPayload(decision, options.photoCount || 2, decisions),
       });
     }
@@ -181,7 +277,31 @@ async function installApi(page, options = {}) {
     if (url.pathname === "/api/settings") {
       if (body.motion_cover_writeback) writebackMode = body.motion_cover_writeback;
       if (typeof body.blink_detection_enabled === "boolean") blinkEnabled = body.blink_detection_enabled;
-      return fulfill({ saved: true, settings: { theme: body.theme || "day", motion_cover_writeback: writebackMode, blink_detection_enabled: blinkEnabled }, blink_rescan_required: blinkEnabled && !!options.blinkRescanRequired });
+      if (typeof body.sync_variant_decisions === "boolean") syncVariantDecisions = body.sync_variant_decisions;
+      return fulfill({ saved: true, settings: { theme: body.theme || "day", motion_cover_writeback: writebackMode, blink_detection_enabled: blinkEnabled, sync_variant_decisions: syncVariantDecisions }, blink_rescan_required: blinkEnabled && !!options.blinkRescanRequired });
+    }
+    if (url.pathname === "/api/choose-csv") {
+      return fulfill({ path: "C:\\照片\\决定.csv" });
+    }
+    if (url.pathname === "/api/import") {
+      if (options.csvVariantConflict && syncVariantDecisions) {
+        return fulfill({
+          imported: 0,
+          matched: 2,
+          missing: 0,
+          affected: 0,
+          requires_sync_disable: true,
+          conflicting_groups: 1,
+        });
+      }
+      return fulfill({
+        imported: 2,
+        matched: 2,
+        missing: 0,
+        affected: 2,
+        requires_sync_disable: false,
+        conflicting_groups: 0,
+      });
     }
     if (url.pathname === "/api/choose-cache") {
       return fulfill({ path: "D:\\新缓存" });
@@ -203,37 +323,34 @@ async function installApi(page, options = {}) {
       });
     }
     if (url.pathname === "/api/similar-groups") {
-      const similarPhoto = id => ({
-        ...photoPayload("", id),
-        ...(options.blinkSimilar ? { suggestion: "keep", reason: "", blink_status: "closed", blink_face_count: 1, blink_closed_face_count: 1, blink_uncertain_face_count: 0, blink_closed_ratio: 1 } : {}),
-      });
+      const sources = [similarPhoto(1), similarPhoto(2)];
       return fulfill({
         total: 1,
         items: [{
           id: "similar-1",
-          count: 2,
+          count: options.similarVariantPairs ? 4 : 2,
+          capture_count: 2,
           kind: "similar",
           face_safe: false,
-          recommended: similarPhoto(1),
-          covers: [similarPhoto(1), similarPhoto(2)],
+          recommended: sources[0],
+          covers: sources,
         }],
       });
     }
     if (url.pathname === "/api/similar-group") {
-      const similarPhoto = id => ({
-        ...photoPayload("", id),
-        ...(options.blinkSimilar ? { suggestion: "keep", reason: "", blink_status: "closed", blink_face_count: 1, blink_closed_face_count: 1, blink_uncertain_face_count: 0, blink_closed_ratio: 1 } : {}),
-      });
+      const members = similarMembers();
       return fulfill({
         id: "similar-1",
-        count: 2,
+        count: members.length,
+        capture_count: 2,
         kind: "similar",
         face_safe: false,
         recommended_id: 1,
-        members: [
-          { ...similarPhoto(1), group_similarity: 1 },
-          { ...similarPhoto(2), group_similarity: 0.91 },
-        ],
+        members: members.map(photo => ({
+          ...photo,
+          group_similarity:
+            (photo.similarity_source_id || photo.id) === 2 ? 0.91 : 1,
+        })),
       });
     }
     if (url.pathname === "/api/quarantine/restore") {
@@ -298,16 +415,27 @@ test("项目照片可以通过真实卡片交互标记为移除", async ({ page 
   const requests = await openApp(page);
   await openProject(page);
 
-  const decisionFilter = page.locator('[data-filter-menu="decisions"] .multi-filter-trigger');
-  const decisionChevron = decisionFilter.locator(".filter-chevron");
-  await expect(decisionFilter.locator(".filter-chevron-down")).toBeVisible();
-  await expect(decisionFilter.locator(".filter-chevron-down")).toHaveAttribute("href", "/static/assets/icons.svg?v=1#chevron-down");
-  await expect(decisionChevron).toHaveCSS("transform", "none");
-  await decisionFilter.click();
-  await expect(decisionFilter).toHaveAttribute("aria-expanded", "true");
-  await expect(decisionChevron).toHaveCSS("transform", "matrix(-1, 0, 0, -1, 0, 0)");
-  await decisionFilter.click();
-  await expect(decisionChevron).toHaveCSS("transform", "none");
+  const viewMenu = page.locator('[data-filter-menu="view"]');
+  const viewTrigger = viewMenu.locator(".gallery-tool-trigger");
+  await expect(viewTrigger.locator("svg use").first()).toHaveAttribute(
+    "href",
+    "/static/assets/icons.svg?v=7#gallery-filter",
+  );
+  await expect(viewTrigger.locator("svg use").last()).toHaveAttribute(
+    "href",
+    "/static/assets/icons.svg?v=1#chevron-down",
+  );
+  await viewTrigger.click();
+  await expect(viewTrigger).toHaveAttribute("aria-expanded", "true");
+  const decisionOption = viewMenu.locator(".gallery-view-item").first();
+  await decisionOption.locator(".gallery-view-option").hover();
+  await expect(decisionOption.locator(".gallery-view-submenu")).toBeVisible();
+  const positions = await decisionOption.evaluate(item => {
+    const option = item.querySelector(".gallery-view-option").getBoundingClientRect();
+    const submenu = item.querySelector(".gallery-view-submenu").getBoundingClientRect();
+    return { optionRight: option.right, submenuLeft: submenu.left };
+  });
+  expect(positions.submenuLeft).toBeGreaterThan(positions.optionRight);
 
   await page.locator('[data-photo-id="1"] [data-decision="remove"]').click();
   await expect(page.locator('[data-photo-id="1"]')).toHaveClass(/decision-remove/);
@@ -319,6 +447,255 @@ test("项目照片可以通过真实卡片交互标记为移除", async ({ page 
     photo_id: 1,
     decision: "remove",
   });
+});
+
+test("照片库仅显示项目存在的格式选项并可筛选 RAW", async ({ page }) => {
+  const requests = await openApp(page, { variantPair: true, photoCount: 2 });
+  await openProject(page);
+
+  const viewMenu = page.locator('[data-filter-menu="view"]');
+  await viewMenu.locator(".gallery-tool-trigger").click();
+  const formatFilter = page.locator("#formatFilter");
+  await expect(formatFilter).toBeVisible();
+  await formatFilter.locator(".gallery-view-option").hover();
+  await expect(formatFilter.locator(".gallery-view-submenu")).toBeVisible();
+  await expect(formatFilter.locator('[data-format-option="raw"]')).toBeVisible();
+  await expect(formatFilter.locator('[data-format-option="jpeg"]')).toBeVisible();
+  await expect(formatFilter.locator('[data-format-option="heif"]')).toBeHidden();
+  await expect(page.locator(".variant-badge")).toHaveCount(2);
+  await expect(page.locator(".variant-badge").first()).toHaveText("CR3 + JPG");
+
+  await formatFilter.locator('input[value="jpeg"]').uncheck();
+  await expect(page.locator('[data-photo-id="1"]')).toHaveCount(0);
+  await expect(page.locator('[data-photo-id="2"]')).toBeVisible();
+  await expect(formatFilter.locator("#formatFilterSummary")).toHaveText("RAW");
+  await expect.poll(() =>
+    requests.filter(request => request.path === "/api/photos").at(-1)?.query?.formats,
+  ).toBe("raw");
+});
+
+test("照片库多选项全部选中时可以一键全不选并恢复全选", async ({ page }) => {
+  await openApp(page);
+  await openProject(page);
+
+  const viewMenu = page.locator('[data-filter-menu="view"]');
+  await viewMenu.locator(".gallery-tool-trigger").click();
+  const menu = viewMenu.locator(".gallery-view-item").first();
+  await menu.locator(".gallery-view-option").hover();
+  const toggle = menu.locator('[data-select-all="decisions"]');
+  await expect(toggle).toHaveText("全不选");
+
+  await toggle.click();
+  await expect(menu.locator('input[type="checkbox"]:checked')).toHaveCount(0);
+  await expect(toggle).toHaveText("全选");
+  await expect(page.locator("#emptyTitle")).toHaveText("当前筛选没有结果");
+
+  await toggle.click();
+  await expect(menu.locator('input[type="checkbox"]:checked')).toHaveCount(3);
+  await expect(toggle).toHaveText("全不选");
+  await expect(page.locator('[data-photo-id="1"]')).toBeVisible();
+});
+
+test("照片库排序菜单使用实心圆点单选样式并传递排序方向", async ({ page }) => {
+  const requests = await openApp(page, { photoCount: 3 });
+  await openProject(page);
+
+  const sortMenu = page.locator('[data-filter-menu="sort"]');
+  const trigger = sortMenu.locator(".gallery-tool-trigger");
+  await expect(trigger.locator("svg use").first()).toHaveAttribute(
+    "href",
+    "/static/assets/icons.svg?v=7#gallery-sort",
+  );
+  await expect(trigger.locator("svg use").last()).toHaveAttribute(
+    "href",
+    "/static/assets/icons.svg?v=1#chevron-down",
+  );
+  const centered = await page
+    .locator("#libraryFilters .gallery-tool-trigger")
+    .evaluateAll(buttons => buttons.map(button => {
+      const buttonBox = button.getBoundingClientRect();
+      const contentBoxes = [...button.children].map(child =>
+        child.getBoundingClientRect(),
+      );
+      return {
+        horizontal: Math.abs(
+          (buttonBox.left + buttonBox.right) / 2 -
+          (Math.min(...contentBoxes.map(box => box.left)) +
+            Math.max(...contentBoxes.map(box => box.right))) / 2,
+        ),
+        vertical: Math.abs(
+          (buttonBox.top + buttonBox.bottom) / 2 -
+          (Math.min(...contentBoxes.map(box => box.top)) +
+            Math.max(...contentBoxes.map(box => box.bottom))) / 2,
+        ),
+      };
+    }));
+  centered.forEach(offset => {
+    expect(offset.horizontal).toBeLessThan(1);
+    expect(offset.vertical).toBeLessThan(1);
+  });
+  await trigger.click();
+  await expect(sortMenu.locator('[data-sort-value="suggestion"]')).toBeChecked();
+  await expect(sortMenu.locator('[data-sort-direction="asc"]')).toBeChecked();
+  await expect(sortMenu.locator("input").first()).toHaveAttribute("type", "radio");
+  const initialDots = await sortMenu.locator("input").evaluateAll(inputs =>
+    inputs.map(input => getComputedStyle(input).backgroundImage),
+  );
+  expect(initialDots[0]).not.toBe("none");
+  expect(initialDots[1]).toBe("none");
+  expect(
+    requests.filter(request => request.path === "/api/photos").at(-1)?.query
+      ?.sort,
+  ).toBe("suggestion");
+  expect(
+    requests.filter(request => request.path === "/api/photos").at(-1)?.query
+      ?.direction,
+  ).toBe("asc");
+
+  await sortMenu.locator('[data-sort-value="size"]').check();
+  await sortMenu.locator('[data-sort-direction="desc"]').check();
+  await expect(sortMenu.locator('[data-sort-value="suggestion"]')).not.toBeChecked();
+  await expect(sortMenu.locator('[data-sort-direction="asc"]')).not.toBeChecked();
+  const changedDots = await sortMenu.locator("input").evaluateAll(inputs =>
+    inputs.map(input => getComputedStyle(input).backgroundImage),
+  );
+  expect(changedDots[0]).toBe("none");
+  expect(changedDots[2]).not.toBe("none");
+  expect(changedDots[4]).toBe("none");
+  expect(changedDots[5]).not.toBe("none");
+  await expect.poll(() => {
+    const query = requests.filter(request => request.path === "/api/photos").at(-1)?.query;
+    return `${query?.sort}:${query?.direction}`;
+  }).toBe("size:desc");
+});
+
+test("相似组使用照片库同款查看排序组件并组合筛选 RAW", async ({ page }) => {
+  await openApp(page, {
+    similarVariantPairs: true,
+  });
+  await openProject(page);
+  await page.locator('[data-nav="similar"]').click();
+  await page.locator('[data-similar-group="similar-1"]').click();
+
+  await expect(page.locator("#similarFormatFilter")).toHaveCount(0);
+  const viewTool = page.locator("#similarViewTool");
+  const sortTool = page.locator("#similarSortTool");
+  await expect(viewTool).toBeVisible();
+  await expect(sortTool).toBeVisible();
+  await expect(viewTool.locator(".gallery-tool-trigger svg use").first()).toHaveAttribute(
+    "href",
+    "/static/assets/icons.svg?v=7#gallery-filter",
+  );
+  await expect(viewTool.locator(".gallery-tool-trigger svg use").last()).toHaveAttribute(
+    "href",
+    "/static/assets/icons.svg?v=1#chevron-down",
+  );
+  await expect(sortTool.locator(".gallery-tool-trigger svg use").first()).toHaveAttribute(
+    "href",
+    "/static/assets/icons.svg?v=7#gallery-sort",
+  );
+  await expect(sortTool.locator(".gallery-tool-trigger svg use").last()).toHaveAttribute(
+    "href",
+    "/static/assets/icons.svg?v=1#chevron-down",
+  );
+  await viewTool.locator(".gallery-tool-trigger").click();
+
+  const decisionFilter = viewTool.locator(".gallery-view-item").nth(0);
+  await decisionFilter.locator(".gallery-view-option").hover();
+  await expect(decisionFilter.locator(".gallery-view-submenu")).toBeVisible();
+  await expect(decisionFilter.locator('[data-similar-select-all="decisions"]')).toHaveText("全不选");
+  await decisionFilter.locator('input[value="undecided"]').uncheck();
+  await expect(page.locator("#similarDetailGallery [data-photo-id]")).toHaveCount(0);
+  await decisionFilter.locator('input[value="undecided"]').check();
+
+  const aiFilter = viewTool.locator(".gallery-view-item").nth(1);
+  await aiFilter.locator(".gallery-view-option").hover();
+  await expect(aiFilter.locator(".gallery-view-submenu")).toBeVisible();
+  await aiFilter.locator('input[value="review"]').uncheck();
+  await expect(page.locator("#similarDetailGallery [data-photo-id]")).toHaveCount(0);
+  await aiFilter.locator('input[value="review"]').check();
+
+  const formatFilter = page.locator("#similarFormatViewItem");
+  await expect(formatFilter).toBeVisible();
+  await formatFilter.locator(".gallery-view-option").hover();
+  await expect(formatFilter.locator(".gallery-view-submenu")).toBeVisible();
+  await expect(formatFilter.locator('[data-similar-format-option="jpeg"]')).toBeVisible();
+  await expect(formatFilter.locator('[data-similar-format-option="raw"]')).toBeVisible();
+  await expect(formatFilter.locator('[data-similar-format-option="heif"]')).toBeHidden();
+  await expect(formatFilter.locator('[data-similar-select-all="formats"]')).toHaveText("全不选");
+  await expect(page.locator('#similarDetailGallery [data-photo-id="101"]')).toBeVisible();
+  await expect(page.locator('#similarDetailGallery [data-photo-id="102"]')).toBeVisible();
+  await expect(page.locator('#similarDetailGallery [data-photo-id="101"] [data-context-badge]')).toHaveText("推荐保留");
+
+  await formatFilter.locator('input[value="jpeg"]').uncheck();
+  await expect(page.locator('#similarDetailGallery [data-photo-id="1"]')).toHaveCount(0);
+  await expect(page.locator('#similarDetailGallery [data-photo-id="101"]')).toBeVisible();
+  await expect(page.locator("#similarFormatFilterSummary")).toHaveText("RAW");
+
+  await page.locator("#searchInput").fill("IMG_102");
+  await expect(page.locator("#similarDetailGallery [data-photo-id]")).toHaveCount(1);
+  await expect(page.locator('#similarDetailGallery [data-photo-id="102"]')).toBeVisible();
+  await page.locator("#searchInput").fill("");
+  await expect(page.locator('#similarDetailGallery [data-photo-id="101"]')).toBeVisible();
+
+  await viewTool.locator(".gallery-tool-trigger").click();
+  await sortTool.locator(".gallery-tool-trigger").click();
+  await expect(sortTool.locator('[data-similar-sort-value="suggestion"]')).toBeChecked();
+  await expect(sortTool.locator('[data-similar-sort-direction="asc"]')).toBeChecked();
+  await expect(sortTool.locator("input").first()).toHaveAttribute("type", "radio");
+  await sortTool.locator('[data-similar-sort-value="size"]').check();
+  await sortTool.locator('[data-similar-sort-direction="desc"]').check();
+  await expect(page.locator("#similarDetailGallery [data-photo-id]").first()).toHaveAttribute("data-photo-id", "102");
+
+  await page.locator("#similarExpandBtn").click();
+  await expect(page.locator("#similarBackBtn")).toBeVisible();
+  const positions = await page.evaluate(() => {
+    const back = document.querySelector("#similarBackBtn").getBoundingClientRect();
+    const view = document.querySelector("#similarViewTool .gallery-tool-trigger").getBoundingClientRect();
+    const sort = document.querySelector("#similarSortTool .gallery-tool-trigger").getBoundingClientRect();
+    return { backRight: back.right, viewLeft: view.left, viewRight: view.right, sortLeft: sort.left };
+  });
+  expect(positions.viewLeft).toBeGreaterThan(positions.backRight);
+  expect(positions.sortLeft).toBeGreaterThan(positions.viewRight);
+});
+
+test("多格式决定同步更新卡片且自动前进跳过关联格式", async ({ page }) => {
+  await openApp(page, {
+    variantPair: true,
+    photoCount: 3,
+    autoAdvance: true,
+  });
+  await openProject(page);
+
+  await page.locator('[data-photo-id="1"] [data-open-id]').click();
+  await expect(page.locator("#viewerName")).toHaveText("IMG_0042.JPG");
+  await expect(page.locator("#viewerVariantBadge")).toHaveText("CR3 + JPG");
+  await page.locator("#viewerRemove").click();
+  await expect(page.locator("#toast")).toContainText("已同步将 2 个格式标记为移除");
+  await expect(page.locator("#viewerName")).toHaveText("海边-3.jpg");
+  await page.locator('#viewer [data-close]').click();
+
+  await expect(page.locator('[data-photo-id="1"]')).toHaveClass(/decision-remove/);
+  await expect(page.locator('[data-photo-id="2"]')).toHaveClass(/decision-remove/);
+});
+
+test("CSV 多格式冲突需关闭同步后才按文件导入", async ({ page }) => {
+  const requests = await openApp(page, { csvVariantConflict: true });
+  await openProject(page);
+
+  await page.locator("#importBtn").click();
+  await expect(page.locator("#confirm")).toBeVisible();
+  await expect(page.locator("#confirmTitle")).toHaveText("CSV 中存在多格式决定冲突");
+  await expect(page.locator("#confirmBody")).toContainText("1 组");
+  await page.locator("#confirmOk").click();
+  await expect(page.locator("#confirm")).toBeHidden();
+  await expect(page.locator("#syncVariantDecisions")).not.toBeChecked();
+  await expect.poll(
+    () => requests.filter(request => request.path === "/api/import").length,
+  ).toBe(2);
+  expect(
+    requests.findLast(request => request.path === "/api/settings")?.body,
+  ).toMatchObject({ sync_variant_decisions: false });
 });
 
 test("自定义模式恢复按钮使用统一图标并停留在字段标题行", async ({ page }) => {
@@ -951,6 +1328,20 @@ test("日夜主题与关键工作区保持视觉回归", async ({ page }) => {
 
   await openProject(page);
   await expect(page).toHaveScreenshot("library-night.png", { animations: "disabled" });
+
+  const viewMenu = page.locator('[data-filter-menu="view"]');
+  await viewMenu.locator(".gallery-tool-trigger").click();
+  await viewMenu.locator("#formatFilter .gallery-view-option").hover();
+  await expect(page).toHaveScreenshot("library-view-menu-night.png", {
+    animations: "disabled",
+  });
+  await viewMenu.locator(".gallery-tool-trigger").click();
+
+  const sortMenu = page.locator('[data-filter-menu="sort"]');
+  await sortMenu.locator(".gallery-tool-trigger").click();
+  await expect(page).toHaveScreenshot("library-sort-menu-night.png", {
+    animations: "disabled",
+  });
 
   await page.locator('[data-nav="similar"]').click();
   await expect(page.locator('[data-similar-group="similar-1"]')).toBeVisible();

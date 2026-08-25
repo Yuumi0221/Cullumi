@@ -15,7 +15,7 @@ from typing import Any
 
 from .fs_utils import is_within
 
-DATABASE_SCHEMA_VERSION = 4
+DATABASE_SCHEMA_VERSION = 5
 _WAL_CONFIGURED_DATABASES: dict[Path, tuple[int, int]] = {}
 _INITIALIZED_DATABASES: dict[Path, tuple[int, int, int, int]] = {}
 _DATABASE_CONFIGURATION_LOCK = threading.RLock()
@@ -116,15 +116,24 @@ CREATE TABLE IF NOT EXISTS similar_pairs (
 );
 CREATE INDEX IF NOT EXISTS idx_similar_pairs_kind_a ON similar_pairs(kind,a_id);
 CREATE INDEX IF NOT EXISTS idx_similar_pairs_kind_b ON similar_pairs(kind,b_id);
+CREATE TABLE IF NOT EXISTS capture_variant_members (
+  photo_id INTEGER PRIMARY KEY, representative_id INTEGER NOT NULL,
+  FOREIGN KEY(photo_id) REFERENCES photos(id) ON DELETE CASCADE,
+  FOREIGN KEY(representative_id) REFERENCES photos(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_capture_variant_representative
+  ON capture_variant_members(representative_id);
 CREATE TABLE IF NOT EXISTS quarantine_batches (
   id TEXT PRIMARY KEY, created_at TEXT, manifest_path TEXT, count INTEGER,
   total_size INTEGER, restored_at TEXT DEFAULT ''
 );
 """
 
-SIMILAR_PAIR_INDEXES = (
+QUERY_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_similar_pairs_kind_a ON similar_pairs(kind,a_id)",
     "CREATE INDEX IF NOT EXISTS idx_similar_pairs_kind_b ON similar_pairs(kind,b_id)",
+    """CREATE INDEX IF NOT EXISTS idx_capture_variant_representative
+       ON capture_variant_members(representative_id)""",
 )
 
 PHOTO_SCHEMA_COLUMNS = {
@@ -218,12 +227,13 @@ def _initialize_database(
         )
     try:
         conn.executescript(
-            "BEGIN IMMEDIATE;\n"
-            + DATABASE_SCHEMA_SQL
-            + "\n"
-            + additions
-            + f"\nPRAGMA user_version={DATABASE_SCHEMA_VERSION};\nCOMMIT;"
+            "BEGIN IMMEDIATE;\n" + DATABASE_SCHEMA_SQL + "\n" + additions
         )
+        from .capture_variants import rebuild_capture_variants
+
+        rebuild_capture_variants(conn, prune_similar=True)
+        conn.execute(f"PRAGMA user_version={DATABASE_SCHEMA_VERSION}")
+        conn.commit()
     except Exception:
         if conn.in_transaction:
             conn.rollback()
@@ -232,8 +242,8 @@ def _initialize_database(
 
 
 def _ensure_query_indexes(conn: sqlite3.Connection) -> None:
-    """Backfill additive query indexes without changing the v4 data format."""
-    for statement in SIMILAR_PAIR_INDEXES:
+    """Backfill additive query indexes without changing the current data format."""
+    for statement in QUERY_INDEXES:
         conn.execute(statement)
 
 

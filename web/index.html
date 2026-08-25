@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Cullumi</title>
   <link rel="icon" href="/static/assets/images/brand-icon.png" type="image/png">
-  <link rel="stylesheet" href="/static/css/base.css?v=1.0.3-css-layout1">
-  <link rel="stylesheet" href="/static/css/workspace.css?v=1.0.3-css-layout1">
-  <link rel="stylesheet" href="/static/css/viewer.css?v=1.0.3-css-layout1">
-  <link rel="stylesheet" href="/static/css/settings.css?v=1.0.3-css-layout1">
-  <link rel="stylesheet" href="/static/css/theme.css?v=1.0.3-css-layout1">
-  <link rel="stylesheet" href="/static/css/responsive.css?v=1.0.3-css-layout1">
-  <link rel="stylesheet" href="/static/css/home.css?v=1.0.3-css-layout1">
+  <link rel="stylesheet" href="/static/css/base.css?v=1.0.3-variants5">
+  <link rel="stylesheet" href="/static/css/workspace.css?v=1.0.3-variants6">
+  <link rel="stylesheet" href="/static/css/viewer.css?v=1.0.3-variants5">
+  <link rel="stylesheet" href="/static/css/settings.css?v=1.0.3-variants5">
+  <link rel="stylesheet" href="/static/css/theme.css?v=1.0.3-variants5">
+  <link rel="stylesheet" href="/static/css/responsive.css?v=1.0.3-variants5">
+  <link rel="stylesheet" href="/static/css/home.css?v=1.0.3-variants5">
 </head>
 <body>
   <header class="topbar">
@@ -87,26 +87,54 @@
         <div class="toolbar">
           <div><h2 id="viewTitle">照片库</h2><span id="viewSubtitle"></span></div>
           <div id="libraryFilters" class="library-filters">
-            <div class="multi-filter" data-filter-menu="decisions">
-              <button class="multi-filter-trigger" type="button" aria-expanded="false" aria-controls="decisionFilterPanel">
-                <span>决定状态</span><b id="decisionFilterSummary">全部</b><svg class="filter-chevron" viewBox="0 0 1024 1024" aria-hidden="true"><use class="filter-chevron-down" href="/static/assets/icons.svg?v=1#chevron-down"></use></svg>
+            <div class="multi-filter gallery-tool" data-filter-menu="view">
+              <button class="multi-filter-trigger gallery-tool-trigger" type="button" aria-expanded="false" aria-controls="libraryViewPanel">
+                <svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=7#gallery-filter"></use></svg><span>查看</span><svg class="gallery-tool-chevron" viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#chevron-down"></use></svg>
               </button>
-              <div id="decisionFilterPanel" class="multi-filter-panel hidden">
-                <div class="multi-filter-head"><b>决定状态</b><button type="button" data-select-all="decisions">全选</button></div>
-                <label><input type="checkbox" data-filter-group="decisions" value="undecided" checked>未决定</label>
-                <label><input type="checkbox" data-filter-group="decisions" value="keep" checked>已保留</label>
-                <label><input type="checkbox" data-filter-group="decisions" value="remove" checked>已移除</label>
+              <div id="libraryViewPanel" class="multi-filter-panel gallery-tool-panel gallery-view-panel hidden">
+                <div class="gallery-view-item">
+                  <button class="gallery-view-option" type="button"><span>决定状态</span><b id="decisionFilterSummary">全部</b><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#chevron-down"></use></svg></button>
+                  <div class="gallery-view-submenu">
+                    <div class="multi-filter-head"><b>决定状态</b><button type="button" data-select-all="decisions">全选</button></div>
+                    <label><input type="checkbox" data-filter-group="decisions" value="undecided" checked>未决定</label>
+                    <label><input type="checkbox" data-filter-group="decisions" value="keep" checked>已保留</label>
+                    <label><input type="checkbox" data-filter-group="decisions" value="remove" checked>已移除</label>
+                  </div>
+                </div>
+                <div class="gallery-view-item">
+                  <button class="gallery-view-option" type="button"><span>筛选建议</span><b id="aiFilterSummary">全部</b><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#chevron-down"></use></svg></button>
+                  <div class="gallery-view-submenu">
+                    <div class="multi-filter-head"><b>筛选建议</b><button type="button" data-select-all="ai">全选</button></div>
+                    <label><input type="checkbox" data-filter-group="ai" value="remove" checked>建议移除</label>
+                    <label><input type="checkbox" data-filter-group="ai" value="review" checked>人工复查</label>
+                    <label><input type="checkbox" data-filter-group="ai" value="no_suggestion" checked>无建议</label>
+                  </div>
+                </div>
+                <div id="formatFilter" class="gallery-view-item hidden">
+                  <button class="gallery-view-option" type="button"><span>照片格式</span><b id="formatFilterSummary">全部</b><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#chevron-down"></use></svg></button>
+                  <div class="gallery-view-submenu">
+                    <div class="multi-filter-head"><b>照片格式</b><button type="button" data-select-all="formats">全选</button></div>
+                    <label data-format-option="raw"><input type="checkbox" data-filter-group="formats" value="raw">RAW</label>
+                    <label data-format-option="jpeg"><input type="checkbox" data-filter-group="formats" value="jpeg">JPEG</label>
+                    <label data-format-option="heif"><input type="checkbox" data-filter-group="formats" value="heif">HEIF</label>
+                    <label data-format-option="png"><input type="checkbox" data-filter-group="formats" value="png">PNG</label>
+                    <label data-format-option="other"><input type="checkbox" data-filter-group="formats" value="other">其他</label>
+                  </div>
+                </div>
               </div>
             </div>
-            <div class="multi-filter" data-filter-menu="ai">
-              <button class="multi-filter-trigger" type="button" aria-expanded="false" aria-controls="aiFilterPanel">
-                <span>分析结果</span><b id="aiFilterSummary">全部</b><svg class="filter-chevron" viewBox="0 0 1024 1024" aria-hidden="true"><use class="filter-chevron-down" href="/static/assets/icons.svg?v=1#chevron-down"></use></svg>
+            <div class="multi-filter gallery-tool" data-filter-menu="sort">
+              <button class="multi-filter-trigger gallery-tool-trigger" type="button" aria-expanded="false" aria-controls="librarySortPanel">
+                <svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=7#gallery-sort"></use></svg><span>排序</span><svg class="gallery-tool-chevron" viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#chevron-down"></use></svg>
               </button>
-              <div id="aiFilterPanel" class="multi-filter-panel hidden">
-                <div class="multi-filter-head"><b>分析结果</b><button type="button" data-select-all="ai">全选</button></div>
-                <label><input type="checkbox" data-filter-group="ai" value="remove" checked>建议移除</label>
-                <label><input type="checkbox" data-filter-group="ai" value="review" checked>人工复查</label>
-                <label><input type="checkbox" data-filter-group="ai" value="no_suggestion" checked>无建议</label>
+              <div id="librarySortPanel" class="multi-filter-panel gallery-tool-panel gallery-sort-panel hidden">
+                <label><input type="radio" name="library-sort-value" data-sort-value="suggestion" checked>建议</label>
+                <label><input type="radio" name="library-sort-value" data-sort-value="filename">名称</label>
+                <label><input type="radio" name="library-sort-value" data-sort-value="size">大小</label>
+                <label title="拍摄日期"><input type="radio" name="library-sort-value" data-sort-value="taken">日期</label>
+                <div class="gallery-menu-divider" aria-hidden="true"></div>
+                <label><input type="radio" name="library-sort-direction" data-sort-direction="asc" checked>递增</label>
+                <label><input type="radio" name="library-sort-direction" data-sort-direction="desc">递减</label>
               </div>
             </div>
           </div>
@@ -121,8 +149,58 @@
             <button id="similarCollapseBtn" class="ghost" aria-label="收回" title="收回"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=6#similar-back"></use></svg></button>
             <button id="similarExpandBtn" class="ghost" aria-label="展开" title="展开"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=6#similar-open"></use></svg></button>
             <button id="similarBackBtn" class="ghost hidden" aria-label="返回相似组" title="返回相似组"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=6#similar-back"></use></svg></button>
+            <div id="similarViewTool" class="multi-filter gallery-tool" data-filter-menu="similar-view">
+              <button class="multi-filter-trigger gallery-tool-trigger" type="button" aria-expanded="false" aria-controls="similarViewPanel">
+                <svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=7#gallery-filter"></use></svg><span>查看</span><svg class="gallery-tool-chevron" viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#chevron-down"></use></svg>
+              </button>
+              <div id="similarViewPanel" class="multi-filter-panel gallery-tool-panel gallery-view-panel hidden">
+                <div class="gallery-view-item">
+                  <button class="gallery-view-option" type="button"><span>决定状态</span><b id="similarDecisionFilterSummary">全部</b><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#chevron-down"></use></svg></button>
+                  <div class="gallery-view-submenu">
+                    <div class="multi-filter-head"><b>决定状态</b><button type="button" data-similar-select-all="decisions">全选</button></div>
+                    <label><input type="checkbox" data-similar-filter-group="decisions" value="undecided" checked>未决定</label>
+                    <label><input type="checkbox" data-similar-filter-group="decisions" value="keep" checked>已保留</label>
+                    <label><input type="checkbox" data-similar-filter-group="decisions" value="remove" checked>已移除</label>
+                  </div>
+                </div>
+                <div class="gallery-view-item">
+                  <button class="gallery-view-option" type="button"><span>筛选建议</span><b id="similarAiFilterSummary">全部</b><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#chevron-down"></use></svg></button>
+                  <div class="gallery-view-submenu">
+                    <div class="multi-filter-head"><b>筛选建议</b><button type="button" data-similar-select-all="ai">全选</button></div>
+                    <label><input type="checkbox" data-similar-filter-group="ai" value="remove" checked>建议移除</label>
+                    <label><input type="checkbox" data-similar-filter-group="ai" value="review" checked>人工复查</label>
+                    <label><input type="checkbox" data-similar-filter-group="ai" value="no_suggestion" checked>无建议</label>
+                  </div>
+                </div>
+                <div id="similarFormatViewItem" class="gallery-view-item hidden">
+                  <button class="gallery-view-option" type="button"><span>照片格式</span><b id="similarFormatFilterSummary">全部</b><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#chevron-down"></use></svg></button>
+                  <div class="gallery-view-submenu">
+                    <div class="multi-filter-head"><b>照片格式</b><button type="button" data-similar-select-all="formats">全选</button></div>
+                    <label data-similar-format-option="raw"><input type="checkbox" data-similar-filter-group="formats" value="raw">RAW</label>
+                    <label data-similar-format-option="jpeg"><input type="checkbox" data-similar-filter-group="formats" value="jpeg">JPEG</label>
+                    <label data-similar-format-option="heif"><input type="checkbox" data-similar-filter-group="formats" value="heif">HEIF</label>
+                    <label data-similar-format-option="png"><input type="checkbox" data-similar-filter-group="formats" value="png">PNG</label>
+                    <label data-similar-format-option="other"><input type="checkbox" data-similar-filter-group="formats" value="other">其他</label>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div id="similarSortTool" class="multi-filter gallery-tool" data-filter-menu="similar-sort">
+              <button class="multi-filter-trigger gallery-tool-trigger" type="button" aria-expanded="false" aria-controls="similarSortPanel">
+                <svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=7#gallery-sort"></use></svg><span>排序</span><svg class="gallery-tool-chevron" viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#chevron-down"></use></svg>
+              </button>
+              <div id="similarSortPanel" class="multi-filter-panel gallery-tool-panel gallery-sort-panel hidden">
+                <label><input type="radio" name="similar-sort-value" data-similar-sort-value="suggestion" checked>建议</label>
+                <label><input type="radio" name="similar-sort-value" data-similar-sort-value="filename">名称</label>
+                <label><input type="radio" name="similar-sort-value" data-similar-sort-value="size">大小</label>
+                <label title="拍摄日期"><input type="radio" name="similar-sort-value" data-similar-sort-value="taken">日期</label>
+                <div class="gallery-menu-divider" aria-hidden="true"></div>
+                <label><input type="radio" name="similar-sort-direction" data-similar-sort-direction="asc" checked>递增</label>
+                <label><input type="radio" name="similar-sort-direction" data-similar-sort-direction="desc">递减</label>
+              </div>
+            </div>
           </div>
-          <label class="search"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=4#box-search"></use></svg><input id="searchInput" placeholder="搜索文件名或路径"></label>
+          <label class="search"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=4#box-search"></use></svg><input id="searchInput" placeholder="搜索照片"></label>
         </div>
         <div id="gallery" class="gallery"></div>
         <div id="librarySentinel" class="library-sentinel hidden" aria-live="polite"></div>
@@ -156,7 +234,7 @@
         <button id="motionSetCover" class="motion-set-cover-button" type="button" aria-label="设为封面" title="设为封面"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=2#motion-set-cover"></use></svg></button>
         <button id="motionResetCover" class="motion-reset-button" type="button" aria-label="恢复原始封面" title="恢复原始封面"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use transform="translate(1024 0) scale(-1 1)" href="/static/assets/icons.svg?v=1#motion-reset"></use></svg></button>
       </div>
-      <figcaption><div class="viewer-title-line"><span id="viewerBadge" class="viewer-badge hidden"></span><span id="viewerAnalysisBadge" class="viewer-badge hidden"></span><b id="viewerName"></b></div><span id="viewerMeta"></span></figcaption>
+      <figcaption><div class="viewer-title-line"><span id="viewerBadge" class="viewer-badge hidden"></span><span id="viewerAnalysisBadge" class="viewer-badge hidden"></span><span id="viewerVariantBadge" class="viewer-variant-badge hidden"></span><b id="viewerName"></b></div><span id="viewerMeta"></span></figcaption>
     </figure>
     <button class="side next" id="viewerNext" aria-label="下一张"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#viewer-next"></use></svg></button>
     <footer><button id="viewerKeep" class="viewer-decision viewer-keep">W / ↑ 保留</button><span id="viewerIndex"></span><button id="viewerRemove" class="viewer-decision viewer-remove">S / ↓ 移除</button></footer>
@@ -197,6 +275,10 @@
               <div class="settings-row">
                 <div class="setting-copy"><label for="autoAdvance">标记后下一张</label></div>
                 <label class="setting-switch" aria-label="标记后自动下一张"><input id="autoAdvance" type="checkbox"><span aria-hidden="true"></span></label>
+              </div>
+              <div class="settings-row">
+                <div class="setting-copy"><label for="syncVariantDecisions">相同照片同时决定</label><small>同目录、同名的 RAW 与其他图片格式会同步保留或移除，已有决定不会自动改写。</small></div>
+                <label class="setting-switch" aria-label="相同照片同时决定"><input id="syncVariantDecisions" type="checkbox"><span aria-hidden="true"></span></label>
               </div>
               <div class="settings-row">
                 <div class="setting-copy"><label for="blinkDetectionEnabled">启用眨眼检测</label><small id="blinkRescanStatus" class="setting-warning hidden">需要重新扫描</small></div>
@@ -310,12 +392,12 @@
   </div>
   <div id="toast"></div>
   <script>window.APP_TOKEN="__APP_TOKEN__"</script>
-  <script src="/static/js/runtime.js?v=1.0.3-layout1"></script>
-  <script src="/static/js/session.js?v=1.0.3-layout1"></script>
-  <script src="/static/js/similar.js?v=1.0.3-layout1"></script>
-  <script src="/static/js/settings.js?v=1.0.3-layout1"></script>
-  <script src="/static/js/gallery.js?v=1.0.3-layout1"></script>
-  <script src="/static/js/viewer.js?v=1.0.3-layout1"></script>
-  <script src="/static/js/app.js?v=1.0.3-layout1"></script>
+  <script src="/static/js/runtime.js?v=1.0.3-variants5"></script>
+  <script src="/static/js/session.js?v=1.0.3-variants5"></script>
+  <script src="/static/js/similar.js?v=1.0.3-variants5"></script>
+  <script src="/static/js/settings.js?v=1.0.3-variants5"></script>
+  <script src="/static/js/gallery.js?v=1.0.3-variants5"></script>
+  <script src="/static/js/viewer.js?v=1.0.3-variants5"></script>
+  <script src="/static/js/app.js?v=1.0.3-variants5"></script>
 </body>
 </html>

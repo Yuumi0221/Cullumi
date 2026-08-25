@@ -165,6 +165,7 @@ def _normalize_simple_settings(
         "auto_advance",
         "auto_check_updates",
         "blink_detection_enabled",
+        "sync_variant_decisions",
     ):
         if key in loaded and not isinstance(loaded[key], bool):
             normalized[key] = defaults[key]
@@ -326,6 +327,7 @@ class ConfigStore:
             "auto_advance": True,
             "auto_check_updates": True,
             "blink_detection_enabled": True,
+            "sync_variant_decisions": True,
             "motion_cover_writeback": "ask",
             "theme": "day",
             "projects": {},

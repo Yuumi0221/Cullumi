@@ -91,12 +91,13 @@ class DatabaseMigrationTests(unittest.TestCase):
             self.assertIn("idx_similar_pairs_kind_b", indexes)
             self.assertEqual(list(path.parent.glob("project.pre-v*.db")), [])
 
-    def test_v4_database_backfills_query_indexes_without_version_change(self) -> None:
+    def test_current_database_backfills_query_indexes_without_version_change(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "project.db"
             conn = connect_db(path)
             conn.execute("DROP INDEX idx_similar_pairs_kind_a")
             conn.execute("DROP INDEX idx_similar_pairs_kind_b")
+            conn.execute("DROP INDEX idx_capture_variant_representative")
             conn.commit()
             conn.close()
             project_store._INITIALIZED_DATABASES.pop(path.resolve(), None)
@@ -114,6 +115,7 @@ class DatabaseMigrationTests(unittest.TestCase):
             self.assertEqual(version, DATABASE_SCHEMA_VERSION)
             self.assertIn("idx_similar_pairs_kind_a", indexes)
             self.assertIn("idx_similar_pairs_kind_b", indexes)
+            self.assertIn("idx_capture_variant_representative", indexes)
             self.assertEqual(list(path.parent.glob("project.pre-v*.db")), [])
 
     def test_legacy_database_is_backed_up_and_migrated_without_data_loss(self) -> None:

@@ -16,6 +16,11 @@ from typing import Any
 import numpy as np
 
 from .analysis_worker import AnalysisCancelled, PhotoAnalysisRunner
+from .capture_variants import (
+    rebuild_capture_variants,
+    representative_photo_ids,
+    variant_memberships,
+)
 from .classification import (
     CLASSIFICATION_COLUMNS,
     PHOTO_ANALYSIS_COLUMNS,
@@ -177,6 +182,13 @@ class _SimilarityPlanner:
         self.cancel = cancel
         self.target_ids = target_ids
         self.rows = self._load_rows()
+        self.variant_representative_by_id = variant_memberships(conn)
+        self.visual_rows = [
+            row
+            for row in self.rows
+            if self.variant_representative_by_id.get(int(row["id"]), row["id"])
+            == int(row["id"])
+        ]
         self.derived = {
             int(row["id"]): {
                 "sequence": filename_sequence(Path(row["relative_path"]).name),
@@ -270,7 +282,7 @@ class _SimilarityPlanner:
 
     def _directory_groups(self) -> list[list[sqlite3.Row]]:
         directories: dict[str, dict[tuple[str, str, str], sqlite3.Row]] = {}
-        for row in self.rows:
+        for row in self.visual_rows:
             photo_id = int(row["id"])
             directory = str(Path(row["relative_path"]).parent).casefold()
             exact_identity = self.exact_identity_by_id.get(photo_id)
@@ -718,7 +730,15 @@ class Scanner:
     ) -> None:
         """Run post-database imports and publish the terminal scan state."""
         _check_cancelled(cancel)
-        self._auto_import_csv(project)
+        import_result = self._auto_import_csv(project)
+        import_status = {}
+        if import_result and import_result.get("requires_sync_disable"):
+            import_status = {
+                "csv_import_requires_attention": True,
+                "csv_import_conflicting_groups": import_result.get(
+                    "conflicting_groups", 0
+                ),
+            }
         self._set(
             project_id,
             stage="complete",
@@ -727,6 +747,7 @@ class Scanner:
             total=len(files),
             unavailable_count=unavailable_count,
             file="",
+            **import_status,
         )
 
     def _confirm_exact_duplicates(
@@ -1131,6 +1152,8 @@ class Scanner:
                     unavailable_count,
                     cancel,
                 )
+                rebuild_capture_variants(conn, prune_similar=True)
+                conn.commit()
                 self._rebuild_relationships(
                     project_id, project, conn, profile, cancel
                 )
@@ -1406,7 +1429,11 @@ class Scanner:
         cancel: threading.Event | None = None,
         photo_ids: set[int] | None = None,
     ) -> list[SimilarityPair]:
-        target_ids = None if photo_ids is None else {int(value) for value in photo_ids}
+        target_ids = (
+            None
+            if photo_ids is None
+            else representative_photo_ids(conn, {int(value) for value in photo_ids})
+        )
         if target_ids == set():
             return []
         return _SimilarityPlanner(
@@ -1422,7 +1449,11 @@ class Scanner:
         commit: bool = True,
         photo_ids: set[int] | None = None,
     ) -> None:
-        target_ids = None if photo_ids is None else {int(value) for value in photo_ids}
+        target_ids = (
+            None
+            if photo_ids is None
+            else representative_photo_ids(conn, {int(value) for value in photo_ids})
+        )
         if target_ids == set():
             return
         pairs = self.plan_similarity_pairs(
@@ -1474,13 +1505,21 @@ class Scanner:
             related.update((int(row["a_id"]), int(row["b_id"])))
         return related
 
-    def _auto_import_csv(self, project: Project) -> None:
+    def _auto_import_csv(self, project: Project) -> dict[str, Any] | None:
         with closing(connect_db(project.db_path)) as conn:
             count = conn.execute("SELECT COUNT(*) FROM photos WHERE decision<>''").fetchone()[0]
         if count:
-            return
+            return None
         candidates = [project.root / "照片筛选结果.csv", project.root.parent / f"{project.root.name}筛选结果.csv"]
         for candidate in candidates:
             if candidate.exists():
-                import_decisions(project, candidate)
-                break
+                return import_decisions(
+                    project,
+                    candidate,
+                    bool(
+                        self.config.snapshot().get(
+                            "sync_variant_decisions", True
+                        )
+                    ),
+                )
+        return None

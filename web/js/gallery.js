@@ -1,5 +1,20 @@
 const setEquals = (set, values) =>
   set.size === values.length && values.every((value) => set.has(value));
+function projectFormatValues(project = state.project) {
+  return (project?.format_categories || [])
+    .map((item) => item.id)
+    .filter((value) => FORMAT_VALUES.includes(value));
+}
+function renderFormatFilterOptions() {
+  const available = new Set(projectFormatValues());
+  $$('[data-format-option]').forEach((label) =>
+    label.classList.toggle(
+      "hidden",
+      !available.has(label.dataset.formatOption),
+    ),
+  );
+  $("#formatFilter").classList.toggle("hidden", !available.size);
+}
 function libraryPresetName() {
   if (
     setEquals(state.filters.decisions, DECISION_VALUES) &&
@@ -40,6 +55,11 @@ function filterSummary(values, allValues, labels) {
   if (values.size === 1) return labels[[...values][0]];
   return `已选 ${values.size} 项`;
 }
+function libraryFilterAllValues(group) {
+  if (group === "decisions") return DECISION_VALUES;
+  if (group === "ai") return AI_VALUES;
+  return projectFormatValues();
+}
 function syncFilterControls() {
   $$("[data-filter-group]").forEach(
     (input) =>
@@ -48,7 +68,9 @@ function syncFilterControls() {
       )),
   );
   const decision = $("#decisionFilterSummary"),
-    ai = $("#aiFilterSummary");
+    ai = $("#aiFilterSummary"),
+    formats = $("#formatFilterSummary"),
+    availableFormats = projectFormatValues();
   decision.textContent = filterSummary(
     state.filters.decisions,
     DECISION_VALUES,
@@ -59,13 +81,53 @@ function syncFilterControls() {
     review: "人工复查",
     no_suggestion: "无建议",
   });
+  formats.textContent = filterSummary(
+    state.filters.formats,
+    availableFormats,
+    Object.fromEntries(
+      (state.project?.format_categories || []).map((item) => [
+        item.id,
+        item.label,
+      ]),
+    ),
+  );
   decision
-    .closest(".multi-filter-trigger")
+    .closest(".gallery-view-option")
     .classList.toggle("empty-selection", !state.filters.decisions.size);
-  ai.closest(".multi-filter-trigger").classList.toggle(
+  ai.closest(".gallery-view-option").classList.toggle(
     "empty-selection",
     !state.filters.ai.size,
   );
+  formats.closest(".gallery-view-option").classList.toggle(
+    "empty-selection",
+    !!availableFormats.length && !state.filters.formats.size,
+  );
+  $$("[data-select-all]").forEach((button) => {
+    const all = libraryFilterAllValues(button.dataset.selectAll);
+    button.textContent =
+      all.length && setEquals(state.filters[button.dataset.selectAll], all)
+        ? "全不选"
+        : "全选";
+  });
+}
+function syncSortControls() {
+  $$("[data-sort-value]").forEach((input) => {
+    input.checked = input.dataset.sortValue === state.librarySort;
+  });
+  $$("[data-sort-direction]").forEach((input) => {
+    input.checked =
+      input.dataset.sortDirection === state.librarySortDirection;
+  });
+  const sortLabels = {
+      suggestion: "建议",
+      filename: "名称",
+      size: "大小",
+      taken: "日期（拍摄日期）",
+    },
+    directionLabel =
+      state.librarySortDirection === "desc" ? "递减" : "递增";
+  const trigger = $("[data-filter-menu=\"sort\"] .gallery-tool-trigger");
+  trigger.title = `排序：${sortLabels[state.librarySort]} · ${directionLabel}`;
 }
 function applyLibraryPreset(name) {
   const presets = {
@@ -79,9 +141,13 @@ function applyLibraryPreset(name) {
   if (!preset) return;
   if (state.view === "similar") closeSimilarDetail(false);
   state.view = "library";
-  state.filters = { decisions: new Set(preset[0]), ai: new Set(preset[1]) };
+  state.filters = {
+    decisions: new Set(preset[0]),
+    ai: new Set(preset[1]),
+    formats: new Set(state.filters.formats),
+  };
   $("#searchInput").value = "";
-  $("#searchInput").placeholder = "搜索文件名或路径";
+  $("#searchInput").placeholder = "搜索照片";
   closeFilterMenus();
   syncFilterControls();
   setActiveNav(name);
@@ -130,6 +196,11 @@ async function loadLibraryPage(reset = false) {
     renderLibraryEmpty("当前没有选择筛选状态");
     return;
   }
+  const availableFormats = projectFormatValues();
+  if (availableFormats.length && !state.filters.formats.size) {
+    renderLibraryEmpty("当前没有选择照片格式");
+    return;
+  }
   if (state.library.loading || state.library.done) return;
   const generation = state.library.generation;
   state.library.loading = true;
@@ -141,6 +212,11 @@ async function loadLibraryPage(reset = false) {
     file: "readable",
     decisions: filterQueryValue(state.filters.decisions, DECISION_VALUES),
     ai_states: filterQueryValue(state.filters.ai, AI_VALUES),
+    formats: availableFormats.length
+      ? filterQueryValue(state.filters.formats, availableFormats)
+      : "all",
+    sort: state.librarySort,
+    direction: state.librarySortDirection,
     search: $("#searchInput").value.trim(),
     limit: String(LIBRARY_PAGE_SIZE),
     offset: String(state.library.offset),
@@ -235,6 +311,13 @@ function cardDetailText(p) {
     ? problems.join("、")
     : `${p.width || 0}×${p.height || 0} · ${formatSize(p.size || 0)}`;
 }
+function variantFormatText(p, compact = false) {
+  const formats = p.variant_extensions || [];
+  if (!formats.length) return "";
+  if (compact && formats.length > 2)
+    return `${formats.slice(0, 2).join(" + ")} +${formats.length - 2}`;
+  return formats.join(" + ");
+}
 function photoCard(
   p,
   index,
@@ -269,7 +352,9 @@ function photoCard(
   const badgeAttribute = customBadge
     ? "data-context-badge"
     : "data-analysis-badge";
-  return `<article class="photo-card ${decisionClass}" data-photo-id="${p.id}"><div class="thumb" data-open-id="${p.id}"><img loading="lazy" src="${p.thumb_url}" alt="">${p.media_type === "motion_photo" ? `<span class="live-mark card-live-mark" aria-label="动态照片">${LIVE_PHOTO_ICON}</span>` : ""}${badge ? `<span class="badge badge-${badgeKind}" ${badgeAttribute}>${esc(badge)}</span>` : ""}</div><div class="card-info"><b title="${esc(p.relative_path)}">${esc(p.relative_path.split("/").pop())}</b><small>${esc(cardDetailText(p))}</small>${extraInfo ? `<span class="similarity-score">${esc(extraInfo)}</span>` : ""}</div><div class="card-actions"><button class="keep" data-decision="keep" data-id="${p.id}">保留</button><button class="danger" data-decision="remove" data-id="${p.id}">移除</button></div></article>`;
+  const variantText = variantFormatText(p, true),
+    fullVariantText = variantFormatText(p);
+  return `<article class="photo-card ${decisionClass}" data-photo-id="${p.id}"><div class="thumb" data-open-id="${p.id}"><img loading="lazy" src="${p.thumb_url}" alt="">${p.media_type === "motion_photo" ? `<span class="live-mark card-live-mark" aria-label="动态照片">${LIVE_PHOTO_ICON}</span>` : ""}${badge ? `<span class="badge badge-${badgeKind}" ${badgeAttribute}>${esc(badge)}</span>` : ""}${variantText ? `<span class="variant-badge" title="关联格式：${esc(fullVariantText)}">${esc(variantText)}</span>` : ""}</div><div class="card-info"><b title="${esc(p.relative_path)}">${esc(p.relative_path.split("/").pop())}</b><small>${esc(cardDetailText(p))}</small>${extraInfo ? `<span class="similarity-score">${esc(extraInfo)}</span>` : ""}</div><div class="card-actions"><button class="keep" data-decision="keep" data-id="${p.id}">保留</button><button class="danger" data-decision="remove" data-id="${p.id}">移除</button></div></article>`;
 }
 function renderPhotos(items, total) {
   $("#viewSubtitle").textContent = `显示 ${items.length} / ${total}`;
@@ -326,7 +411,16 @@ function renderBatches(items) {
 function photoMatchesLibrary(photo) {
   const decision = photo.decision || "undecided";
   const ai = photo.suggestion === "keep" ? "no_suggestion" : photo.suggestion;
-  return state.filters.decisions.has(decision) && state.filters.ai.has(ai);
+  const search = $("#searchInput").value.trim().toLocaleLowerCase(),
+    readable = !photo.error && photo.suggestion !== "unreadable";
+  return (
+    readable &&
+    (!search || photo.relative_path.toLocaleLowerCase().includes(search)) &&
+    state.filters.decisions.has(decision) &&
+    state.filters.ai.has(ai) &&
+    (!projectFormatValues().length ||
+      state.filters.formats.has(photo.format_category))
+  );
 }
 function updateCardDecision(id, decision) {
   $$(`[data-photo-id="${id}"]`).forEach((card) => {
@@ -365,7 +459,33 @@ async function syncViewerDecisions() {
   }
   await loadView();
 }
+function adjustUnloadedLibraryTotal(photo) {
+  if (state.view !== "library") return;
+  const before = photoMatchesLibrary({
+      ...photo,
+      decision: photo.previous_decision || "",
+    }),
+    after = photoMatchesLibrary(photo);
+  if (before === after) return;
+  state.library.total = Math.max(0, state.library.total + (after ? 1 : -1));
+  state.library.done = state.library.offset >= state.library.total;
+  $("#viewSubtitle").textContent =
+    `显示 ${state.items.length} / ${state.library.total}`;
+}
+function moveViewerPastAffected(affectedIds) {
+  for (let offset = 1; offset < state.items.length; offset += 1) {
+    const next = (state.viewerIndex + offset) % state.items.length;
+    if (!affectedIds.has(state.items[next].id)) {
+      openViewer(next);
+      return;
+    }
+  }
+  const current = state.items[state.viewerIndex];
+  if (current) updateViewerDecision(current);
+}
 async function setDecision(id, decision, fromViewer = true) {
+  const original = state.items.find((item) => item.id === id),
+    originalDecision = original?.decision || "";
   let result;
   try {
     result = await json("/api/decision", {
@@ -378,24 +498,60 @@ async function setDecision(id, decision, fromViewer = true) {
     return false;
   }
   const savedDecision = result.decision ?? decision,
-    p = state.items.find((x) => x.id === id);
-  if (p) p.decision = savedDecision;
+    affected = result.affected_photos?.length
+      ? result.affected_photos
+      : [
+          {
+            ...(original || {}),
+            id,
+            decision: savedDecision,
+            previous_decision: originalDecision,
+          },
+        ],
+    affectedIds = new Set(affected.map((photo) => photo.id)),
+    loadedIds = new Set();
+  affected.forEach((photo) => {
+    const loaded = state.items.find((item) => item.id === photo.id);
+    const similarMember = state.similar.detail?.members.find(
+      (item) => item.id === photo.id,
+    );
+    if (loaded) {
+      loadedIds.add(photo.id);
+      Object.assign(loaded, photo);
+    } else adjustUnloadedLibraryTotal(photo);
+    if (similarMember && similarMember !== loaded)
+      Object.assign(similarMember, photo);
+    updateCardDecision(photo.id, photo.decision);
+  });
   applyProjectCounts(result.project_counts);
   if (fromViewer) {
     state.viewerNeedsRefresh = true;
-    state.viewerDirtyIds.add(id);
+    affectedIds.forEach((photoId) => state.viewerDirtyIds.add(photoId));
   }
-  updateCardDecision(id, savedDecision);
-  toast(savedDecision === "keep" ? "已标记保留" : "已标记移除");
+  const action =
+    savedDecision === "keep"
+      ? "保留"
+      : savedDecision === "remove"
+        ? "移除"
+        : "未决定";
+  toast(
+    affected.length > 1
+      ? `已同步将 ${affected.length} 个格式标记为${action}`
+      : `已标记${action}`,
+  );
   if (fromViewer && !$("#viewer").open) {
     await syncViewerDecisions();
     return;
   }
-  if (fromViewer && state.settings.auto_advance) moveViewer(1);
+  const p = state.items.find((item) => item.id === id);
+  if (fromViewer && state.settings.auto_advance)
+    moveViewerPastAffected(affectedIds);
   else if (fromViewer && p) updateViewerDecision(p);
   else if (!fromViewer) {
-    if (state.view === "library") reconcileLibraryDecision(id);
-    else updateCardDecision(id, savedDecision);
+    if (state.view === "library")
+      [...loadedIds].forEach(reconcileLibraryDecision);
+    else if (state.view === "similar") renderSimilarGroupMembers();
+    else affected.forEach((photo) => updateCardDecision(photo.id, photo.decision));
   }
   return true;
 }
@@ -431,6 +587,52 @@ async function restore(id) {
   await refreshProject();
   loadView();
 }
+async function finishDecisionImport(result) {
+  toast(
+    `导入 ${result.imported} 条，更新 ${result.affected || 0} 张，缺失 ${result.missing} 条`,
+  );
+  await refreshProject();
+  await loadView();
+}
+async function importDecisionCsv(path) {
+  const result = await json("/api/import", {
+    project_id: state.project.id,
+    path,
+  });
+  if (!result.requires_sync_disable) {
+    await finishDecisionImport(result);
+    return;
+  }
+  $("#confirmTitle").textContent = "CSV 中存在多格式决定冲突";
+  $("#confirmBody").textContent =
+    `发现 ${result.conflicting_groups} 组同名 RAW 与其他图片格式被指定了不同决定。关闭“相同照片同时决定”后，将按 CSV 中每个文件各自的决定导入。`;
+  const button = $("#confirmOk");
+  button.textContent = "关闭同步并导入";
+  button.onclick = async () => {
+    button.disabled = true;
+    try {
+      const saved = await json("/api/settings", {
+        sync_variant_decisions: false,
+      });
+      state.settings.sync_variant_decisions =
+        saved.settings.sync_variant_decisions;
+      $("#syncVariantDecisions").checked = false;
+      const retried = await json("/api/import", {
+        project_id: state.project.id,
+        path,
+      });
+      if (retried.requires_sync_disable)
+        throw Error("同步设置尚未关闭，导入未执行");
+      $("#confirm").close();
+      await finishDecisionImport(retried);
+    } catch (error) {
+      toast(`导入失败：${error.message}`);
+    } finally {
+      button.disabled = false;
+    }
+  };
+  $("#confirm").showModal();
+}
 
 function selectNavigationView(event) {
   const button = event.target.closest("[data-nav]");
@@ -450,7 +652,7 @@ function selectNavigationView(event) {
     $("#searchInput").value = state.similar.listSearch;
     $("#searchInput").placeholder = "搜索相似组中的照片";
   } else {
-    $("#searchInput").placeholder = "搜索文件名或路径";
+    $("#searchInput").placeholder = "搜索照片";
   }
   loadView();
 }
@@ -487,13 +689,40 @@ function bindLibraryFilterEvents() {
     (button) =>
       (button.onclick = () => {
         const group = button.dataset.selectAll;
-        const all = group === "decisions" ? DECISION_VALUES : AI_VALUES;
-        state.filters[group] = new Set(all);
+        const all = libraryFilterAllValues(group);
+        state.filters[group] =
+          all.length && setEquals(state.filters[group], all)
+            ? new Set()
+            : new Set(all);
         syncFilterControls();
         setActiveNav(libraryPresetName());
         loadView();
       }),
   );
+  $$("[data-sort-value]").forEach((input) => {
+    input.onchange = () => {
+      if (
+        input.checked &&
+        LIBRARY_SORT_VALUES.includes(input.dataset.sortValue)
+      ) {
+        state.librarySort = input.dataset.sortValue;
+        syncSortControls();
+        loadView();
+      } else syncSortControls();
+    };
+  });
+  $$("[data-sort-direction]").forEach((input) => {
+    input.onchange = () => {
+      if (
+        input.checked &&
+        ["asc", "desc"].includes(input.dataset.sortDirection)
+      ) {
+        state.librarySortDirection = input.dataset.sortDirection;
+        syncSortControls();
+        loadView();
+      } else syncSortControls();
+    };
+  });
 }
 
 function bindGalleryEvents() {
@@ -504,13 +733,15 @@ function bindGalleryEvents() {
   bindLibraryFilterEvents();
   let searchTimer;
   $("#searchInput").oninput = () => {
+    let refresh = loadView;
     if (state.view === "similar") {
-      if (state.similar.selectedId)
+      if (state.similar.selectedId) {
         state.similar.memberSearch = $("#searchInput").value.trim();
-      else state.similar.listSearch = $("#searchInput").value.trim();
+        refresh = renderSimilarGroupMembers;
+      } else state.similar.listSearch = $("#searchInput").value.trim();
     }
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(loadView, 250);
+    searchTimer = setTimeout(refresh, 250);
   };
   $("#profileSelect").onchange = (event) => applyProfile(event.target.value);
   $("#exportBtn").onclick = async () => {
@@ -524,15 +755,13 @@ function bindGalleryEvents() {
     }
   };
   $("#importBtn").onclick = async () => {
-    const file = await json("/api/choose-csv", {});
-    if (!file.path) return;
-    const result = await json("/api/import", {
-      project_id: state.project.id,
-      path: file.path,
-    });
-    toast(`导入 ${result.imported} 条，缺失 ${result.missing} 条`);
-    await refreshProject();
-    loadView();
+    try {
+      const file = await json("/api/choose-csv", {});
+      if (!file.path) return;
+      await importDecisionCsv(file.path);
+    } catch (error) {
+      toast(`导入失败：${error.message}`);
+    }
   };
   $("#quarantineBtn").onclick = quarantine;
   $("#clearDecisionsBtn").onclick = confirmClearDecisions;

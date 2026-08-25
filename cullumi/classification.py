@@ -5,6 +5,8 @@ from typing import Any, Iterable
 
 import numpy as np
 
+from .capture_variants import FORMAT_CATEGORY_IDS, format_filter_clause
+
 PHOTO_DECISION_FILTERS = frozenset({"undecided", "keep", "remove"})
 PHOTO_AI_FILTERS = frozenset({"remove", "review", "no_suggestion"})
 PHOTO_ANALYSIS_COLUMNS = (
@@ -62,6 +64,7 @@ def photo_filter_where(
     file_state: str,
     decisions: set[str],
     ai_states: set[str],
+    formats: set[str] | None = None,
 ) -> tuple[str, list[Any]]:
     """Return the canonical SQL predicate shared by photo queries and UI counts."""
     if file_state not in {"readable", "unreadable"}:
@@ -89,6 +92,11 @@ def photo_filter_where(
         placeholders = ",".join("?" for _ in stored_ai)
         clauses.append(f"suggestion IN ({placeholders})")
         params.extend(stored_ai)
+    selected_formats = set(FORMAT_CATEGORY_IDS) if formats is None else formats
+    format_clause, format_params = format_filter_clause(selected_formats)
+    if format_clause:
+        clauses.append(format_clause)
+        params.extend(format_params)
     return " AND ".join(clauses), params
 
 def photo_library_counts(conn: sqlite3.Connection) -> dict[str, int]:

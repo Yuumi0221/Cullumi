@@ -23,6 +23,142 @@ function renderSimilarFolders() {
     selected && state.similar.mode === "expanded",
   );
 }
+function similarFormatValues() {
+  return state.similar.formatCategories.map((item) => item.id);
+}
+function similarPhotoFormat(photo) {
+  return FORMAT_VALUES.includes(photo.format_category)
+    ? photo.format_category
+    : "other";
+}
+function similarFormatCategories(members) {
+  const counts = new Map();
+  members.forEach((photo) => {
+    const category = similarPhotoFormat(photo);
+    counts.set(category, (counts.get(category) || 0) + 1);
+  });
+  return FORMAT_VALUES.filter((category) => counts.has(category)).map(
+    (category) => ({
+      id: category,
+      label: FORMAT_LABELS[category],
+      count: counts.get(category),
+    }),
+  );
+}
+function similarDecisionValue(photo) {
+  return photo.decision || "undecided";
+}
+function similarAiValue(photo) {
+  return ["remove", "review"].includes(photo.suggestion)
+    ? photo.suggestion
+    : "no_suggestion";
+}
+function similarFilterAllValues(group) {
+  if (group === "decisions") return DECISION_VALUES;
+  if (group === "ai") return AI_VALUES;
+  return similarFormatValues();
+}
+function similarSuggestionRank(photo) {
+  return { remove: 0, review: 1, unreadable: 2 }[photo.suggestion] ?? 3;
+}
+function compareSimilarPhotos(left, right) {
+  const direction = state.similar.sortDirection === "desc" ? -1 : 1;
+  let result = 0;
+  if (state.similar.sort === "suggestion") {
+    result = similarSuggestionRank(left) - similarSuggestionRank(right);
+  } else if (state.similar.sort === "filename") {
+    const leftName = left.relative_path.split("/").pop() || "",
+      rightName = right.relative_path.split("/").pop() || "";
+    result = leftName.localeCompare(rightName, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  } else if (state.similar.sort === "size") {
+    result = (Number(left.size) || 0) - (Number(right.size) || 0);
+  } else if (state.similar.sort === "taken") {
+    const leftTaken = String(left.taken || ""),
+      rightTaken = String(right.taken || "");
+    if (!leftTaken || !rightTaken) {
+      if (leftTaken !== rightTaken) return leftTaken ? -1 : 1;
+    } else result = leftTaken.localeCompare(rightTaken);
+  }
+  if (result) return result * direction;
+  const pathResult = left.relative_path.localeCompare(
+    right.relative_path,
+    undefined,
+    { numeric: true, sensitivity: "base" },
+  );
+  return pathResult || left.id - right.id;
+}
+function syncSimilarControls() {
+  const availableValues = similarFormatValues(),
+    available = new Set(availableValues),
+    decisionSummary = $("#similarDecisionFilterSummary"),
+    aiSummary = $("#similarAiFilterSummary"),
+    formatSummary = $("#similarFormatFilterSummary");
+  $$("[data-similar-format-option]").forEach((label) => {
+    const category = label.dataset.similarFormatOption;
+    label.classList.toggle("hidden", !available.has(category));
+  });
+  $$("[data-similar-filter-group]").forEach((input) => {
+    input.checked = state.similar[input.dataset.similarFilterGroup].has(
+      input.value,
+    );
+  });
+  decisionSummary.textContent = filterSummary(
+    state.similar.decisions,
+    DECISION_VALUES,
+    { undecided: "未决定", keep: "已保留", remove: "已移除" },
+  );
+  aiSummary.textContent = filterSummary(state.similar.ai, AI_VALUES, {
+    remove: "建议移除",
+    review: "人工复查",
+    no_suggestion: "无建议",
+  });
+  formatSummary.textContent = filterSummary(
+    state.similar.formats,
+    availableValues,
+    FORMAT_LABELS,
+  );
+  decisionSummary.closest(".gallery-view-option").classList.toggle(
+    "empty-selection",
+    !state.similar.decisions.size,
+  );
+  aiSummary.closest(".gallery-view-option").classList.toggle(
+    "empty-selection",
+    !state.similar.ai.size,
+  );
+  formatSummary.closest(".gallery-view-option").classList.toggle(
+    "empty-selection",
+    !!availableValues.length && !state.similar.formats.size,
+  );
+  $$("[data-similar-select-all]").forEach((button) => {
+    const group = button.dataset.similarSelectAll,
+      all = similarFilterAllValues(group);
+    button.textContent =
+      all.length && setEquals(state.similar[group], all) ? "全不选" : "全选";
+  });
+  $("#similarFormatViewItem").classList.toggle(
+    "hidden",
+    !availableValues.length,
+  );
+  $$("[data-similar-sort-value]").forEach((input) => {
+    input.checked = input.dataset.similarSortValue === state.similar.sort;
+  });
+  $$("[data-similar-sort-direction]").forEach((input) => {
+    input.checked =
+      input.dataset.similarSortDirection === state.similar.sortDirection;
+  });
+  const sortLabels = {
+      suggestion: "建议",
+      filename: "名称",
+      size: "大小",
+      taken: "日期（拍摄日期）",
+    },
+    directionLabel = state.similar.sortDirection === "desc" ? "递减" : "递增";
+  $("#similarSortTool .gallery-tool-trigger").title =
+    `排序：${sortLabels[state.similar.sort]} · ${directionLabel}`;
+}
 function applySimilarMode() {
   const selected = !!state.similar.selectedId,
     expanded = state.similar.mode === "expanded",
@@ -38,6 +174,7 @@ function applySimilarMode() {
   $("#similarExpandBtn").classList.toggle("hidden", expanded);
   $("#similarBackBtn").classList.toggle("hidden", !expanded);
   $("#similarFolderPane").classList.toggle("hidden", selected && expanded);
+  syncSimilarControls();
   document.body.classList.toggle(
     "similar-detail-open",
     state.view === "similar" && selected,
@@ -98,12 +235,13 @@ async function loadSimilarView() {
 }
 async function loadSimilarGroupMembers() {
   const groupId = state.similar.selectedId;
-  const search = encodeURIComponent(state.similar.memberSearch);
   const detail = await json(
-    `/api/similar-group?project_id=${state.project.id}&group_id=${encodeURIComponent(groupId)}&search=${search}`,
+    `/api/similar-group?project_id=${state.project.id}&group_id=${encodeURIComponent(groupId)}`,
   );
+  if (groupId !== state.similar.selectedId) return;
   const decorated = detail.members.map((photo) => {
-    const recommended = photo.id === detail.recommended_id;
+    const recommended =
+      (photo.similarity_source_id || photo.id) === detail.recommended_id;
     const blinkLabel = blinkStatusLabel(photo, recommended, detail.kind);
     return {
       ...photo,
@@ -112,12 +250,55 @@ async function loadSimilarGroupMembers() {
       _blinkLabel: blinkLabel,
     };
   });
+  const previousValues = similarFormatValues(),
+    selectedAll =
+      !!previousValues.length && setEquals(state.similar.formats, previousValues);
+  state.similar.detail = { ...detail, members: decorated };
+  state.similar.formatCategories = similarFormatCategories(decorated);
+  const availableValues = similarFormatValues();
+  state.similar.formats =
+    !previousValues.length || selectedAll
+      ? new Set(availableValues)
+      : new Set(
+          [...state.similar.formats].filter((value) =>
+            availableValues.includes(value),
+          ),
+        );
+  renderSimilarGroupMembers();
+  renderSimilarFolders();
+  applySimilarMode();
+}
+function renderSimilarGroupMembers() {
+  const detail = state.similar.detail;
+  if (!detail || detail.id !== state.similar.selectedId) return;
+  const query = state.similar.memberSearch.trim().toLocaleLowerCase(),
+    decorated = detail.members
+      .filter(
+        (photo) =>
+          state.similar.decisions.has(similarDecisionValue(photo)) &&
+          state.similar.ai.has(similarAiValue(photo)) &&
+          state.similar.formats.has(similarPhotoFormat(photo)) &&
+          (!query || photo.relative_path.toLocaleLowerCase().includes(query)),
+      )
+      .sort(compareSimilarPhotos),
+    allDecisionsSelected = setEquals(
+      state.similar.decisions,
+      DECISION_VALUES,
+    ),
+    allAiSelected = setEquals(state.similar.ai, AI_VALUES),
+    allFormatsSelected = setEquals(
+      state.similar.formats,
+      similarFormatValues(),
+    ),
+    filtered =
+      !allDecisionsSelected || !allAiSelected || !allFormatsSelected;
   state.items = decorated;
   $("#viewSubtitle").textContent =
-    `当前组 ${detail.count} 张${detail.face_safe ? " · 人物照片请检查表情" : ""}${state.similar.memberSearch ? ` · 显示 ${decorated.length} 张` : ""}`;
+    `当前组 ${detail.count} 张${detail.face_safe ? " · 人物照片请检查表情" : ""}${query || filtered ? ` · 显示 ${decorated.length} 张` : ""}`;
   $("#similarDetailGallery").innerHTML = decorated
     .map((photo, index) => {
-      const recommended = photo.id === detail.recommended_id;
+      const recommended =
+        (photo.similarity_source_id || photo.id) === detail.recommended_id;
       const extra = recommended
         ? ""
         : detail.kind === "exact"
@@ -133,12 +314,22 @@ async function loadSimilarGroupMembers() {
     })
     .join("");
   $("#empty").classList.toggle("hidden", !!decorated.length);
-  renderSimilarFolders();
-  applySimilarMode();
+  if (!decorated.length) {
+    $("#emptyTitle").textContent = "当前筛选没有结果";
+    $("#emptyText").textContent = "没有照片符合当前组的搜索和查看条件";
+  }
+  syncSimilarControls();
 }
 async function openSimilarGroup(groupId) {
   state.similar.selectedId = groupId;
   state.similar.memberSearch = "";
+  state.similar.detail = null;
+  state.similar.formatCategories = [];
+  state.similar.decisions = new Set(DECISION_VALUES);
+  state.similar.ai = new Set(AI_VALUES);
+  state.similar.formats = new Set();
+  state.similar.sort = "suggestion";
+  state.similar.sortDirection = "asc";
   state.similar.mode = window.innerWidth <= 850 ? "expanded" : "side";
   $("#searchInput").value = "";
   $("#searchInput").placeholder = "搜索当前组照片";
@@ -155,6 +346,13 @@ function closeSimilarDetail(restoreSearch = true) {
   state.similar.selectedId = "";
   state.similar.mode = "closed";
   state.similar.memberSearch = "";
+  state.similar.detail = null;
+  state.similar.formatCategories = [];
+  state.similar.decisions = new Set(DECISION_VALUES);
+  state.similar.ai = new Set(AI_VALUES);
+  state.similar.formats = new Set();
+  state.similar.sort = "suggestion";
+  state.similar.sortDirection = "asc";
   state.items = [];
   if (restoreSearch) {
     $("#searchInput").value = state.similar.listSearch;
@@ -178,6 +376,48 @@ function bindSimilarEvents() {
   $("#similarCollapseBtn").onclick = () => closeSimilarDetail();
   $("#similarBackBtn").onclick = () => closeSimilarDetail();
   $("#similarExpandBtn").onclick = expandSimilarDetail;
+  $$("[data-similar-filter-group]").forEach((input) => {
+    input.onchange = () => {
+      const values = state.similar[input.dataset.similarFilterGroup];
+      input.checked
+        ? values.add(input.value)
+        : values.delete(input.value);
+      renderSimilarGroupMembers();
+    };
+  });
+  $$("[data-similar-select-all]").forEach((button) => {
+    button.onclick = () => {
+      const group = button.dataset.similarSelectAll,
+        all = similarFilterAllValues(group);
+      state.similar[group] =
+        all.length && setEquals(state.similar[group], all)
+          ? new Set()
+          : new Set(all);
+      renderSimilarGroupMembers();
+    };
+  });
+  $$("[data-similar-sort-value]").forEach((input) => {
+    input.onchange = () => {
+      if (
+        input.checked &&
+        LIBRARY_SORT_VALUES.includes(input.dataset.similarSortValue)
+      ) {
+        state.similar.sort = input.dataset.similarSortValue;
+        renderSimilarGroupMembers();
+      } else syncSimilarControls();
+    };
+  });
+  $$("[data-similar-sort-direction]").forEach((input) => {
+    input.onchange = () => {
+      if (
+        input.checked &&
+        ["asc", "desc"].includes(input.dataset.similarSortDirection)
+      ) {
+        state.similar.sortDirection = input.dataset.similarSortDirection;
+        renderSimilarGroupMembers();
+      } else syncSimilarControls();
+    };
+  });
   $("#similarFolderPane").onclick = (event) => {
     if (
       state.similar.mode === "side" &&

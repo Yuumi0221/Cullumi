@@ -13,15 +13,32 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .capture_variants import active_variant_groups, rebuild_capture_variants
 from .fs_utils import atomic_write_json, is_within
 from .project_store import Project, connect_db, safe_relative_path
 
 QUARANTINE_DIR = "_照片筛选隔离"
 
 
-def import_decisions(project: Project, csv_path: Path) -> dict[str, int]:
-    imported = missing = 0
+def import_decisions(
+    project: Project,
+    csv_path: Path,
+    sync_variant_decisions: bool = False,
+    *,
+    detailed: bool = False,
+) -> dict[str, int | bool]:
+    missing = 0
     with closing(connect_db(project.db_path)) as conn:
+        photos = {
+            str(row["relative_path"]): {
+                "id": int(row["id"]),
+                "decision": str(row["decision"] or ""),
+            }
+            for row in conn.execute(
+                "SELECT id,relative_path,decision FROM photos"
+            )
+        }
+        entries: list[tuple[int, str]] = []
         with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
             for row in csv.DictReader(handle):
                 decision = row.get("决定") or row.get("decision") or ""
@@ -32,19 +49,74 @@ def import_decisions(project: Project, csv_path: Path) -> dict[str, int]:
                 prefix = project.root.name + "/"
                 if raw_path.startswith(prefix):
                     candidates.append(raw_path[len(prefix):])
-                target = None
+                target: int | None = None
                 for rel in candidates:
-                    found = conn.execute("SELECT id FROM photos WHERE relative_path=?", (rel,)).fetchone()
+                    found = photos.get(rel)
                     if found:
-                        target = found["id"]
+                        target = int(found["id"])
                         break
-                if target:
-                    conn.execute("UPDATE photos SET decision=? WHERE id=?", (decision, target))
-                    imported += 1
+                if target is not None:
+                    entries.append((target, decision))
                 else:
                     missing += 1
+
+        memberships, groups = active_variant_groups(conn)
+        conflicting_groups = 0
+        if sync_variant_decisions:
+            decisions_by_group: dict[int, set[str]] = {}
+            for photo_id, decision in entries:
+                representative_id = memberships.get(photo_id)
+                if representative_id is not None:
+                    decisions_by_group.setdefault(representative_id, set()).add(
+                        decision
+                    )
+            conflicting_groups = sum(
+                len(decisions) > 1 for decisions in decisions_by_group.values()
+            )
+        if conflicting_groups:
+            return {
+                "imported": 0,
+                "matched": len(entries),
+                "missing": missing,
+                "affected": 0,
+                "requires_sync_disable": True,
+                "conflicting_groups": conflicting_groups,
+            }
+
+        assignments: dict[int, str] = {}
+        for photo_id, decision in entries:
+            representative_id = memberships.get(photo_id)
+            if sync_variant_decisions and representative_id is not None:
+                assignments.update(
+                    (int(member["photo_id"]), decision)
+                    for member in groups.get(representative_id, [])
+                )
+            else:
+                assignments[photo_id] = decision
+        previous = {
+            int(data["id"]): str(data["decision"])
+            for data in photos.values()
+            if int(data["id"]) in assignments
+        }
+        conn.executemany(
+            "UPDATE photos SET decision=? WHERE id=?",
+            [(decision, photo_id) for photo_id, decision in assignments.items()],
+        )
         conn.commit()
-    return {"imported": imported, "missing": missing}
+    result: dict[str, int | bool] = {
+        "imported": len(entries),
+        "matched": len(entries),
+        "missing": missing,
+        "affected": sum(
+            previous.get(photo_id, "") != decision
+            for photo_id, decision in assignments.items()
+        ),
+        "requires_sync_disable": False,
+        "conflicting_groups": 0,
+    }
+    if not detailed and not sync_variant_decisions:
+        return {"imported": len(entries), "missing": missing}
+    return result
 
 
 def export_decisions(project: Project) -> str:
@@ -66,16 +138,55 @@ def clear_decisions(project: Project) -> int:
         return cursor.rowcount
 
 
-def mark_ai_remove_suggestions(project: Project) -> int:
+def mark_ai_remove_suggestions(
+    project: Project,
+    sync_variant_decisions: bool = False,
+    *,
+    detailed: bool = False,
+) -> int | dict[str, int]:
     """Mark only active, readable, undecided AI-remove suggestions for removal."""
     with closing(connect_db(project.db_path)) as conn:
-        cursor = conn.execute(
+        source_ids = [
+            int(row["id"])
+            for row in conn.execute(
+                """SELECT id FROM photos
+                    WHERE status='active' AND COALESCE(error,'')=''
+                      AND suggestion='remove' AND decision=''"""
+            )
+        ]
+        memberships, groups = active_variant_groups(conn)
+        assignments: set[int] = set()
+        skipped_groups: set[int] = set()
+        handled_groups: set[int] = set()
+        for photo_id in source_ids:
+            representative_id = memberships.get(photo_id)
+            if not sync_variant_decisions or representative_id is None:
+                assignments.add(photo_id)
+                continue
+            if representative_id in handled_groups:
+                continue
+            handled_groups.add(representative_id)
+            members = groups.get(representative_id, [])
+            if any(str(member["decision"] or "") == "keep" for member in members):
+                skipped_groups.add(representative_id)
+                continue
+            assignments.update(
+                int(member["photo_id"])
+                for member in members
+                if not str(member["decision"] or "")
+            )
+        conn.executemany(
             """UPDATE photos SET decision='remove'
-               WHERE status='active' AND COALESCE(error,'')=''
-                 AND suggestion='remove' AND decision=''"""
+                WHERE id=? AND status='active' AND decision=''""",
+            [(photo_id,) for photo_id in sorted(assignments)],
         )
         conn.commit()
-        return cursor.rowcount
+        result = {
+            "marked": len(assignments),
+            "source_candidates": len(source_ids),
+            "skipped_kept_groups": len(skipped_groups),
+        }
+        return result if detailed or sync_variant_decisions else result["marked"]
 
 
 def quarantine_preview(project: Project) -> dict[str, Any]:
@@ -242,6 +353,8 @@ def apply_quarantine(project: Project) -> dict[str, Any]:
                 (len(moved), sum(int(row.get("size") or 0) for row in moved), batch_id),
             )
             conn.commit()
+        rebuild_capture_variants(conn, prune_similar=True)
+        conn.commit()
     _write_manifest_csv(batch_root, manifest)
     moved = [row for row in manifest if row["status"] == "moved"]
     return {"batch_id": batch_id, "moved": len(moved), "skipped": len(manifest) - len(moved)}
@@ -565,6 +678,8 @@ def restore_batch(project: Project, batch_id: str) -> dict[str, Any]:
             restored += item_restored
             conflicts += item_conflicts
             missing += item_missing
+        rebuild_capture_variants(conn, prune_similar=True)
+        conn.commit()
         if not _restore_files_remain(manifest, paths):
             conn.execute(
                 "UPDATE quarantine_batches SET restored_at=? WHERE id=?",
