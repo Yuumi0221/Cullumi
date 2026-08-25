@@ -51,7 +51,7 @@ Cullumi 只监听 `127.0.0.1`，接口使用每次启动随机生成的会话令
 
 ## 开发与测试
 
-项目需要 Python 3.12 及以上版本。`requirements.txt`、`requirements-dev.txt` 和 `requirements-build.txt` 分别提供运行、开发检查和便携构建依赖。
+项目需要 Python 3.12 及以上版本。`requirements.txt` 只列直接运行依赖，`requirements.lock` 固定 Windows 运行环境的完整依赖树；`requirements-dev.txt` 和 `requirements-build.txt` 分别补充开发检查与便携构建依赖。
 
 主要代码按下面的职责拆分。
 
@@ -85,7 +85,7 @@ Cullumi 只监听 `127.0.0.1`，接口使用每次启动随机生成的会话令
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.lock
 .\.venv\Scripts\python.exe app.py
 ```
 

@@ -17,6 +17,7 @@ import numpy as np
 
 from .analysis_worker import AnalysisCancelled, PhotoAnalysisRunner
 from .classification import (
+    CLASSIFICATION_COLUMNS,
     PHOTO_ANALYSIS_COLUMNS,
     PHOTO_UPSERT_SQL,
     classification_percentiles,
@@ -55,6 +56,7 @@ from .project_store import (
 )
 from .similarity import (
     SimilarityGroupCache,
+    SimilarityPair,
     _structure_similarity,
     _structure_vector,
     filename_sequence,
@@ -64,6 +66,78 @@ from .similarity import (
     quality_score,
 )
 from .workflows import QUARANTINE_DIR, import_decisions
+
+DATABASE_BATCH_SIZE = 500
+DISCOVERY_PROGRESS_CHECK_INTERVAL = 64
+SCAN_EXISTING_COLUMNS = (
+    "id",
+    "relative_path",
+    "size",
+    "mtime",
+    "taken",
+    "thumbnail",
+    "error",
+    "status",
+    "media_type",
+    "motion_kind",
+    "motion_relative_path",
+    "motion_offset",
+    "motion_length",
+    "motion_size",
+    "motion_mtime",
+    "motion_error",
+    "motion_sha256",
+    "motion_still_time_ms",
+    "cover_source",
+    "cover_time_ms",
+    "cover_revision",
+)
+EXACT_HASH_COLUMNS = (
+    "id",
+    "relative_path",
+    "sha256",
+    "media_type",
+    "motion_kind",
+    "motion_relative_path",
+    "motion_offset",
+    "motion_length",
+    "motion_asset_id",
+    "motion_sha256",
+)
+SIMILARITY_REBUILD_COLUMNS = (
+    "id",
+    "relative_path",
+    "taken",
+    "width",
+    "height",
+    "thumbnail",
+    "phash",
+    "dhash",
+    "sha256",
+    "motion_sha256",
+    "media_type",
+    "sharpness",
+    "luminance",
+    "dark_clip",
+    "bright_clip",
+    "contrast",
+    "entropy",
+    "megapixels",
+)
+
+
+def _fetch_batches(cursor: sqlite3.Cursor, size: int = DATABASE_BATCH_SIZE):
+    while batch := cursor.fetchmany(size):
+        yield batch
+
+
+def _batched_update(
+    conn: sqlite3.Connection,
+    statement: str,
+    rows: list[tuple[Any, ...]],
+) -> None:
+    for offset in range(0, len(rows), DATABASE_BATCH_SIZE):
+        conn.executemany(statement, rows[offset : offset + DATABASE_BATCH_SIZE])
 
 
 class ScanCancelled(Exception):
@@ -83,6 +157,265 @@ class DiscoveryResult:
 def _check_cancelled(cancel: threading.Event | None) -> None:
     if cancel is not None and cancel.is_set():
         raise ScanCancelled
+
+
+class _SimilarityPlanner:
+    """Build similarity edges while keeping each matching concern isolated."""
+
+    def __init__(
+        self,
+        project: Project,
+        conn: sqlite3.Connection,
+        profile: dict[str, Any],
+        cancel: threading.Event | None,
+        target_ids: set[int] | None,
+    ) -> None:
+        self.project = project
+        self.conn = conn
+        self.profile = profile
+        self.sim = profile["similarity"]
+        self.cancel = cancel
+        self.target_ids = target_ids
+        self.rows = self._load_rows()
+        self.derived = {
+            int(row["id"]): {
+                "sequence": filename_sequence(Path(row["relative_path"]).name),
+                "taken": parse_taken(row["taken"]),
+                "aspect": row["width"] / max(1, row["height"]),
+            }
+            for row in self.rows
+        }
+        self.quality_scores: dict[int, float] = {}
+        self.structure_vectors: dict[int, tuple[np.ndarray, float] | None] = {}
+        self.exact_pair_keys: set[tuple[int, int]] = set()
+        self.exact_identity_by_id: dict[int, tuple[str, str]] = {}
+        self.similar_heaps: dict[
+            int, list[tuple[float, int, int, int, SimilarityPair]]
+        ] = {}
+
+    def _load_rows(self) -> list[sqlite3.Row]:
+        rows: list[sqlite3.Row] = []
+        cursor = self.conn.execute(
+            f"""SELECT {','.join(SIMILARITY_REBUILD_COLUMNS)} FROM photos
+                WHERE status='active' AND error=''"""
+        )
+        for batch in _fetch_batches(cursor):
+            rows.extend(batch)
+        return rows
+
+    def _row_quality(self, row: sqlite3.Row) -> float:
+        photo_id = int(row["id"])
+        if photo_id not in self.quality_scores:
+            self.quality_scores[photo_id] = quality_score(row, self.profile)
+        return self.quality_scores[photo_id]
+
+    def _row_structure(
+        self, row: sqlite3.Row
+    ) -> tuple[np.ndarray, float] | None:
+        photo_id = int(row["id"])
+        if photo_id not in self.structure_vectors:
+            self.structure_vectors[photo_id] = _structure_vector(
+                project_thumbnail_path(self.project, row["thumbnail"])
+            )
+        return self.structure_vectors[photo_id]
+
+    def _existing_exact_pair_keys(self) -> None:
+        if self.target_ids is None:
+            return
+        self.exact_pair_keys.update(
+            (int(row["a_id"]), int(row["b_id"]))
+            for row in self.conn.execute(
+                "SELECT a_id,b_id FROM similar_pairs WHERE kind='exact'"
+            )
+        )
+
+    def _exact_groups(self) -> dict[tuple[str, str], list[sqlite3.Row]]:
+        by_hash: dict[tuple[str, str], list[sqlite3.Row]] = {}
+        if not self.sim.get("exact_duplicates", True):
+            return by_hash
+        for row in self.rows:
+            _check_cancelled(self.cancel)
+            motion_hash = str(row["motion_sha256"] or "")
+            if not row["sha256"] or (
+                row["media_type"] == "motion_photo" and not motion_hash
+            ):
+                continue
+            identity = (str(row["sha256"]), motion_hash)
+            by_hash.setdefault(identity, []).append(row)
+            self.exact_identity_by_id[int(row["id"])] = identity
+        return by_hash
+
+    def _append_exact_pairs(
+        self,
+        pairs: list[SimilarityPair],
+        by_hash: dict[tuple[str, str], list[sqlite3.Row]],
+    ) -> None:
+        if self.target_ids is not None or not self.sim.get("exact_duplicates", True):
+            return
+        for group in by_hash.values():
+            _check_cancelled(self.cancel)
+            if len(group) < 2:
+                continue
+            best = max(group, key=self._row_quality)
+            for row in group:
+                if row["id"] == best["id"]:
+                    continue
+                key = tuple(sorted((best["id"], row["id"])))
+                self.exact_pair_keys.add(key)
+                pairs.append(
+                    SimilarityPair(
+                        key[0], key[1], 1.0, "exact", int(best["id"]), 0
+                    )
+                )
+
+    def _directory_groups(self) -> list[list[sqlite3.Row]]:
+        directories: dict[str, dict[tuple[str, str, str], sqlite3.Row]] = {}
+        for row in self.rows:
+            photo_id = int(row["id"])
+            directory = str(Path(row["relative_path"]).parent).casefold()
+            exact_identity = self.exact_identity_by_id.get(photo_id)
+            candidate_key = (
+                ("exact", exact_identity[0], exact_identity[1])
+                if exact_identity
+                else ("photo", str(photo_id), "")
+            )
+            candidates = directories.setdefault(directory, {})
+            current = candidates.get(candidate_key)
+            if current is None or self._row_quality(row) > self._row_quality(current):
+                candidates[candidate_key] = row
+        return [list(candidates.values()) for candidates in directories.values()]
+
+    def _retain_similar_edge(self, edge: SimilarityPair) -> None:
+        left, right, score = edge.a_id, edge.b_id, edge.score
+        for photo_id, other_id in ((left, right), (right, left)):
+            heap = self.similar_heaps.setdefault(photo_id, [])
+            item = (score, -other_id, left, right, edge)
+            if len(heap) < 8:
+                heapq.heappush(heap, item)
+            elif item > heap[0]:
+                heapq.heapreplace(heap, item)
+
+    def _is_target_pair(self, left: int, right: int) -> bool:
+        return self.target_ids is None or bool(
+            {left, right}.intersection(self.target_ids)
+        )
+
+    def _compare_pair(self, a: sqlite3.Row, b: sqlite3.Row) -> None:
+        a_id, b_id = int(a["id"]), int(b["id"])
+        if not self._is_target_pair(a_id, b_id):
+            return
+        if (
+            self.exact_identity_by_id.get(a_id) is not None
+            and self.exact_identity_by_id.get(a_id)
+            == self.exact_identity_by_id.get(b_id)
+        ):
+            return
+        aspect_a = self.derived[a_id]["aspect"]
+        aspect_b = self.derived[b_id]["aspect"]
+        if (
+            abs(aspect_a - aspect_b) / max(aspect_a, aspect_b)
+            > self.sim["aspect_tolerance"]
+        ):
+            return
+        ph = hamming(a["phash"], b["phash"])
+        dh = hamming(a["dhash"], b["dhash"])
+        key = tuple(sorted((a_id, b_id)))
+        if (
+            ph > self.sim["phash_max"]
+            or dh > self.sim["dhash_max"]
+            or key in self.exact_pair_keys
+        ):
+            return
+        structure = _structure_similarity(
+            self._row_structure(a), self._row_structure(b)
+        )
+        if structure < self.sim["structure_min"]:
+            return
+        recommended = a if self._row_quality(a) >= self._row_quality(b) else b
+        score = 0.45 * (1 - ph / 64) + 0.25 * (1 - dh / 64) + 0.30 * structure
+        self._retain_similar_edge(
+            SimilarityPair(
+                key[0],
+                key[1],
+                score,
+                "similar",
+                int(recommended["id"]),
+                int(self.sim.get("face_safe", True)),
+            )
+        )
+
+    def _compare_indexed_group(self, group: list[sqlite3.Row]) -> None:
+        index_field = (
+            "phash"
+            if self.sim["phash_max"] <= self.sim["dhash_max"]
+            else "dhash"
+        )
+        radius = self.sim[f"{index_field}_max"]
+        hashes = [str(row[index_field] or "") for row in group]
+        for left, right in hamming_candidate_pairs(
+            hashes, radius, max_neighbors=64
+        ):
+            _check_cancelled(self.cancel)
+            self._compare_pair(group[left], group[right])
+
+    def _photos_are_nearby(self, a: sqlite3.Row, b: sqlite3.Row) -> tuple[bool, int]:
+        derived_a = self.derived[int(a["id"])]
+        derived_b = self.derived[int(b["id"])]
+        seq_a = derived_a["sequence"]
+        seq_b = derived_b["sequence"]
+        seq_gap = abs(seq_b - seq_a) if seq_a >= 0 and seq_b >= 0 else 999999
+        ta, tb = derived_a["taken"], derived_b["taken"]
+        time_gap = (
+            abs(ta - tb) / 60 if ta is not None and tb is not None else None
+        )
+        nearby = seq_gap <= self.sim["sequence_gap"] or (
+            time_gap is not None and time_gap <= self.sim["time_window_minutes"]
+        )
+        return nearby, seq_gap
+
+    def _compare_sequential_group(self, group: list[sqlite3.Row]) -> None:
+        for index, left in enumerate(group):
+            for right in group[index + 1 :]:
+                _check_cancelled(self.cancel)
+                nearby, sequence_gap = self._photos_are_nearby(left, right)
+                if not nearby:
+                    if sequence_gap > self.sim["sequence_gap"]:
+                        break
+                    continue
+                self._compare_pair(left, right)
+
+    def _compare_directory(self, group: list[sqlite3.Row]) -> None:
+        self.structure_vectors.clear()
+        group.sort(
+            key=lambda row: (
+                self.derived[int(row["id"])]["sequence"], row["relative_path"]
+            )
+        )
+        if self.sim.get("allow_cross_time_high_confidence"):
+            self._compare_indexed_group(group)
+        else:
+            self._compare_sequential_group(group)
+
+    def _selected_similar_pairs(self) -> list[SimilarityPair]:
+        selected: dict[tuple[int, int], SimilarityPair] = {}
+        for heap in self.similar_heaps.values():
+            for item in heap:
+                edge = item[-1]
+                selected[(edge.a_id, edge.b_id)] = edge
+        return [selected[key] for key in sorted(selected)]
+
+    def plan(self) -> list[SimilarityPair]:
+        _check_cancelled(self.cancel)
+        pairs: list[SimilarityPair] = []
+        self._existing_exact_pair_keys()
+        exact_groups = self._exact_groups()
+        self._append_exact_pairs(pairs, exact_groups)
+        for group in self._directory_groups():
+            self._compare_directory(group)
+        pairs.extend(self._selected_similar_pairs())
+        _check_cancelled(self.cancel)
+        return pairs
+
 
 class Scanner:
     def __init__(
@@ -170,11 +503,11 @@ class Scanner:
         with self._lock:
             return dict(self.progress.get(project_id, {"stage": "idle", "done": True}))
 
-    def _analyze_photo(
+    def analyze_photo(
         self,
         path: Path,
         thumbnail: Path,
-        cancel: threading.Event,
+        cancel: threading.Event | None = None,
         stat: os.stat_result | None = None,
     ) -> dict[str, Any]:
         if self.analysis_runner is None:
@@ -182,7 +515,33 @@ class Scanner:
         try:
             return self.analysis_runner.analyze(path, thumbnail, cancel)
         except AnalysisCancelled as error:
-            raise ScanCancelled from error
+            if cancel is not None:
+                raise ScanCancelled from error
+            raise RuntimeError("图片分析服务已停止") from error
+
+    def _report_discovery_progress(
+        self,
+        project_id: str,
+        discovered_total: int,
+        photo_count: int,
+        video_count: int,
+        inaccessible_count: int,
+        current_directory: str,
+        last_progress: float,
+    ) -> float:
+        now = time.monotonic()
+        if now - last_progress < 0.2:
+            return last_progress
+        self._set(
+            project_id,
+            current=discovered_total,
+            discovered_total=discovered_total,
+            photo_count=photo_count,
+            video_count=video_count,
+            inaccessible_count=inaccessible_count,
+            current_directory=current_directory,
+        )
+        return now
 
     def _discover(self, project: Project, cancel: threading.Event) -> DiscoveryResult:
         stored = self.config.snapshot().get("projects", {}).get(project.project_id, {})
@@ -220,8 +579,18 @@ class Scanner:
             directories: list[Path] = []
             try:
                 with os.scandir(current_path) as entries:
-                    for entry in entries:
-                        _check_cancelled(cancel)
+                    for entry_index, entry in enumerate(entries, 1):
+                        if entry_index % DISCOVERY_PROGRESS_CHECK_INTERVAL == 0:
+                            _check_cancelled(cancel)
+                            last_progress = self._report_discovery_progress(
+                                project.project_id,
+                                discovered_total,
+                                len(photos),
+                                video_count,
+                                inaccessible_count,
+                                current_directory,
+                                last_progress,
+                            )
                         try:
                             if entry.is_symlink():
                                 continue
@@ -252,18 +621,7 @@ class Scanner:
                                 video_count += 1
                                 videos.append(path)
 
-                        now = time.monotonic()
-                        if now - last_progress >= 0.2:
-                            self._set(
-                                project.project_id,
-                                current=discovered_total,
-                                discovered_total=discovered_total,
-                                photo_count=len(photos),
-                                video_count=video_count,
-                                inaccessible_count=inaccessible_count,
-                                current_directory=current_directory,
-                            )
-                            last_progress = now
+                    _check_cancelled(cancel)
             except OSError:
                 inaccessible_count += 1
             pending.extend(reversed(directories))
@@ -409,204 +767,363 @@ class Scanner:
         _check_cancelled(cancel)
         self.reclassify(project, conn, profile, cancel)
 
+    @staticmethod
+    def _existing_photos(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
+        existing: dict[str, sqlite3.Row] = {}
+        cursor = conn.execute(
+            f"SELECT {','.join(SCAN_EXISTING_COLUMNS)} FROM photos"
+        )
+        for batch in _fetch_batches(cursor):
+            existing.update((str(row["relative_path"]), row) for row in batch)
+        return existing
+
+    @staticmethod
+    def _motion_storage_values(
+        project: Project, asset: MotionAsset | None
+    ) -> dict[str, Any]:
+        if asset is not None:
+            return asset.storage_values(project.root)
+        return {
+            "media_type": "image",
+            "motion_kind": "",
+            "motion_relative_path": "",
+            "motion_offset": 0,
+            "motion_length": 0,
+            "motion_size": 0,
+            "motion_mtime": 0,
+            "motion_asset_id": "",
+        }
+
+    @staticmethod
+    def _motion_state_matches(
+        old: sqlite3.Row | None, asset_values: dict[str, Any]
+    ) -> tuple[bool, bool]:
+        identity_same = bool(
+            old
+            and old["media_type"] == asset_values["media_type"]
+            and old["motion_kind"] == asset_values["motion_kind"]
+            and old["motion_relative_path"] == asset_values["motion_relative_path"]
+        )
+        unchanged = bool(
+            identity_same
+            and int(old["motion_offset"] or 0) == asset_values["motion_offset"]
+            and int(old["motion_length"] or 0) == asset_values["motion_length"]
+            and int(old["motion_size"] or 0) == asset_values["motion_size"]
+            and abs(float(old["motion_mtime"] or 0) - asset_values["motion_mtime"])
+            < 0.001
+        )
+        return identity_same, unchanged
+
+    @staticmethod
+    def _photo_is_current(
+        project: Project,
+        old: sqlite3.Row | None,
+        stat: os.stat_result | None,
+        motion_same: bool,
+    ) -> bool:
+        thumbnail = (
+            project_thumbnail_path(project, old["thumbnail"])
+            if old and old["thumbnail"]
+            else None
+        )
+        return bool(
+            old
+            and stat is not None
+            and old["size"] == stat.st_size
+            and abs(old["mtime"] - stat.st_mtime) < 0.001
+            and motion_same
+            and not old["error"]
+            and not old["motion_error"]
+            and thumbnail is not None
+            and thumbnail.is_file()
+            and (
+                old["media_type"] != "motion_photo"
+                or int(
+                    old["motion_still_time_ms"]
+                    if old["motion_still_time_ms"] is not None
+                    else -1
+                )
+                >= 0
+            )
+        )
+
+    @staticmethod
+    def _probe_motion_values(
+        path: Path,
+        asset: MotionAsset | None,
+        asset_values: dict[str, Any],
+        old: sqlite3.Row | None,
+        motion_same: bool,
+    ) -> dict[str, Any]:
+        motion_values = {
+            **asset_values,
+            "motion_error": "",
+            "motion_duration_ms": 0,
+            "motion_fps": 0,
+            "motion_frame_count": 0,
+            "motion_width": 0,
+            "motion_height": 0,
+            "motion_sha256": old["motion_sha256"] if old and motion_same else "",
+            "motion_still_time_ms": -1 if asset else 0,
+        }
+        if asset is None:
+            return motion_values
+        try:
+            motion_values.update(probe_motion(asset))
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            motion_values["motion_error"] = str(error)
+        if motion_values["motion_error"]:
+            return motion_values
+        try:
+            motion_values["motion_still_time_ms"] = locate_motion_still_time(
+                path,
+                asset,
+                int(motion_values["motion_duration_ms"]),
+                float(motion_values["motion_fps"]),
+            )
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            motion_values["motion_still_time_ms"] = 0
+        return motion_values
+
+    def _preserved_motion_cover(
+        self,
+        project: Project,
+        path: Path,
+        asset: MotionAsset | None,
+        old: sqlite3.Row | None,
+        motion_identity_same: bool,
+        motion_values: dict[str, Any],
+        thumbnail: Path,
+        stat: os.stat_result | None,
+        cancel: threading.Event,
+    ) -> tuple[dict[str, Any] | None, int, int]:
+        if not (
+            asset
+            and old
+            and motion_identity_same
+            and old["cover_source"] == "motion"
+            and not motion_values["motion_error"]
+        ):
+            return None, 0, 0
+        cover_time_ms = min(
+            int(old["cover_time_ms"] or 0),
+            max(0, int(motion_values["motion_duration_ms"]) - 1),
+        )
+        try:
+            motion_dir = project.motion_dir or project.project_dir / "motion"
+            video = ensure_motion_video(asset, motion_dir)
+            frame = motion_dir / (
+                f"{motion_fingerprint(asset)}.motion-cover-{cover_time_ms}.jpg"
+            )
+            extract_motion_frame(video, cover_time_ms, frame)
+            metrics = self.analyze_photo(frame, thumbnail, cancel)
+            source_stat = stat or path.stat()
+            metrics.update(
+                {
+                    "extension": path.suffix.lower(),
+                    "size": source_stat.st_size,
+                    "mtime": source_stat.st_mtime,
+                    "taken": old["taken"],
+                }
+            )
+            frame_index = round(
+                cover_time_ms * float(motion_values["motion_fps"]) / 1000
+            )
+            return metrics, cover_time_ms, frame_index
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            motion_values["motion_error"] = str(error)
+            return None, 0, 0
+
+    def _changed_photo_values(
+        self,
+        project: Project,
+        path: Path,
+        rel: str,
+        stat: os.stat_result | None,
+        old: sqlite3.Row | None,
+        asset: MotionAsset | None,
+        asset_values: dict[str, Any],
+        motion_identity_same: bool,
+        motion_same: bool,
+        profile: dict[str, Any],
+        cancel: threading.Event,
+    ) -> dict[str, Any]:
+        thumb_name = hashlib.sha1(rel.encode("utf-8")).hexdigest() + ".jpg"
+        thumbnail = project.thumb_dir / thumb_name
+        motion_values = self._probe_motion_values(
+            path, asset, asset_values, old, motion_same
+        )
+        metrics, cover_time_ms, cover_frame_index = self._preserved_motion_cover(
+            project,
+            path,
+            asset,
+            old,
+            motion_identity_same,
+            motion_values,
+            thumbnail,
+            stat,
+            cancel,
+        )
+        cover_source = "motion" if metrics is not None else "still"
+        if metrics is None:
+            metrics = self.analyze_photo(path, thumbnail, cancel, stat)
+        if metrics.get("thumbnail"):
+            metrics["thumbnail"] = project_thumbnail_storage_path(
+                metrics["thumbnail"]
+            )
+        values = {
+            "relative_path": rel,
+            **metrics,
+            **motion_values,
+            "cover_source": cover_source,
+            "cover_time_ms": cover_time_ms,
+            "cover_frame_index": cover_frame_index,
+            "cover_revision": int(old["cover_revision"] or 0) + 1 if old else 0,
+            "quality_score": 0,
+            "suggestion": "keep",
+            "reason": "",
+            "status": "active",
+            "analyzed_at": datetime.now().isoformat(timespec="microseconds"),
+            **empty_blink_values(),
+        }
+        values["quality_score"] = round(
+            max(0.0, min(1.0, quality_score(values, profile))) * 100, 1
+        )
+        values["suggestion"], values["reason"] = classify(values, profile)
+        return values
+
+    def _scan_photo(
+        self,
+        project_id: str,
+        project: Project,
+        conn: sqlite3.Connection,
+        profile: dict[str, Any],
+        path: Path,
+        asset: MotionAsset | None,
+        old: sqlite3.Row | None,
+        index: int,
+        unavailable_count: int,
+        cancel: threading.Event,
+    ) -> tuple[bool, int]:
+        rel = path.relative_to(project.root).as_posix()
+        unavailable_delta = 0
+        try:
+            stat = path.stat()
+        except (FileNotFoundError, NotADirectoryError):
+            self._set(
+                project_id,
+                current=index,
+                file=rel,
+                unavailable_count=unavailable_count + 1,
+            )
+            return False, 1
+        except OSError:
+            stat = None
+            unavailable_delta = 1
+        asset_values = self._motion_storage_values(project, asset)
+        motion_identity_same, motion_same = self._motion_state_matches(
+            old, asset_values
+        )
+        if self._photo_is_current(project, old, stat, motion_same):
+            if old is not None and old["status"] != "active":
+                conn.execute(
+                    "UPDATE photos SET status='active' WHERE id=?", (old["id"],)
+                )
+            self._set(project_id, current=index)
+            return True, unavailable_delta
+        values = self._changed_photo_values(
+            project,
+            path,
+            rel,
+            stat,
+            old,
+            asset,
+            asset_values,
+            motion_identity_same,
+            motion_same,
+            profile,
+            cancel,
+        )
+        if not path.is_file():
+            unavailable_delta += 1
+            self._set(
+                project_id,
+                current=index,
+                file=rel,
+                unavailable_count=unavailable_count + unavailable_delta,
+            )
+            return False, unavailable_delta
+        conn.execute(
+            PHOTO_UPSERT_SQL,
+            [values[column] for column in PHOTO_ANALYSIS_COLUMNS],
+        )
+        if index % 20 == 0:
+            conn.commit()
+        self._set(
+            project_id,
+            current=index,
+            file=rel,
+            unavailable_count=unavailable_count + unavailable_delta,
+        )
+        return True, unavailable_delta
+
+    def _scan_database(
+        self,
+        project_id: str,
+        project: Project,
+        conn: sqlite3.Connection,
+        profile: dict[str, Any],
+        files: list[Path],
+        motion_assets: dict[Path, MotionAsset],
+        cancel: threading.Event,
+    ) -> int:
+        existing = self._existing_photos(conn)
+        seen: set[str] = set()
+        unavailable_count = 0
+        for index, path in enumerate(files, 1):
+            _check_cancelled(cancel)
+            rel = path.relative_to(project.root).as_posix()
+            was_seen, unavailable_delta = self._scan_photo(
+                project_id,
+                project,
+                conn,
+                profile,
+                path,
+                motion_assets.get(path),
+                existing.get(rel),
+                index,
+                unavailable_count,
+                cancel,
+            )
+            unavailable_count += unavailable_delta
+            if was_seen:
+                seen.add(rel)
+        missing = [
+            (rel,)
+            for rel, row in existing.items()
+            if rel not in seen and row["status"] == "active"
+        ]
+        conn.executemany(
+            "UPDATE photos SET status='missing' WHERE relative_path=?", missing
+        )
+        conn.commit()
+        return unavailable_count
+
     def _run(self, project_id: str, cancel: threading.Event) -> None:
         try:
             project, profile, files, motion_assets = self._prepare_scan(
                 project_id, cancel
             )
             with closing(connect_db(project.db_path)) as conn:
-                existing = {row["relative_path"]: row for row in conn.execute("SELECT * FROM photos")}
-                seen: set[str] = set()
-                unavailable_count = 0
-                for index, path in enumerate(files, 1):
-                    _check_cancelled(cancel)
-                    rel = path.relative_to(project.root).as_posix()
-                    try:
-                        stat = path.stat()
-                    except (FileNotFoundError, NotADirectoryError):
-                        unavailable_count += 1
-                        self._set(
-                            project_id,
-                            current=index,
-                            file=rel,
-                            unavailable_count=unavailable_count,
-                        )
-                        continue
-                    except OSError:
-                        stat = None
-                        unavailable_count += 1
-                    seen.add(rel)
-                    old = existing.get(rel)
-                    asset = motion_assets.get(path)
-                    asset_values = asset.storage_values(project.root) if asset else {
-                        "media_type": "image", "motion_kind": "",
-                        "motion_relative_path": "", "motion_offset": 0,
-                        "motion_length": 0, "motion_size": 0, "motion_mtime": 0,
-                        "motion_asset_id": "",
-                    }
-                    motion_identity_same = bool(
-                        old
-                        and old["media_type"] == asset_values["media_type"]
-                        and old["motion_kind"] == asset_values["motion_kind"]
-                        and old["motion_relative_path"] == asset_values["motion_relative_path"]
-                    )
-                    motion_same = bool(
-                        motion_identity_same
-                        and int(old["motion_offset"] or 0) == asset_values["motion_offset"]
-                        and int(old["motion_length"] or 0) == asset_values["motion_length"]
-                        and int(old["motion_size"] or 0) == asset_values["motion_size"]
-                        and abs(float(old["motion_mtime"] or 0) - asset_values["motion_mtime"]) < 0.001
-                    )
-                    thumbnail = (
-                        project_thumbnail_path(project, old["thumbnail"])
-                        if old and old["thumbnail"]
-                        else None
-                    )
-                    if (
-                        old
-                        and stat is not None
-                        and old["size"] == stat.st_size
-                        and abs(old["mtime"] - stat.st_mtime) < 0.001
-                        and motion_same
-                        and not old["error"]
-                        and not old["motion_error"]
-                        and thumbnail is not None
-                        and thumbnail.is_file()
-                        and (
-                            old["media_type"] != "motion_photo"
-                            or int(
-                                old["motion_still_time_ms"]
-                                if old["motion_still_time_ms"] is not None
-                                else -1
-                            ) >= 0
-                        )
-                    ):
-                        if old["status"] != "active":
-                            conn.execute("UPDATE photos SET status='active' WHERE id=?", (old["id"],))
-                        self._set(project_id, current=index)
-                        continue
-                    thumb_name = hashlib.sha1(rel.encode("utf-8")).hexdigest() + ".jpg"
-                    motion_values = {
-                        **asset_values,
-                        "motion_error": "", "motion_duration_ms": 0,
-                        "motion_fps": 0, "motion_frame_count": 0,
-                        "motion_width": 0, "motion_height": 0,
-                        "motion_sha256": old["motion_sha256"] if old and motion_same else "",
-                        "motion_still_time_ms": -1 if asset else 0,
-                    }
-                    if asset:
-                        try:
-                            motion_values.update(probe_motion(asset))
-                        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
-                            motion_values["motion_error"] = str(error)
-                        if not motion_values["motion_error"]:
-                            try:
-                                motion_values["motion_still_time_ms"] = locate_motion_still_time(
-                                    path,
-                                    asset,
-                                    int(motion_values["motion_duration_ms"]),
-                                    float(motion_values["motion_fps"]),
-                                )
-                            except (OSError, RuntimeError, subprocess.SubprocessError):
-                                # The motion track remains playable even when a
-                                # damaged still cannot be matched to a frame.
-                                motion_values["motion_still_time_ms"] = 0
-                    cover_source = "still"
-                    cover_time_ms = 0
-                    cover_frame_index = 0
-                    metrics = None
-                    if (
-                        asset
-                        and old
-                        and motion_identity_same
-                        and old["cover_source"] == "motion"
-                        and not motion_values["motion_error"]
-                    ):
-                        cover_time_ms = min(
-                            int(old["cover_time_ms"] or 0),
-                            max(0, int(motion_values["motion_duration_ms"]) - 1),
-                        )
-                        try:
-                            motion_dir = project.motion_dir or project.project_dir / "motion"
-                            video = ensure_motion_video(asset, motion_dir)
-                            frame = motion_dir / (
-                                f"{motion_fingerprint(asset)}.motion-cover-{cover_time_ms}.jpg"
-                            )
-                            extract_motion_frame(video, cover_time_ms, frame)
-                            metrics = self._analyze_photo(
-                                frame,
-                                project.thumb_dir / thumb_name,
-                                cancel,
-                            )
-                            metrics.update({
-                                "extension": path.suffix.lower(), "size": stat.st_size,
-                                "mtime": stat.st_mtime, "taken": old["taken"],
-                            })
-                            cover_source = "motion"
-                            cover_frame_index = round(
-                                cover_time_ms * float(motion_values["motion_fps"]) / 1000
-                            )
-                        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
-                            motion_values["motion_error"] = str(error)
-                    if metrics is None:
-                        metrics = self._analyze_photo(
-                            path,
-                            project.thumb_dir / thumb_name,
-                            cancel,
-                            stat,
-                        )
-                    if not path.is_file():
-                        seen.discard(rel)
-                        unavailable_count += 1
-                        self._set(
-                            project_id,
-                            current=index,
-                            file=rel,
-                            unavailable_count=unavailable_count,
-                        )
-                        continue
-                    if metrics.get("thumbnail"):
-                        metrics["thumbnail"] = project_thumbnail_storage_path(
-                            metrics["thumbnail"]
-                        )
-                    values = {
-                        "relative_path": rel, **metrics, **motion_values,
-                        "cover_source": cover_source,
-                        "cover_time_ms": cover_time_ms,
-                        "cover_frame_index": cover_frame_index,
-                        "cover_revision": int(old["cover_revision"] or 0) + 1 if old else 0,
-                        "quality_score": 0,
-                        "suggestion": "keep", "reason": "",
-                        "status": "active",
-                        "analyzed_at": datetime.now().isoformat(timespec="microseconds"),
-                        **empty_blink_values(),
-                    }
-                    values["quality_score"] = round(
-                        max(0.0, min(1.0, quality_score(values, profile))) * 100, 1
-                    )
-                    values["suggestion"], values["reason"] = classify(values, profile)
-                    conn.execute(
-                        PHOTO_UPSERT_SQL,
-                        [values[column] for column in PHOTO_ANALYSIS_COLUMNS],
-                    )
-                    if index % 20 == 0:
-                        conn.commit()
-                    self._set(
-                        project_id,
-                        current=index,
-                        file=rel,
-                        unavailable_count=unavailable_count,
-                    )
-                missing = [
-                    (rel,)
-                    for rel, row in existing.items()
-                    if rel not in seen and row["status"] == "active"
-                ]
-                conn.executemany(
-                    "UPDATE photos SET status='missing' WHERE relative_path=?",
-                    missing,
+                unavailable_count = self._scan_database(
+                    project_id,
+                    project,
+                    conn,
+                    profile,
+                    files,
+                    motion_assets,
+                    cancel,
                 )
-                conn.commit()
                 unavailable_count = self._confirm_exact_duplicates(
                     project_id,
                     project,
@@ -634,15 +1151,23 @@ class Scanner:
         conn: sqlite3.Connection,
         cancel: threading.Event,
     ) -> int:
-        sizes = conn.execute(
-            "SELECT size,COUNT(*) c FROM photos WHERE status='active' AND error='' GROUP BY size HAVING c>1"
-        ).fetchall()
         updates: list[tuple[str, int]] = []
         motion_updates: list[tuple[str, int]] = []
         missing_ids: list[tuple[int]] = []
         unavailable = 0
-        for size_row in sizes:
-            for row in conn.execute("SELECT * FROM photos WHERE status='active' AND size=?", (size_row["size"],)):
+        projected = ",".join(f"photos.{column}" for column in EXACT_HASH_COLUMNS)
+        candidates = conn.execute(
+            f"""SELECT {projected} FROM photos
+                JOIN (
+                  SELECT size FROM photos
+                  WHERE status='active' AND error=''
+                  GROUP BY size HAVING COUNT(*)>1
+                ) duplicate_sizes ON duplicate_sizes.size=photos.size
+                WHERE photos.status='active'
+                ORDER BY photos.size,photos.id"""
+        )
+        for batch in _fetch_batches(candidates):
+            for row in batch:
                 _check_cancelled(cancel)
                 try:
                     path = safe_relative_path(project.root, row["relative_path"])
@@ -687,11 +1212,13 @@ class Scanner:
                         motion_updates.append((motion_digest.hexdigest(), int(row["id"])))
                     except (OSError, ValueError):
                         unavailable += 1
-        conn.executemany("UPDATE photos SET sha256=? WHERE id=?", updates)
-        conn.executemany(
+        _batched_update(conn, "UPDATE photos SET sha256=? WHERE id=?", updates)
+        _batched_update(
+            conn,
             "UPDATE photos SET motion_sha256=? WHERE id=?", motion_updates
         )
-        conn.executemany(
+        _batched_update(
+            conn,
             "UPDATE photos SET status='missing',sha256='' WHERE id=?",
             missing_ids,
         )
@@ -707,21 +1234,43 @@ class Scanner:
         commit: bool = True,
         photo_ids: set[int] | None = None,
     ) -> None:
-        active_rows = conn.execute(
-            "SELECT * FROM photos WHERE status='active'"
-        ).fetchall()
-        percentiles = classification_percentiles(active_rows, profile)
-        if photo_ids is not None and profile["quality"].get("threshold_mode") != "percentile":
-            rows = [row for row in active_rows if int(row["id"]) in photo_ids]
+        percentile_mode = profile["quality"].get("threshold_mode") == "percentile"
+        percentiles = (
+            classification_percentiles(
+                conn.execute(
+                    "SELECT sharpness FROM photos WHERE status='active'"
+                ),
+                profile,
+            )
+            if percentile_mode
+            else None
+        )
+        selected_ids = None if percentile_mode else photo_ids
+        if selected_ids == set():
+            return
+        queries: list[tuple[str, list[int]]] = []
+        if selected_ids is None:
+            queries.append(("status='active'", []))
         else:
-            rows = active_rows
+            ordered_ids = sorted(int(photo_id) for photo_id in selected_ids)
+            for offset in range(0, len(ordered_ids), DATABASE_BATCH_SIZE):
+                chunk = ordered_ids[offset : offset + DATABASE_BATCH_SIZE]
+                placeholders = ",".join("?" for _ in chunk)
+                queries.append((f"status='active' AND id IN ({placeholders})", chunk))
         updates: list[tuple[str, str, float, int]] = []
-        for row in rows:
-            _check_cancelled(cancel)
-            suggestion, reason = classify(row, profile, percentiles)
-            score = round(max(0.0, min(1.0, quality_score(row, profile))) * 100, 1)
-            updates.append((suggestion, reason, score, int(row["id"])))
-        conn.executemany(
+        columns = ",".join(CLASSIFICATION_COLUMNS)
+        for where, params in queries:
+            cursor = conn.execute(f"SELECT {columns} FROM photos WHERE {where}", params)
+            for batch in _fetch_batches(cursor):
+                for row in batch:
+                    _check_cancelled(cancel)
+                    suggestion, reason = classify(row, profile, percentiles)
+                    score = round(
+                        max(0.0, min(1.0, quality_score(row, profile))) * 100, 1
+                    )
+                    updates.append((suggestion, reason, score, int(row["id"])))
+        _batched_update(
+            conn,
             "UPDATE photos SET suggestion=?,reason=?,quality_score=? WHERE id=?",
             updates,
         )
@@ -849,6 +1398,21 @@ class Scanner:
             conn.commit()
         return analyzed
 
+    def plan_similarity_pairs(
+        self,
+        project: Project,
+        conn: sqlite3.Connection,
+        profile: dict[str, Any],
+        cancel: threading.Event | None = None,
+        photo_ids: set[int] | None = None,
+    ) -> list[SimilarityPair]:
+        target_ids = None if photo_ids is None else {int(value) for value in photo_ids}
+        if target_ids == set():
+            return []
+        return _SimilarityPlanner(
+            project, conn, profile, cancel, target_ids
+        ).plan()
+
     def rebuild_similarity(
         self,
         project: Project,
@@ -858,200 +1422,17 @@ class Scanner:
         commit: bool = True,
         photo_ids: set[int] | None = None,
     ) -> None:
-        _check_cancelled(cancel)
-        rows = conn.execute("SELECT * FROM photos WHERE status='active' AND error=''").fetchall()
-        sim = profile["similarity"]
-        derived = {
-            int(row["id"]): {
-                "sequence": filename_sequence(Path(row["relative_path"]).name),
-                "taken": parse_taken(row["taken"]),
-                "aspect": row["width"] / max(1, row["height"]),
-            }
-            for row in rows
-        }
-        quality_scores: dict[int, float] = {}
-        structure_vectors: dict[int, tuple[np.ndarray, float] | None] = {}
-
-        def row_quality(row: sqlite3.Row) -> float:
-            photo_id = int(row["id"])
-            if photo_id not in quality_scores:
-                quality_scores[photo_id] = quality_score(row, profile)
-            return quality_scores[photo_id]
-
-        def row_structure(row: sqlite3.Row) -> tuple[np.ndarray, float] | None:
-            photo_id = int(row["id"])
-            if photo_id not in structure_vectors:
-                structure_vectors[photo_id] = _structure_vector(
-                    project_thumbnail_path(project, row["thumbnail"])
-                )
-            return structure_vectors[photo_id]
-
         target_ids = None if photo_ids is None else {int(value) for value in photo_ids}
         if target_ids == set():
             return
-        pairs: list[tuple[int, int, float, str, int, int]] = []
-        exact_pair_keys: set[tuple[int, int]] = set()
-        if target_ids is not None:
-            exact_pair_keys.update(
-                (int(row["a_id"]), int(row["b_id"]))
-                for row in conn.execute(
-                    "SELECT a_id,b_id FROM similar_pairs WHERE kind='exact'"
-                )
-            )
-        exact_enabled = bool(sim.get("exact_duplicates", True))
-        by_hash: dict[tuple[str, str], list[sqlite3.Row]] = {}
-        exact_identity_by_id: dict[int, tuple[str, str]] = {}
-        if exact_enabled:
-            for row in rows:
-                _check_cancelled(cancel)
-                motion_hash = str(row["motion_sha256"] or "")
-                if row["sha256"] and (
-                    row["media_type"] != "motion_photo" or motion_hash
-                ):
-                    identity = (str(row["sha256"]), motion_hash)
-                    by_hash.setdefault(identity, []).append(row)
-                    exact_identity_by_id[int(row["id"])] = identity
+        pairs = self.plan_similarity_pairs(
+            project,
+            conn,
+            profile,
+            cancel,
+            target_ids,
+        )
 
-        if target_ids is None and exact_enabled:
-            for group in by_hash.values():
-                _check_cancelled(cancel)
-                if len(group) < 2:
-                    continue
-                best = max(group, key=row_quality)
-                for row in group:
-                    if row["id"] == best["id"]:
-                        continue
-                    key = tuple(sorted((best["id"], row["id"])))
-                    exact_pair_keys.add(key)
-                    pairs.append((key[0], key[1], 1.0, "exact", best["id"], 0))
-
-        # Only one byte-identical photo per directory participates in visual
-        # matching. Exact edges still connect copies across all directories.
-        directory_candidates: dict[
-            str, dict[tuple[str, str, str], sqlite3.Row]
-        ] = {}
-        for row in rows:
-            photo_id = int(row["id"])
-            directory = str(Path(row["relative_path"]).parent).casefold()
-            exact_identity = exact_identity_by_id.get(photo_id)
-            candidate_key = (
-                "exact",
-                exact_identity[0],
-                exact_identity[1],
-            ) if exact_identity else ("photo", str(photo_id), "")
-            candidates = directory_candidates.setdefault(directory, {})
-            current = candidates.get(candidate_key)
-            if current is None or row_quality(row) > row_quality(current):
-                candidates[candidate_key] = row
-        by_dir = [list(candidates.values()) for candidates in directory_candidates.values()]
-
-        similar_heaps: dict[
-            int,
-            list[
-                tuple[
-                    float,
-                    int,
-                    int,
-                    int,
-                    tuple[int, int, float, str, int, int],
-                ]
-            ],
-        ] = {}
-
-        def retain_similar_edge(
-            edge: tuple[int, int, float, str, int, int]
-        ) -> None:
-            left, right, score = edge[0], edge[1], edge[2]
-            for photo_id, other_id in ((left, right), (right, left)):
-                heap = similar_heaps.setdefault(photo_id, [])
-                item = (score, -other_id, left, right, edge)
-                if len(heap) < 8:
-                    heapq.heappush(heap, item)
-                elif item > heap[0]:
-                    heapq.heapreplace(heap, item)
-
-        def compare_pair(a: sqlite3.Row, b: sqlite3.Row) -> None:
-            a_id, b_id = int(a["id"]), int(b["id"])
-            if target_ids is not None and not {a_id, b_id}.intersection(target_ids):
-                return
-            if (
-                exact_identity_by_id.get(a_id) is not None
-                and exact_identity_by_id.get(a_id) == exact_identity_by_id.get(b_id)
-            ):
-                return
-            aspect_a = derived[a_id]["aspect"]
-            aspect_b = derived[b_id]["aspect"]
-            if abs(aspect_a - aspect_b) / max(aspect_a, aspect_b) > sim["aspect_tolerance"]:
-                return
-            ph = hamming(a["phash"], b["phash"])
-            dh = hamming(a["dhash"], b["dhash"])
-            if ph > sim["phash_max"] or dh > sim["dhash_max"]:
-                return
-            key = tuple(sorted((a_id, b_id)))
-            if key in exact_pair_keys:
-                return
-            structure = _structure_similarity(row_structure(a), row_structure(b))
-            if structure < sim["structure_min"]:
-                return
-            recommended = a if row_quality(a) >= row_quality(b) else b
-            score = 0.45 * (1 - ph / 64) + 0.25 * (1 - dh / 64) + 0.30 * structure
-            retain_similar_edge(
-                (
-                    key[0],
-                    key[1],
-                    score,
-                    "similar",
-                    int(recommended["id"]),
-                    int(sim.get("face_safe", True)),
-                )
-            )
-
-        for group in by_dir:
-            structure_vectors.clear()
-            group.sort(
-                key=lambda row: (
-                    derived[int(row["id"])]["sequence"], row["relative_path"]
-                )
-            )
-            if sim.get("allow_cross_time_high_confidence"):
-                index_field = (
-                    "phash"
-                    if sim["phash_max"] <= sim["dhash_max"]
-                    else "dhash"
-                )
-                radius = sim[f"{index_field}_max"]
-                hashes = [str(row[index_field] or "") for row in group]
-                for left, right in hamming_candidate_pairs(
-                    hashes, radius, max_neighbors=64
-                ):
-                    _check_cancelled(cancel)
-                    compare_pair(group[left], group[right])
-                continue
-            for i, a in enumerate(group):
-                for b in group[i + 1 :]:
-                    _check_cancelled(cancel)
-                    derived_a = derived[int(a["id"])]
-                    derived_b = derived[int(b["id"])]
-                    seq_a = derived_a["sequence"]
-                    seq_b = derived_b["sequence"]
-                    seq_gap = abs(seq_b - seq_a) if seq_a >= 0 and seq_b >= 0 else 999999
-                    ta, tb = derived_a["taken"], derived_b["taken"]
-                    time_gap = abs(ta - tb) / 60 if ta is not None and tb is not None else None
-                    nearby = seq_gap <= sim["sequence_gap"] or (time_gap is not None and time_gap <= sim["time_window_minutes"])
-                    if not nearby and not sim.get("allow_cross_time_high_confidence"):
-                        if seq_gap > sim["sequence_gap"]:
-                            break
-                        continue
-                    compare_pair(a, b)
-        selected_similar: dict[
-            tuple[int, int], tuple[int, int, float, str, int, int]
-        ] = {}
-        for heap in similar_heaps.values():
-            for item in heap:
-                edge = item[-1]
-                selected_similar[(edge[0], edge[1])] = edge
-        pairs.extend(selected_similar[key] for key in sorted(selected_similar))
-        _check_cancelled(cancel)
         def replace_pairs() -> None:
             if target_ids is None:
                 conn.execute("DELETE FROM similar_pairs")

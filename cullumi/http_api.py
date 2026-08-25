@@ -6,7 +6,6 @@ import os
 import re
 import secrets
 import stat
-import tempfile
 import urllib.parse
 import webbrowser
 from contextlib import closing
@@ -16,22 +15,25 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .analysis_worker import PhotoAnalysisRunner
 from .classification import project_photo_counts
 from .config import ConfigStore
 from .face_analysis import FaceAnalyzer
 from .media import (
     DISPLAY_PREVIEW_EXTENSIONS,
-    analyze_photo,
     ensure_display_preview,
 )
 from .motion import (
     ensure_motion_video,
     extract_motion_frame,
-    locate_motion_still_time,
     motion_asset_from_row,
     motion_fingerprint,
 )
-from .motion_cover_service import update_motion_cover
+from .motion_cover_service import (
+    locate_motion_cover,
+    recommend_motion_cover,
+    update_motion_cover,
+)
 from .native_dialogs import choose_csv, choose_directory, choose_save_csv
 from .photo_query_service import PhotoQueryService
 from .project_store import (
@@ -48,7 +50,7 @@ from .settings_service import (
     save_profile,
     save_settings,
 )
-from .similarity import SimilarityGroupCache, quality_score
+from .similarity import SimilarityGroupCache
 from .updates import RELEASES_PAGE_URL, check_for_update, download_release_asset
 from .workflows import (
     apply_quarantine,
@@ -125,8 +127,15 @@ class ApplicationContext:
     web_root: Path
     face_analyzer: FaceAnalyzer | None = None
     photo_queries: PhotoQueryService | None = None
+    analysis_runner: PhotoAnalysisRunner | None = None
 
     def __post_init__(self) -> None:
+        runner = self.analysis_runner or getattr(
+            self.scanner, "analysis_runner", None
+        )
+        if runner is not None:
+            self.scanner.analysis_runner = runner
+            object.__setattr__(self, "analysis_runner", runner)
         if self.photo_queries is None:
             object.__setattr__(
                 self,
@@ -148,6 +157,7 @@ def configure(
     token: str | None = None,
     web_root: Path | None = None,
     face_analyzer: FaceAnalyzer | None = None,
+    analysis_runner: PhotoAnalysisRunner | None = None,
 ) -> ApplicationContext:
     """Install an explicit dependency context for the HTTP application.
 
@@ -171,6 +181,8 @@ def configure(
             token,
             web_root,
             face_analyzer,
+            None,
+            analysis_runner,
         )
     APPLICATION = context
     # Retain these aliases for older embedders while request handling uses the
@@ -624,33 +636,9 @@ class Handler(BaseHTTPRequestHandler):
     def api_motion_locate(self, body: dict[str, Any]) -> None:
         pid = str(body["project_id"])
         photo_id = int(body["photo_id"])
-        project = self.manager.from_id(pid)
-        with self.manager.data_operation(pid), self.scanner.project_operation(
-            pid, "定位动态照片封面"
-        ):
-            with closing(connect_db(project.db_path)) as conn:
-                row = conn.execute(
-                    "SELECT * FROM photos WHERE id=? AND status='active'", (photo_id,)
-                ).fetchone()
-                if not row or row["media_type"] != "motion_photo":
-                    raise ValueError("动态照片不存在")
-                still_time_ms = int(row["motion_still_time_ms"] or 0)
-                if still_time_ms < 0:
-                    photo = safe_relative_path(
-                        project.root, row["relative_path"], "照片路径"
-                    )
-                    asset = motion_asset_from_row(project.root, row)
-                    still_time_ms = locate_motion_still_time(
-                        photo,
-                        asset,
-                        int(row["motion_duration_ms"] or 0),
-                        float(row["motion_fps"] or 0),
-                    )
-                    conn.execute(
-                        "UPDATE photos SET motion_still_time_ms=? WHERE id=?",
-                        (still_time_ms, photo_id),
-                    )
-                    conn.commit()
+        still_time_ms = locate_motion_cover(
+            self.manager, self.scanner, pid, photo_id
+        )
         self._send_json({"still_time_ms": max(0, still_time_ms)})
 
     def api_motion_cover(self, body: dict[str, Any]) -> None:
@@ -682,43 +670,11 @@ class Handler(BaseHTTPRequestHandler):
     def api_motion_recommend(self, body: dict[str, Any]) -> None:
         pid = str(body["project_id"])
         photo_id = int(body["photo_id"])
-        project = self.manager.from_id(pid)
-        profile = self.config.get_profile(project.profile_id)
-        with closing(connect_db(project.db_path)) as conn:
-            row = conn.execute(
-                "SELECT * FROM photos WHERE id=? AND status='active'", (photo_id,)
-            ).fetchone()
-        if not row or row["media_type"] != "motion_photo":
-            raise ValueError("动态照片不存在")
-        duration = int(row["motion_duration_ms"] or 0)
-        if duration <= 0:
-            raise ValueError("动态照片时长无效")
-        asset = motion_asset_from_row(project.root, row)
-        motion_dir = project.motion_dir or project.project_dir / "motion"
-        video = ensure_motion_video(asset, motion_dir)
-        count = min(15, max(2, int(row["motion_frame_count"] or 2)))
-        times = {round(index * max(0, duration - 1) / (count - 1)) for index in range(count)}
-        if row["cover_source"] == "motion":
-            times.add(int(row["cover_time_ms"] or 0))
-        candidates = []
-        with tempfile.TemporaryDirectory() as temporary:
-            temp_root = Path(temporary)
-            for index, time_ms in enumerate(sorted(times)):
-                frame = temp_root / f"frame-{index}.jpg"
-                thumb = temp_root / f"thumb-{index}.jpg"
-                extract_motion_frame(video, time_ms, frame)
-                metrics = analyze_photo(frame, thumb)
-                metrics.update({"cover_source": "motion", "size": row["size"]})
-                score = round(
-                    max(0.0, min(1.0, quality_score(metrics, profile))) * 100, 1
-                )
-                candidates.append({
-                    "time_ms": time_ms,
-                    "frame_index": round(time_ms * float(row["motion_fps"] or 0) / 1000),
-                    "quality_score": score,
-                })
-        recommended = max(candidates, key=lambda item: (item["quality_score"], -item["time_ms"]))
-        self._send_json({"recommended": recommended, "candidates": candidates})
+        self._send_json(
+            recommend_motion_cover(
+                self.config, self.manager, self.scanner, pid, photo_id
+            )
+        )
 
     def api_quarantine_preview(self) -> None:
         pid = self._query().get("project_id", [""])[0]

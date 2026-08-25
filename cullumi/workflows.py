@@ -5,8 +5,10 @@ import io
 import json
 import re
 import shutil
+import sqlite3
 import uuid
 from contextlib import closing
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -245,166 +247,325 @@ def apply_quarantine(project: Project) -> dict[str, Any]:
     return {"batch_id": batch_id, "moved": len(moved), "skipped": len(manifest) - len(moved)}
 
 
+@dataclass(frozen=True)
+class _RestorePaths:
+    source: Path | None
+    destination: Path
+    recorded_restore: Path | None
+    companion_source: Path | None
+    companion_destination: Path | None
+    companion_restore: Path | None
+
+
+def _load_restore_manifest(
+    project: Project, batch_root: Path, stored_path: str
+) -> tuple[Path, list[dict[str, Any]]]:
+    raw_path = Path(stored_path)
+    manifest_path = (
+        raw_path.resolve()
+        if raw_path.is_absolute()
+        else safe_relative_path(project.root, str(raw_path), "清单路径")
+    )
+    if manifest_path.name != "manifest.json" or not is_within(
+        manifest_path, batch_root
+    ):
+        raise ValueError("隔离清单路径无效")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, list) or any(
+        not isinstance(item, dict) for item in manifest
+    ):
+        raise ValueError("隔离清单格式无效")
+    return manifest_path, manifest
+
+
+def _restore_paths(
+    project: Project, batch_root: Path, item: dict[str, Any]
+) -> _RestorePaths:
+    destination = safe_relative_path(
+        project.root, item.get("relative_path", ""), "恢复目标路径"
+    )
+    source = None
+    if item.get("quarantine_path"):
+        source = safe_relative_path(
+            project.root, item["quarantine_path"], "隔离文件路径"
+        )
+        if not is_within(source, batch_root):
+            raise ValueError("隔离文件路径超出当前批次")
+    recorded_restore = (
+        safe_relative_path(
+            project.root, item["restore_path"], "已恢复文件路径"
+        )
+        if item.get("restore_path")
+        else None
+    )
+    companion_destination = (
+        safe_relative_path(
+            project.root,
+            item["companion_relative_path"],
+            "动态照片恢复目标路径",
+        )
+        if item.get("companion_relative_path")
+        else None
+    )
+    companion_source = None
+    if item.get("companion_quarantine_path"):
+        companion_source = safe_relative_path(
+            project.root,
+            item["companion_quarantine_path"],
+            "动态照片隔离文件路径",
+        )
+        if not is_within(companion_source, batch_root):
+            raise ValueError("动态照片隔离文件路径超出当前批次")
+    companion_restore = (
+        safe_relative_path(
+            project.root,
+            item["companion_restore_path"],
+            "动态照片已恢复文件路径",
+        )
+        if item.get("companion_restore_path")
+        else None
+    )
+    return _RestorePaths(
+        source,
+        destination,
+        recorded_restore,
+        companion_source,
+        companion_destination,
+        companion_restore,
+    )
+
+
+def _conflict_suffix() -> str:
+    return f".restored-{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
+
+
+def _renamed_restore_target(path: Path, suffix: str) -> Path:
+    return path.with_name(path.stem + suffix + path.suffix)
+
+
+def _prepare_restore_targets(
+    paths: _RestorePaths, status: str
+) -> tuple[_RestorePaths, int]:
+    if status == "restoring" and paths.recorded_restore is not None:
+        resumed = replace(
+            paths,
+            destination=paths.recorded_restore,
+            companion_destination=(
+                paths.companion_restore or paths.companion_destination
+            ),
+        )
+        return _resolve_resume_conflicts(resumed)
+    primary_conflict = paths.destination.exists()
+    companion_conflict = bool(
+        paths.companion_destination is not None
+        and paths.companion_destination.exists()
+    )
+    conflicts = int(primary_conflict) + int(companion_conflict)
+    if not conflicts:
+        return paths, 0
+    suffix = _conflict_suffix()
+    return (
+        replace(
+            paths,
+            destination=_renamed_restore_target(paths.destination, suffix),
+            companion_destination=(
+                _renamed_restore_target(paths.companion_destination, suffix)
+                if paths.companion_destination is not None
+                else None
+            ),
+        ),
+        conflicts,
+    )
+
+
+def _resolve_resume_conflicts(paths: _RestorePaths) -> tuple[_RestorePaths, int]:
+    primary_conflict = bool(
+        paths.source and paths.source.exists() and paths.destination.exists()
+    )
+    companion_conflict = bool(
+        paths.companion_source
+        and paths.companion_source.exists()
+        and paths.companion_destination
+        and paths.companion_destination.exists()
+    )
+    conflicts = int(primary_conflict) + int(companion_conflict)
+    if not conflicts:
+        return paths, 0
+    suffix = _conflict_suffix()
+    return (
+        replace(
+            paths,
+            destination=(
+                _renamed_restore_target(paths.destination, suffix)
+                if primary_conflict
+                else paths.destination
+            ),
+            companion_destination=(
+                _renamed_restore_target(paths.companion_destination, suffix)
+                if companion_conflict and paths.companion_destination is not None
+                else paths.companion_destination
+            ),
+        ),
+        conflicts,
+    )
+
+
+def _restore_asset_pairs(paths: _RestorePaths) -> list[tuple[Path, Path]]:
+    pairs: list[tuple[Path, Path]] = []
+    if paths.source is not None:
+        pairs.append((paths.source, paths.destination))
+    if paths.companion_source is not None and paths.companion_destination is not None:
+        pairs.append((paths.companion_source, paths.companion_destination))
+    return pairs
+
+
+def _restore_assets_available(paths: _RestorePaths) -> bool:
+    pairs = _restore_asset_pairs(paths)
+    return bool(pairs) and all(source.exists() or target.exists() for source, target in pairs)
+
+
+def _record_restoring(
+    project: Project,
+    manifest_path: Path,
+    manifest: list[dict[str, Any]],
+    item: dict[str, Any],
+    paths: _RestorePaths,
+) -> None:
+    item["status"] = "restoring"
+    item["restore_path"] = paths.destination.relative_to(
+        project.root.resolve()
+    ).as_posix()
+    if paths.companion_destination is not None:
+        paths.companion_destination.parent.mkdir(parents=True, exist_ok=True)
+        item["companion_restore_path"] = paths.companion_destination.relative_to(
+            project.root.resolve()
+        ).as_posix()
+    paths.destination.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(manifest_path, manifest)
+
+
+def _move_restore_assets(paths: _RestorePaths) -> None:
+    moved: list[tuple[Path, Path]] = []
+    try:
+        for source, destination in _restore_asset_pairs(paths):
+            if source.exists():
+                if destination.exists():
+                    raise FileExistsError(f"恢复目标已存在：{destination}")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(source), str(destination))
+            elif not destination.exists():
+                raise FileNotFoundError(f"隔离文件不存在：{source}")
+            moved.append((source, destination))
+    except Exception:
+        for source, destination in reversed(moved):
+            if destination.exists() and not source.exists():
+                source.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(destination), str(source))
+        raise
+
+
+def _update_restored_photo(
+    project: Project,
+    conn: sqlite3.Connection,
+    item: dict[str, Any],
+    paths: _RestorePaths,
+) -> None:
+    target_rel = paths.destination.relative_to(project.root.resolve()).as_posix()
+    companion_rel = (
+        paths.companion_destination.relative_to(project.root.resolve()).as_posix()
+        if paths.companion_destination is not None
+        else ""
+    )
+    if item.get("photo_id"):
+        conn.execute(
+            """UPDATE photos SET status='active',relative_path=?,
+                      motion_relative_path=CASE WHEN ?<>'' THEN ? ELSE motion_relative_path END
+                 WHERE id=?""",
+            (target_rel, companion_rel, companion_rel, int(item["photo_id"])),
+        )
+    else:
+        conn.execute(
+            "UPDATE photos SET status='active',relative_path=? WHERE relative_path=?",
+            (target_rel, item["relative_path"]),
+        )
+    conn.commit()
+
+
+def _restore_manifest_item(
+    project: Project,
+    conn: sqlite3.Connection,
+    manifest_path: Path,
+    manifest: list[dict[str, Any]],
+    item: dict[str, Any],
+    paths: _RestorePaths,
+) -> tuple[int, int, int]:
+    status = str(item.get("status") or "")
+    if status == "restored":
+        if paths.recorded_restore and paths.recorded_restore.exists():
+            restored_paths = replace(
+                paths,
+                destination=paths.recorded_restore,
+                companion_destination=(
+                    paths.companion_restore
+                    if paths.companion_restore
+                    and paths.companion_restore.exists()
+                    else None
+                ),
+            )
+            _update_restored_photo(project, conn, item, restored_paths)
+        return 0, 0, 0
+    if status not in {"moved", "pending", "restoring"}:
+        return 0, 0, 0
+    if status == "restoring" and paths.recorded_restore is None:
+        return 0, 0, 0
+    targets, conflicts = _prepare_restore_targets(paths, status)
+    if not _restore_assets_available(targets):
+        return 0, conflicts, 1
+    _record_restoring(project, manifest_path, manifest, item, targets)
+    _move_restore_assets(targets)
+    item["status"] = "restored"
+    item.pop("error", None)
+    atomic_write_json(manifest_path, manifest)
+    _update_restored_photo(project, conn, item, targets)
+    return 1, conflicts, 0
+
+
+def _restore_files_remain(
+    manifest: list[dict[str, Any]], paths: list[_RestorePaths]
+) -> bool:
+    pending_statuses = {"moved", "pending", "restoring"}
+    for item, item_paths in zip(manifest, paths):
+        if item.get("status") not in pending_statuses:
+            continue
+        if any(source.exists() for source, _target in _restore_asset_pairs(item_paths)):
+            return True
+    return False
+
+
 def restore_batch(project: Project, batch_id: str) -> dict[str, Any]:
     batch_root = _quarantine_batch_root(project, batch_id)
     with closing(connect_db(project.db_path)) as conn:
         batch = conn.execute("SELECT * FROM quarantine_batches WHERE id=?", (batch_id,)).fetchone()
         if not batch:
             raise ValueError("隔离批次不存在")
-        raw_manifest_path = Path(batch["manifest_path"])
-        manifest_path = (
-            raw_manifest_path.resolve()
-            if raw_manifest_path.is_absolute()
-            else safe_relative_path(project.root, str(raw_manifest_path), "清单路径")
+        manifest_path, manifest = _load_restore_manifest(
+            project, batch_root, str(batch["manifest_path"])
         )
-        if manifest_path.name != "manifest.json" or not is_within(manifest_path, batch_root):
-            raise ValueError("隔离清单路径无效")
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if not isinstance(manifest, list):
-            raise ValueError("隔离清单格式无效")
-
-        paths: dict[int, tuple[Path | None, Path, Path | None]] = {}
-        companion_paths: dict[int, tuple[Path | None, Path | None, Path | None]] = {}
-        for index, item in enumerate(manifest):
-            if not isinstance(item, dict):
-                raise ValueError("隔离清单格式无效")
-            destination = safe_relative_path(project.root, item.get("relative_path", ""), "恢复目标路径")
-            source = None
-            if item.get("quarantine_path"):
-                source = safe_relative_path(project.root, item["quarantine_path"], "隔离文件路径")
-                if not is_within(source, batch_root):
-                    raise ValueError("隔离文件路径超出当前批次")
-            restore_path = None
-            if item.get("restore_path"):
-                restore_path = safe_relative_path(project.root, item["restore_path"], "已恢复文件路径")
-            paths[index] = (source, destination, restore_path)
-            companion_source = companion_destination = companion_restore = None
-            if item.get("companion_relative_path"):
-                companion_destination = safe_relative_path(
-                    project.root, item["companion_relative_path"], "动态照片恢复目标路径"
-                )
-            if item.get("companion_quarantine_path"):
-                companion_source = safe_relative_path(
-                    project.root, item["companion_quarantine_path"], "动态照片隔离文件路径"
-                )
-                if not is_within(companion_source, batch_root):
-                    raise ValueError("动态照片隔离文件路径超出当前批次")
-            if item.get("companion_restore_path"):
-                companion_restore = safe_relative_path(
-                    project.root, item["companion_restore_path"], "动态照片已恢复文件路径"
-                )
-            companion_paths[index] = (
-                companion_source, companion_destination, companion_restore
-            )
-
+        paths = [_restore_paths(project, batch_root, item) for item in manifest]
         restored = conflicts = missing = 0
-        for index, item in enumerate(manifest):
-            status = item.get("status")
-            source, destination, recorded_restore = paths[index]
-            companion_source, companion_destination, companion_restore = companion_paths[index]
-            if status == "restored":
-                if recorded_restore and recorded_restore.exists():
-                    target_rel = recorded_restore.relative_to(project.root.resolve()).as_posix()
-                    companion_rel = (
-                        companion_restore.relative_to(project.root.resolve()).as_posix()
-                        if companion_restore and companion_restore.exists()
-                        else ""
-                    )
-                    if item.get("photo_id"):
-                        conn.execute(
-                            """UPDATE photos SET status='active',relative_path=?,
-                                      motion_relative_path=CASE WHEN ?<>'' THEN ? ELSE motion_relative_path END
-                                 WHERE id=?""",
-                            (
-                                target_rel, companion_rel, companion_rel,
-                                int(item["photo_id"]),
-                            ),
-                        )
-                    conn.commit()
-                continue
-            if status == "restoring" and recorded_restore and source is not None:
-                if not source.exists() and recorded_restore.exists():
-                    destination = recorded_restore
-                    item["status"] = "restored"
-                    atomic_write_json(manifest_path, manifest)
-                elif source.exists():
-                    destination = recorded_restore
-                else:
-                    missing += 1
-                    continue
-            elif status not in {"moved", "pending"}:
-                continue
-            if item.get("status") != "restored":
-                if source is None or not source.exists():
-                    missing += 1
-                    continue
-                if companion_source is not None and not companion_source.exists():
-                    missing += 1
-                    continue
-                primary_conflict = destination.exists()
-                companion_conflict = bool(
-                    companion_destination is not None and companion_destination.exists()
-                )
-                if primary_conflict or companion_conflict:
-                    suffix = f".restored-{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
-                    destination = destination.with_name(
-                        destination.stem + suffix + destination.suffix
-                    )
-                    if companion_destination is not None:
-                        companion_destination = companion_destination.with_name(
-                            companion_destination.stem + suffix
-                            + companion_destination.suffix
-                        )
-                    conflicts += int(primary_conflict) + int(companion_conflict)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                item["status"] = "restoring"
-                item["restore_path"] = destination.relative_to(project.root.resolve()).as_posix()
-                if companion_destination is not None:
-                    companion_destination.parent.mkdir(parents=True, exist_ok=True)
-                    item["companion_restore_path"] = companion_destination.relative_to(
-                        project.root.resolve()
-                    ).as_posix()
-                atomic_write_json(manifest_path, manifest)
-                shutil.move(str(source), str(destination))
-                try:
-                    if companion_source is not None and companion_destination is not None:
-                        shutil.move(str(companion_source), str(companion_destination))
-                except Exception:
-                    if destination.exists() and not source.exists():
-                        source.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.move(str(destination), str(source))
-                    raise
-                item["status"] = "restored"
-                item.pop("error", None)
-                atomic_write_json(manifest_path, manifest)
-                restored += 1
-            target_rel = destination.relative_to(project.root.resolve()).as_posix()
-            companion_rel = (
-                companion_destination.relative_to(project.root.resolve()).as_posix()
-                if companion_destination is not None
-                else ""
+        for item, item_paths in zip(manifest, paths):
+            item_restored, item_conflicts, item_missing = _restore_manifest_item(
+                project,
+                conn,
+                manifest_path,
+                manifest,
+                item,
+                item_paths,
             )
-            if item.get("photo_id"):
-                conn.execute(
-                    """UPDATE photos SET status='active',relative_path=?,
-                              motion_relative_path=CASE WHEN ?<>'' THEN ? ELSE motion_relative_path END
-                         WHERE id=?""",
-                    (target_rel, companion_rel, companion_rel, int(item["photo_id"])),
-                )
-            else:
-                conn.execute(
-                    "UPDATE photos SET status='active',relative_path=? WHERE relative_path=?",
-                    (target_rel, item["relative_path"]),
-                )
-            conn.commit()
-
-        remaining = False
-        for index, item in enumerate(manifest):
-            source = paths[index][0]
-            if item.get("status") in {"moved", "pending", "restoring"} and source and source.exists():
-                remaining = True
-                break
-        if not remaining:
+            restored += item_restored
+            conflicts += item_conflicts
+            missing += item_missing
+        if not _restore_files_remain(manifest, paths):
             conn.execute(
                 "UPDATE quarantine_batches SET restored_at=? WHERE id=?",
                 (datetime.now().isoformat(timespec="seconds"), batch_id),

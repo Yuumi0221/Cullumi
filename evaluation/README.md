@@ -19,3 +19,26 @@
 
 工具验证授权字段，输出逐人脸预测、逐张耗时、JSON 与 Markdown 报告，并按精确率
 95%、召回率 80%、推荐成功率 90% 和 P50 50 ms 四项门槛返回退出码。
+
+## 大图库性能基线
+
+大图库基准独立于普通单元测试。默认生成 10 万个发现条目、5 万张照片元数据、
+1 万条相似边和 5 千张按 100 种大小分组的完全重复照片，记录耗时、Python 峰值内存、
+进程常驻内存增量、SQL 语句数、取消响应时间和确定性的结果摘要：
+
+```powershell
+.\.venv\Scripts\python.exe evaluation\benchmark_large_library.py `
+  --output evaluation\performance-results\baseline.json
+```
+
+修改后使用同一规模复跑并生成对比字段：
+
+```powershell
+.\.venv\Scripts\python.exe evaluation\benchmark_large_library.py `
+  --compare evaluation\performance-results\baseline.json `
+  --output evaluation\performance-results\optimized.json
+```
+
+开发时可添加 `--quick` 只做流程冒烟。性能结果依赖机器和当前负载，因此不会由普通
+测试套件作耗时或内存断言；结果摘要一致性和查询数量约束由单元测试继续保护。
+定位单项回退时可使用 `--only similarity_groups` 等参数只运行一个场景。

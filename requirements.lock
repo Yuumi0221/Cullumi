@@ -1,0 +1,20 @@
+# Windows runtime lock for Python 3.12+.
+# Regenerate after changing requirements.txt and verify in a clean environment.
+
+bottle==0.13.4
+cffi==2.1.0
+clr-loader==0.3.1
+flatbuffers==25.12.19
+imageio-ffmpeg==0.6.0
+numpy==2.3.5
+onnxruntime==1.29.0
+packaging==26.3
+pillow==12.2.0
+pillow-heif==1.1.1
+protobuf==7.36.0
+proxy-tools==0.1.0
+pycparser==3.0
+pythonnet==3.1.0
+pywebview==6.1
+rawpy==0.25.1
+typing-extensions==4.16.0

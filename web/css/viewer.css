@@ -15,16 +15,6 @@
   background:color-mix(in srgb,var(--bg) 88%,transparent)
 }
 
-.viewer figure {
-  margin:0;
-  width:100%;
-  height:calc(100vh - 84px);
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  position:relative
-}
-
 .viewer img {
   max-width:calc(100vw - 170px);
   max-height:calc(100vh - 145px);
@@ -33,30 +23,8 @@
   object-fit:contain
 }
 
-.viewer figcaption {
-  position:absolute;
-  bottom:3px;
-  text-align:center;
-  text-shadow:0 1px 4px #000
-}
-
 .viewer figcaption b,.viewer figcaption span {
   display:block
-}
-
-.viewer figcaption span {
-  color:#d8ced1
-}
-
-.viewer .close {
-  position:absolute;
-  z-index:3;
-  right:22px;
-  top:18px;
-  border:0;
-  background:#fff2;
-  color:#fff;
-  font-size:22px
 }
 
 .side {
@@ -76,15 +44,6 @@
 
 .side.next {
   right:15px
-}
-
-.viewer footer {
-  height:84px;
-  background:#111e;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  gap:40px
 }
 
 .viewer footer button {
@@ -181,11 +140,15 @@
 }
 
 .viewer figure {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto auto;
   align-items: stretch;
   justify-content: stretch;
+  width: 100%;
+  height: calc(100vh - 84px);
+  margin: 0;
   overflow: hidden;
 }
 
@@ -202,9 +165,11 @@
 
 .viewer figcaption {
   position: static;
+  bottom: 3px;
   min-height: 38px;
   padding: 4px 16px;
   color: var(--ink);
+  text-align: center;
   text-shadow: none;
 }
 
@@ -443,10 +408,15 @@
 }
 
 .viewer .close {
+  position: absolute;
+  z-index: 3;
+  top: 18px;
+  right: 22px;
   width: 42px;
   height: 42px;
   min-width: 42px;
   border-radius: 10px;
+  font-size: 22px;
 }
 
 .viewer .close svg {
@@ -502,6 +472,11 @@
 }
 
 .viewer footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 84px;
+  gap: 40px;
   color: var(--ink);
   background: var(--bg);
   border-top: 0;

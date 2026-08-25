@@ -14,6 +14,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageOps
 
 import cullumi.scanner as scanner_module
+import cullumi.similarity as similarity_module
 from cullumi import __version__, core
 from cullumi.classification import (
     PHOTO_AI_FILTERS,
@@ -35,6 +36,7 @@ from cullumi.project_store import (
 from cullumi.scanner import DiscoveryResult, ScanCancelled, Scanner
 from cullumi.similarity import SimilarityGroupCache, build_similarity_groups
 from cullumi.workflows import (
+    QUARANTINE_DIR,
     apply_quarantine,
     clear_decisions,
     import_decisions,
@@ -136,8 +138,45 @@ class CullumiTests(unittest.TestCase):
             scanner._confirm_exact_duplicates(
                 "project", project, connection, 0, cancel
             )
-
         scanner._exact_hashes.assert_not_called()
+
+    def test_exact_duplicate_candidates_use_one_select_for_all_sizes(self):
+        rows = []
+        for size in range(1, 6):
+            payload = bytes([size]) * size
+            for copy_index in range(2):
+                name = f"duplicate-{size}-{copy_index}.jpg"
+                (self.photos / name).write_bytes(payload)
+                rows.append((name, size))
+        conn = connect_db(self.project.db_path)
+        conn.executemany(
+            """INSERT INTO photos(relative_path,size,error,status,media_type)
+               VALUES(?,?,'','active','image')""",
+            rows,
+        )
+        conn.commit()
+        statements: list[str] = []
+        conn.set_trace_callback(statements.append)
+
+        Scanner(self.config, self.manager)._exact_hashes(
+            self.project, conn, threading.Event()
+        )
+        conn.set_trace_callback(None)
+
+        selects = [
+            statement
+            for statement in statements
+            if statement.lstrip().upper().startswith("SELECT")
+        ]
+        self.assertEqual(len(selects), 1)
+        hashes = [
+            tuple(row)
+            for row in conn.execute(
+                "SELECT size,COUNT(DISTINCT sha256) FROM photos GROUP BY size"
+            )
+        ]
+        self.assertEqual(hashes, [(size, 1) for size in range(1, 6)])
+        conn.close()
 
     def test_relationship_stage_honors_cancellation_before_rebuild(self):
         scanner = Scanner(mock.Mock(), mock.Mock())
@@ -224,6 +263,44 @@ class CullumiTests(unittest.TestCase):
             percentiles["sharpness_remove"],
             percentiles["sharpness_review"],
         )
+
+    def test_absolute_incremental_reclassify_reads_only_requested_photos(self):
+        conn = connect_db(self.project.db_path)
+        conn.executemany(
+            """INSERT INTO photos(
+                   relative_path,size,status,error,sharpness,luminance,dark_clip,
+                   bright_clip,contrast,entropy,megapixels,cover_source,suggestion
+               ) VALUES(?,2000000,'active','',300,110,0.01,0.01,40,7,24,'still','sentinel')""",
+            [(f"photo-{index}.jpg",) for index in range(3)],
+        )
+        conn.commit()
+        photo_ids = [int(row[0]) for row in conn.execute("SELECT id FROM photos")]
+        statements: list[str] = []
+        conn.set_trace_callback(statements.append)
+
+        Scanner(self.config, self.manager).reclassify(
+            self.project,
+            conn,
+            BUILTIN_PROFILES["balanced"],
+            photo_ids={photo_ids[1]},
+        )
+        conn.set_trace_callback(None)
+
+        selects = [
+            statement.upper()
+            for statement in statements
+            if statement.lstrip().upper().startswith("SELECT")
+        ]
+        self.assertEqual(len(selects), 1)
+        self.assertIn(" ID IN (", selects[0])
+        self.assertNotIn("SELECT *", selects[0])
+        suggestions = [
+            row[0] for row in conn.execute("SELECT suggestion FROM photos ORDER BY id")
+        ]
+        self.assertEqual(suggestions[0], "sentinel")
+        self.assertNotEqual(suggestions[1], "sentinel")
+        self.assertEqual(suggestions[2], "sentinel")
+        conn.close()
 
     def test_remove_from_recent_preserves_project_and_cache(self):
         marker = self.project.thumb_dir / "keep-me.txt"
@@ -430,10 +507,34 @@ class CullumiTests(unittest.TestCase):
         self.assertFalse((self.photos / "IMG_0042.JPG").exists())
         self.assertFalse(companion.exists())
 
+        batch_root = self.photos / QUARANTINE_DIR / batch["batch_id"]
+        manifest_path = batch_root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        entry = manifest[0]
+        quarantined_photo = self.photos / entry["quarantine_path"]
+        restored_photo = self.photos / entry["relative_path"]
+        restored_photo.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(quarantined_photo, restored_photo)
+        entry["status"] = "restoring"
+        entry["restore_path"] = entry["relative_path"]
+        entry["companion_restore_path"] = entry["companion_relative_path"]
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
         restored = restore_batch(self.project, batch["batch_id"])
         self.assertEqual(restored["restored"], 1)
         self.assertTrue((self.photos / "IMG_0042.JPG").exists())
         self.assertTrue(companion.exists())
+        conn = connect_db(self.project.db_path)
+        row = conn.execute(
+            "SELECT status,motion_relative_path FROM photos"
+        ).fetchone()
+        conn.close()
+        self.assertEqual(
+            (row["status"], row["motion_relative_path"]),
+            ("active", "IMG_0042.MOV"),
+        )
 
     def test_discovery_aggregates_supported_and_unsupported_files(self):
         self.make_photo("photo.jpg")
@@ -825,7 +926,8 @@ class CullumiTests(unittest.TestCase):
         cache = SimilarityGroupCache()
 
         with mock.patch(
-            "cullumi.similarity.build_similarity_groups", wraps=build_similarity_groups
+            "cullumi.similarity._build_similarity_topology",
+            wraps=similarity_module._build_similarity_topology,
         ) as builder:
             first = cache.get(self.project.project_id, conn, profile)
             second = cache.get(self.project.project_id, conn, profile)
@@ -945,16 +1047,33 @@ class CullumiTests(unittest.TestCase):
         conn.commit()
         cache = SimilarityGroupCache()
         profile = BUILTIN_PROFILES["balanced"]
+        topology_statements: list[str] = []
+        conn.set_trace_callback(topology_statements.append)
         self.assertEqual(cache.count(self.project.project_id, conn, profile), 1)
+        conn.set_trace_callback(None)
+        topology_selects = [
+            statement.upper()
+            for statement in topology_statements
+            if statement.lstrip().upper().startswith("SELECT")
+        ]
+        self.assertTrue(
+            any("FROM PHOTOS" in sql and " ID IN (" in sql for sql in topology_selects)
+        )
+        self.assertFalse(any("SELECT *" in sql for sql in topology_selects))
         statements: list[str] = []
         conn.set_trace_callback(statements.append)
         hydrated = cache.get(self.project.project_id, conn, profile)
         conn.set_trace_callback(None)
         self.assertEqual(len(hydrated), 1)
-        self.assertTrue(any("SELECT * FROM photos WHERE id IN" in sql for sql in statements))
+        self.assertTrue(
+            any(
+                "FROM PHOTOS" in sql.upper() and " ID IN (" in sql.upper()
+                for sql in statements
+            )
+        )
         self.assertFalse(
             any(
-                "SELECT * FROM photos WHERE status='active' AND error=''" in sql
+                "SELECT *" in sql.upper()
                 for sql in statements
             )
         )

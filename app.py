@@ -48,6 +48,7 @@ APPLICATION = http_api.ApplicationContext(
     TOKEN,
     WEB_ROOT,
     FACE_ANALYZER,
+    analysis_runner=ANALYSIS_RUNNER,
 )
 http_api.configure(APPLICATION)
 

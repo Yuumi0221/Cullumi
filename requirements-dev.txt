@@ -1,2 +1,2 @@
--r requirements.txt
+-r requirements.lock
 ruff==0.12.12

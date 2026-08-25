@@ -87,6 +87,33 @@ class DatabaseMigrationTests(unittest.TestCase):
             self.assertEqual(version, DATABASE_SCHEMA_VERSION)
             self.assertIn("idx_photos_status_decision", indexes)
             self.assertIn("idx_photos_status_error_size", indexes)
+            self.assertIn("idx_similar_pairs_kind_a", indexes)
+            self.assertIn("idx_similar_pairs_kind_b", indexes)
+            self.assertEqual(list(path.parent.glob("project.pre-v*.db")), [])
+
+    def test_v4_database_backfills_query_indexes_without_version_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "project.db"
+            conn = connect_db(path)
+            conn.execute("DROP INDEX idx_similar_pairs_kind_a")
+            conn.execute("DROP INDEX idx_similar_pairs_kind_b")
+            conn.commit()
+            conn.close()
+            project_store._INITIALIZED_DATABASES.pop(path.resolve(), None)
+
+            reopened = connect_db(path)
+            version = reopened.execute("PRAGMA user_version").fetchone()[0]
+            indexes = {
+                row["name"]
+                for row in reopened.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index'"
+                )
+            }
+            reopened.close()
+
+            self.assertEqual(version, DATABASE_SCHEMA_VERSION)
+            self.assertIn("idx_similar_pairs_kind_a", indexes)
+            self.assertIn("idx_similar_pairs_kind_b", indexes)
             self.assertEqual(list(path.parent.glob("project.pre-v*.db")), [])
 
     def test_legacy_database_is_backed_up_and_migrated_without_data_loss(self) -> None:

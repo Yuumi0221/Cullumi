@@ -7,13 +7,45 @@ import math
 import re
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 from PIL import Image, ImageOps
+
+from .classification import PHOTO_ROW_COLUMNS
+
+SIMILARITY_TOPOLOGY_COLUMNS = (
+    "id",
+    "relative_path",
+    "taken",
+    "sha256",
+    "motion_sha256",
+    "sharpness",
+    "luminance",
+    "dark_clip",
+    "bright_clip",
+    "contrast",
+    "entropy",
+    "megapixels",
+    "blink_status",
+    "blink_face_count",
+    "blink_closed_face_count",
+    "blink_uncertain_face_count",
+    "blink_closed_ratio",
+)
+
+
+class SimilarityPair(NamedTuple):
+    a_id: int
+    b_id: int
+    score: float
+    kind: str
+    recommended_id: int
+    face_safe: int
 
 
 def hamming(a: str, b: str) -> int:
@@ -195,24 +227,32 @@ def blink_recommendation_key(
     return (category, 0.0, 0, -score, path)
 
 
-def build_similarity_groups(
+def _participant_photos(
+    conn: sqlite3.Connection,
+    photo_ids: list[int],
+    columns: tuple[str, ...],
+) -> dict[int, sqlite3.Row]:
+    photos: dict[int, sqlite3.Row] = {}
+    projection = ",".join(columns)
+    for offset in range(0, len(photo_ids), 900):
+        chunk = photo_ids[offset : offset + 900]
+        placeholders = ",".join("?" for _ in chunk)
+        for row in conn.execute(
+            f"""SELECT {projection} FROM photos
+                WHERE id IN ({placeholders})
+                  AND status='active' AND error=''""",
+            chunk,
+        ):
+            photos[int(row["id"])] = row
+    return photos
+
+
+def _collapse_similarity_topology(
     conn: sqlite3.Connection,
     profile: dict[str, Any],
+    edges: Iterable[SimilarityPair],
     blink_detection_enabled: bool = True,
 ) -> list[dict[str, Any]]:
-    """Collapse active pair relations into deterministic connected photo groups."""
-    rows = conn.execute(
-        "SELECT * FROM photos WHERE status='active' AND error=''"
-    ).fetchall()
-    photos = {int(row["id"]): row for row in rows}
-    edges = conn.execute(
-        """SELECT sp.a_id,sp.b_id,sp.score,sp.kind,sp.face_safe
-           FROM similar_pairs sp
-           JOIN photos a ON a.id=sp.a_id
-           JOIN photos b ON b.id=sp.b_id
-           WHERE a.status='active' AND b.status='active'"""
-    ).fetchall()
-
     parent: dict[int, int] = {}
 
     def find(value: int) -> int:
@@ -230,26 +270,34 @@ def build_similarity_groups(
     adjacency: dict[int, list[tuple[int, float]]] = {}
     face_safe_ids: set[int] = set()
     for edge in edges:
-        left, right = int(edge["a_id"]), int(edge["b_id"])
-        if left not in photos or right not in photos:
-            continue
+        left, right = edge.a_id, edge.b_id
         union(left, right)
-        score = float(edge["score"] or 0)
+        score = float(edge.score or 0)
         adjacency.setdefault(left, []).append((right, score))
         adjacency.setdefault(right, []).append((left, score))
-        if edge["face_safe"]:
+        if edge.face_safe:
             face_safe_ids.update((left, right))
 
     components: dict[int, list[int]] = {}
     for photo_id in parent:
         components.setdefault(find(photo_id), []).append(photo_id)
 
+    photo_ids = sorted(parent)
+    parent.clear()
+    photos = _participant_photos(conn, photo_ids, SIMILARITY_TOPOLOGY_COLUMNS)
+    del photo_ids
+
     minimum = max(2, int(profile.get("similarity", {}).get("min_group_size", 2)))
-    groups: list[dict[str, Any]] = []
-    for member_ids in components.values():
+    topology: list[dict[str, Any]] = []
+    while components:
+        _root, member_ids = components.popitem()
         if len(member_ids) < minimum:
+            for photo_id in member_ids:
+                photos.pop(photo_id, None)
+                adjacency.pop(photo_id, None)
+                face_safe_ids.discard(photo_id)
             continue
-        members = [photos[photo_id] for photo_id in member_ids]
+        members = [photos.pop(photo_id) for photo_id in member_ids]
         shooting_keys = {
             int(row["id"]): photo_shooting_key(row)
             for row in members
@@ -285,42 +333,177 @@ def build_similarity_groups(
             current_score = -negative_score
             if current_score < confidence[current]:
                 continue
-            for neighbor, edge_score in adjacency.get(current, []):
+            for neighbor, edge_score in adjacency.pop(current, []):
                 candidate = min(current_score, edge_score)
                 if candidate > confidence.get(neighbor, 0.0):
                     confidence[neighbor] = candidate
                     heapq.heappush(pending, (-candidate, neighbor))
 
-        ordered = sorted(members, key=lambda row: shooting_keys[int(row["id"])])
         stable_ids = ",".join(str(photo_id) for photo_id in sorted(member_ids))
         group_id = "sg-" + hashlib.sha1(stable_ids.encode("ascii")).hexdigest()[:16]
-        groups.append(
+        face_safe = any(photo_id in face_safe_ids for photo_id in member_ids)
+        face_safe_ids.difference_update(member_ids)
+        topology.append(
             {
                 "id": group_id,
                 "member_ids": sorted(member_ids),
-                "members": ordered,
                 "recommended_id": recommended_id,
-                "recommended": recommended,
-                "covers": [
-                    recommended,
-                    *[row for row in ranked if row["id"] != recommended_id],
+                "cover_ids": [
+                    recommended_id,
+                    *[
+                        int(row["id"])
+                        for row in ranked
+                        if int(row["id"]) != recommended_id
+                    ],
                 ][:4],
                 "confidence": confidence,
                 "kind": "exact" if exact else "similar",
-                "face_safe": any(photo_id in face_safe_ids for photo_id in member_ids),
+                "face_safe": face_safe,
                 "sort_key": min(shooting_keys.values()),
             }
         )
-    groups.sort(key=lambda group: (group["sort_key"], group["id"]))
-    return groups
+    topology.sort(key=lambda group: (group["sort_key"], group["id"]))
+    return topology
+
+
+def _build_similarity_topology(
+    conn: sqlite3.Connection,
+    profile: dict[str, Any],
+    blink_detection_enabled: bool = True,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """SELECT sp.a_id,sp.b_id,sp.score,sp.kind,
+                  sp.recommended_id,sp.face_safe
+           FROM similar_pairs sp
+           JOIN photos a ON a.id=sp.a_id
+           JOIN photos b ON b.id=sp.b_id
+           WHERE a.status='active' AND a.error=''
+             AND b.status='active' AND b.error=''"""
+    )
+    edges = (
+        SimilarityPair(
+            int(row["a_id"]),
+            int(row["b_id"]),
+            float(row["score"] or 0),
+            str(row["kind"] or ""),
+            int(row["recommended_id"] or 0),
+            int(row["face_safe"] or 0),
+        )
+        for row in rows
+    )
+    return _collapse_similarity_topology(
+        conn,
+        profile,
+        edges,
+        blink_detection_enabled,
+    )
+
+
+def _build_similarity_topology_from_pairs(
+    conn: sqlite3.Connection,
+    profile: dict[str, Any],
+    pairs: Iterable[SimilarityPair],
+    blink_detection_enabled: bool = True,
+) -> list[dict[str, Any]]:
+    return _collapse_similarity_topology(
+        conn,
+        profile,
+        pairs,
+        blink_detection_enabled,
+    )
+
+
+def _hydrate_similarity_groups(
+    conn: sqlite3.Connection,
+    topology: list[dict[str, Any]],
+    *,
+    include_cover_ids: bool,
+    reuse_groups: bool = False,
+) -> list[dict[str, Any]]:
+    hydrated: list[dict[str, Any]] = []
+    batch: list[dict[str, Any]] = []
+    batch_size = 0
+    for group in topology:
+        member_count = len(group["member_ids"])
+        if batch and batch_size + member_count > 900:
+            hydrated.extend(
+                _hydrate_similarity_batch(
+                    conn, batch, include_cover_ids, reuse_groups
+                )
+            )
+            batch = []
+            batch_size = 0
+        batch.append(group)
+        batch_size += member_count
+    if batch:
+        hydrated.extend(
+            _hydrate_similarity_batch(conn, batch, include_cover_ids, reuse_groups)
+        )
+    return hydrated
+
+
+def _hydrate_similarity_batch(
+    conn: sqlite3.Connection,
+    groups: list[dict[str, Any]],
+    include_cover_ids: bool,
+    reuse_groups: bool,
+) -> list[dict[str, Any]]:
+    photo_ids = [
+        photo_id for group in groups for photo_id in group["member_ids"]
+    ]
+    photos = _participant_photos(conn, photo_ids, PHOTO_ROW_COLUMNS)
+    hydrated: list[dict[str, Any]] = []
+    for group in groups:
+        if any(photo_id not in photos for photo_id in group["member_ids"]):
+            continue
+        member_photos = {
+            photo_id: photos.pop(photo_id) for photo_id in group["member_ids"]
+        }
+        members = list(member_photos.values())
+        members.sort(key=photo_shooting_key)
+        hydrated_group = group if reuse_groups else dict(group)
+        cover_ids = group["cover_ids"]
+        if not include_cover_ids:
+            hydrated_group.pop("cover_ids")
+        hydrated_group.update(
+            {
+                "members": members,
+                "recommended": member_photos[group["recommended_id"]],
+                "covers": [member_photos[photo_id] for photo_id in cover_ids],
+            }
+        )
+        hydrated.append(hydrated_group)
+    return hydrated
+
+
+def build_similarity_groups(
+    conn: sqlite3.Connection,
+    profile: dict[str, Any],
+    blink_detection_enabled: bool = True,
+) -> list[dict[str, Any]]:
+    """Collapse active pair relations into deterministic connected photo groups."""
+    topology = _build_similarity_topology(
+        conn, profile, blink_detection_enabled
+    )
+    return _hydrate_similarity_groups(
+        conn,
+        topology,
+        include_cover_ids=False,
+        reuse_groups=True,
+    )
+
+
+@dataclass(frozen=True)
+class _TopologyCacheEntry:
+    topology: list[dict[str, Any]]
+    index: dict[str, dict[str, Any]]
 
 
 class SimilarityGroupCache:
     """Cache stable similarity topology while hydrating mutable photo rows."""
 
     def __init__(self) -> None:
-        self._entries: dict[tuple[str, str], list[dict[str, Any]]] = {}
-        self._indexes: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+        self._entries: dict[tuple[str, str], _TopologyCacheEntry] = {}
         self._lock = threading.RLock()
 
     @staticmethod
@@ -352,25 +535,14 @@ class SimilarityGroupCache:
         with self._lock:
             cached = self._entries.get(key)
             if cached is not None:
-                return cached
-            groups = build_similarity_groups(
+                return cached.topology
+            topology = _build_similarity_topology(
                 conn, profile, blink_detection_enabled
             )
-            topology = [
-                {
-                    "id": group["id"],
-                    "member_ids": list(group["member_ids"]),
-                    "recommended_id": int(group["recommended_id"]),
-                    "cover_ids": [int(row["id"]) for row in group["covers"]],
-                    "confidence": dict(group["confidence"]),
-                    "kind": group["kind"],
-                    "face_safe": bool(group["face_safe"]),
-                    "sort_key": group["sort_key"],
-                }
-                for group in groups
-            ]
-            self._entries[key] = topology
-            self._indexes[key] = {group["id"]: group for group in topology}
+            self._entries[key] = _TopologyCacheEntry(
+                topology,
+                {group["id"]: group for group in topology},
+            )
             return topology
 
     def _key(
@@ -414,38 +586,11 @@ class SimilarityGroupCache:
         conn: sqlite3.Connection,
         topology: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        photo_ids = sorted(
-            {photo_id for group in topology for photo_id in group["member_ids"]}
+        return _hydrate_similarity_groups(
+            conn,
+            topology,
+            include_cover_ids=True,
         )
-        if not photo_ids:
-            return []
-        rows: list[sqlite3.Row] = []
-        for offset in range(0, len(photo_ids), 900):
-            chunk = photo_ids[offset : offset + 900]
-            placeholders = ",".join("?" for _ in chunk)
-            rows.extend(
-                conn.execute(
-                    f"SELECT * FROM photos WHERE id IN ({placeholders}) AND status='active' AND error=''",
-                    chunk,
-                ).fetchall()
-            )
-        photos = {int(row["id"]): row for row in rows}
-        hydrated: list[dict[str, Any]] = []
-        for group in topology:
-            if any(photo_id not in photos for photo_id in group["member_ids"]):
-                continue
-            members = [photos[photo_id] for photo_id in group["member_ids"]]
-            members.sort(key=photo_shooting_key)
-            recommended = photos[group["recommended_id"]]
-            hydrated.append(
-                {
-                    **group,
-                    "members": members,
-                    "recommended": recommended,
-                    "covers": [photos[photo_id] for photo_id in group["cover_ids"]],
-                }
-            )
-        return hydrated
 
     def get_one(
         self,
@@ -458,7 +603,8 @@ class SimilarityGroupCache:
         self._topology(project_id, conn, profile, blink_detection_enabled)
         key = self._key(project_id, profile, blink_detection_enabled)
         with self._lock:
-            group = self._indexes.get(key, {}).get(group_id)
+            entry = self._entries.get(key)
+            group = entry.index.get(group_id) if entry is not None else None
         if group is None:
             return None
         hydrated = self._hydrate(conn, [group])
@@ -469,7 +615,6 @@ class SimilarityGroupCache:
             keys = [key for key in self._entries if key[0] == project_id]
             for key in keys:
                 del self._entries[key]
-                self._indexes.pop(key, None)
 
 
 __all__ = [

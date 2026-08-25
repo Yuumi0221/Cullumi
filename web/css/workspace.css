@@ -414,8 +414,7 @@ button.primary:hover:not(:disabled),
 }
 
 nav button:hover:not(:disabled),
-.dialog-head button:hover:not(:disabled),
-.context-menu button:hover:not(:disabled) {
+.dialog-head button:hover:not(:disabled) {
   background: var(--surface-hover);
 }
 

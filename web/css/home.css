@@ -471,9 +471,6 @@ body:not(.project-open) .icon-button {
 
   .recent-grid {
     width:calc(100% + 22px);
-  }
-
-  .recent-grid {
     padding-right:36px;
     grid-template-columns:repeat(2,minmax(0,1fr));
   }

@@ -128,7 +128,9 @@ class AppSafetyTests(unittest.TestCase):
                 application_context(config, manager, scanner, groups),
             ):
                 with mock.patch.object(
-                    app, "locate_motion_still_time", return_value=300
+                    motion_cover_service,
+                    "locate_motion_still_time",
+                    return_value=300,
                 ) as locate:
                     handler.api_motion_locate({
                         "project_id": project.project_id,
@@ -138,12 +140,16 @@ class AppSafetyTests(unittest.TestCase):
                     handler._send_json.call_args.args[0]["still_time_ms"], 300
                 )
                 locate.assert_called_once()
-                handler.api_motion_cover({
-                    "project_id": project.project_id,
-                    "photo_id": photo_id,
-                    "source": "motion",
-                    "time_ms": 500,
-                })
+                with mock.patch.object(
+                    scanner, "analyze_photo", wraps=scanner.analyze_photo
+                ) as isolated_analysis:
+                    handler.api_motion_cover({
+                        "project_id": project.project_id,
+                        "photo_id": photo_id,
+                        "source": "motion",
+                        "time_ms": 500,
+                    })
+                isolated_analysis.assert_called_once()
 
             payload = handler._send_json.call_args.args[0]["photo"]
             self.assertEqual(payload["motion"]["cover_source"], "motion")
@@ -222,6 +228,65 @@ class AppSafetyTests(unittest.TestCase):
             self.assertEqual(
                 (photos / "IMG_0010.JPG").read_bytes(), before_failed_analysis
             )
+
+    def test_motion_recommendation_uses_scanner_analysis_service(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"
+            photos.mkdir()
+            config = ConfigStore(root / "config.json")
+            config.data["default_cache_root"] = str(root / "cache")
+            config.save()
+            manager = ProjectManager(config)
+            project = manager.open(str(photos))
+            scanner = Scanner(config, manager)
+            with closing(connect_db(project.db_path)) as conn:
+                conn.execute(
+                    """INSERT INTO photos(
+                           relative_path,size,status,error,media_type,motion_kind,
+                           motion_relative_path,motion_duration_ms,motion_frame_count,
+                           motion_fps,cover_source
+                       ) VALUES('motion.jpg',2000000,'active','','motion_photo',
+                                'paired','motion.mov',1000,3,10,'still')"""
+                )
+                photo_id = int(conn.execute("SELECT id FROM photos").fetchone()[0])
+                conn.commit()
+            metrics = {
+                "sharpness": 300.0,
+                "luminance": 110.0,
+                "dark_clip": 0.01,
+                "bright_clip": 0.01,
+                "contrast": 40.0,
+                "entropy": 7.0,
+                "megapixels": 24.0,
+            }
+            handler = object.__new__(app.Handler)
+            handler._send_json = mock.Mock()
+
+            with (
+                mock.patch.object(
+                    app,
+                    "APPLICATION",
+                    application_context(config, manager, scanner),
+                ),
+                mock.patch.object(
+                    scanner, "analyze_photo", return_value=metrics
+                ) as isolated_analysis,
+                mock.patch.object(
+                    motion_cover_service,
+                    "ensure_motion_video",
+                    return_value=root / "motion.mp4",
+                ),
+                mock.patch.object(motion_cover_service, "extract_motion_frame"),
+            ):
+                handler.api_motion_recommend(
+                    {"project_id": project.project_id, "photo_id": photo_id}
+                )
+
+            self.assertEqual(isolated_analysis.call_count, 3)
+            payload = handler._send_json.call_args.args[0]
+            self.assertEqual(len(payload["candidates"]), 3)
+            self.assertIn(payload["recommended"], payload["candidates"])
 
     def test_route_tables_reference_handler_methods(self):
         for routes in (app.GET_ROUTES, app.POST_ROUTES):

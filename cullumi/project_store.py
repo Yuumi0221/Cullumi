@@ -114,11 +114,18 @@ CREATE TABLE IF NOT EXISTS similar_pairs (
   score REAL, kind TEXT, recommended_id INTEGER, face_safe INTEGER DEFAULT 0,
   UNIQUE(a_id,b_id)
 );
+CREATE INDEX IF NOT EXISTS idx_similar_pairs_kind_a ON similar_pairs(kind,a_id);
+CREATE INDEX IF NOT EXISTS idx_similar_pairs_kind_b ON similar_pairs(kind,b_id);
 CREATE TABLE IF NOT EXISTS quarantine_batches (
   id TEXT PRIMARY KEY, created_at TEXT, manifest_path TEXT, count INTEGER,
   total_size INTEGER, restored_at TEXT DEFAULT ''
 );
 """
+
+SIMILAR_PAIR_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_similar_pairs_kind_a ON similar_pairs(kind,a_id)",
+    "CREATE INDEX IF NOT EXISTS idx_similar_pairs_kind_b ON similar_pairs(kind,b_id)",
+)
 
 PHOTO_SCHEMA_COLUMNS = {
     "media_type": "TEXT NOT NULL DEFAULT 'image'",
@@ -224,6 +231,12 @@ def _initialize_database(
     return True
 
 
+def _ensure_query_indexes(conn: sqlite3.Connection) -> None:
+    """Backfill additive query indexes without changing the v4 data format."""
+    for statement in SIMILAR_PAIR_INDEXES:
+        conn.execute(statement)
+
+
 def connect_db(path: Path) -> sqlite3.Connection:
     resolved_path = Path(os.path.abspath(path))
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
@@ -236,6 +249,7 @@ def connect_db(path: Path) -> sqlite3.Connection:
             existed = fingerprint[2] > 0
             if not existed or _INITIALIZED_DATABASES.get(resolved_path) != fingerprint:
                 initialized = _initialize_database(conn, resolved_path, existed)
+                _ensure_query_indexes(conn)
                 _ensure_wal(conn, resolved_path, initialized)
                 conn.commit()
                 _INITIALIZED_DATABASES[resolved_path] = _database_fingerprint(

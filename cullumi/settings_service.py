@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-import sqlite3
 from contextlib import closing
 from pathlib import Path
 from typing import Any
 
 from .analysis_refresh import execute_refresh, plan_profile_change
-from .classification import classification_percentiles, classify
+from .classification import (
+    CLASSIFICATION_COLUMNS,
+    classification_percentiles,
+    classify,
+)
 from .config import ConfigStore, validate_profile
 from .project_store import Project, ProjectManager, connect_db
 from .scanner import Scanner
-from .similarity import SimilarityGroupCache, build_similarity_groups
+from .similarity import SimilarityGroupCache, _build_similarity_topology_from_pairs
 
 
 def save_settings(config: ConfigStore, body: dict[str, Any]) -> dict[str, Any]:
@@ -152,20 +155,34 @@ def estimate_profile(
     validate_profile(profile)
     project = manager.from_id(project_id)
     with closing(connect_db(project.db_path)) as conn:
-        rows = conn.execute("SELECT * FROM photos WHERE status='active'").fetchall()
-        percentiles = classification_percentiles(rows, profile)
+        percentile_mode = profile["quality"].get("threshold_mode") == "percentile"
+        percentiles = (
+            classification_percentiles(
+                conn.execute(
+                    "SELECT sharpness FROM photos WHERE status='active'"
+                ),
+                profile,
+            )
+            if percentile_mode
+            else None
+        )
         counts = {"remove": 0, "review": 0, "keep": 0, "unreadable": 0}
+        rows = conn.execute(
+            f"""SELECT {','.join(CLASSIFICATION_COLUMNS)} FROM photos
+                WHERE status='active'"""
+        )
         for row in rows:
             suggestion, _ = classify(row, profile, percentiles)
             counts[suggestion] = counts.get(suggestion, 0) + 1
-        with closing(sqlite3.connect(":memory:")) as estimate_conn:
-            estimate_conn.row_factory = sqlite3.Row
-            conn.backup(estimate_conn)
-            scanner.rebuild_similarity(project, estimate_conn, profile)
-            estimated_pairs = estimate_conn.execute(
-                "SELECT COUNT(*) FROM similar_pairs"
-            ).fetchone()[0]
-            estimated_groups = len(build_similarity_groups(estimate_conn, profile))
+        planned_pairs = scanner.plan_similarity_pairs(project, conn, profile)
+        estimated_pairs = len(planned_pairs)
+        estimated_groups = len(
+            _build_similarity_topology_from_pairs(
+                conn,
+                profile,
+                planned_pairs,
+            )
+        )
     return {
         "counts": counts,
         "estimated_pairs": estimated_pairs,

@@ -10,6 +10,7 @@ from unittest import mock
 from PIL import Image
 
 import cullumi.analysis_worker as worker_module
+from cullumi import http_api
 from cullumi.analysis_worker import AnalysisCancelled, PhotoAnalysisRunner
 from cullumi.config import ConfigStore
 from cullumi.project_store import ProjectManager, connect_db
@@ -22,6 +23,23 @@ def blocking_worker(requests, _responses, _memory_limit) -> None:
 
 
 class PhotoAnalysisRunnerTests(unittest.TestCase):
+    def test_application_context_injects_one_shared_analysis_runner(self) -> None:
+        scanner = Scanner(mock.Mock(), mock.Mock())
+        runner = mock.Mock(spec=PhotoAnalysisRunner)
+        context = http_api.ApplicationContext(
+            mock.Mock(),
+            mock.Mock(),
+            scanner,
+            mock.Mock(),
+            "token",
+            Path("web"),
+            photo_queries=mock.Mock(),
+            analysis_runner=runner,
+        )
+
+        self.assertIs(context.analysis_runner, runner)
+        self.assertIs(scanner.analysis_runner, runner)
+
     def test_worker_decodes_photo_and_recycles_after_task_limit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -96,8 +96,13 @@ class WebResourceContractTests(unittest.TestCase):
         server = (self.root / "cullumi" / "http_api.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn("const esc=", scripts)
-        self.assertIn('headers:{"Content-Type":"application/json","X-App-Token":TOKEN}', scripts)
+        self.assertRegex(scripts, r"\bconst\s+esc\s*=")
+        self.assertRegex(
+            scripts,
+            r'''headers\s*:\s*\{\s*["']Content-Type["']\s*:\s*'''
+            r'''["']application/json["']\s*,\s*["']X-App-Token["']\s*:\s*'''
+            r"TOKEN\s*,?\s*\}",
+        )
         self.assertIn("safe_relative_path", server)
         for function in (
             "confirmDeleteProfile",

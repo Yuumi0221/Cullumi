@@ -23,6 +23,20 @@ PHOTO_ANALYSIS_COLUMNS = (
     "blink_model_version", "blink_input_fingerprint", "blink_analyzed_at",
     "blink_error",
 )
+PHOTO_ROW_COLUMNS = ("id", "decision", *PHOTO_ANALYSIS_COLUMNS)
+CLASSIFICATION_COLUMNS = (
+    "id",
+    "error",
+    "sharpness",
+    "luminance",
+    "dark_clip",
+    "bright_clip",
+    "contrast",
+    "entropy",
+    "megapixels",
+    "cover_source",
+    "size",
+)
 PHOTO_UPSERT_SQL = f"""INSERT INTO photos({','.join(PHOTO_ANALYSIS_COLUMNS)})
     VALUES({','.join('?' for _ in PHOTO_ANALYSIS_COLUMNS)})
     ON CONFLICT(relative_path) DO UPDATE SET

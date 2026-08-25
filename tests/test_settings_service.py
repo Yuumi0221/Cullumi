@@ -6,14 +6,81 @@ from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
-from cullumi.config import ConfigStore
+from cullumi.config import BUILTIN_PROFILES, ConfigStore
 from cullumi.project_store import ProjectManager, connect_db
 from cullumi.scanner import Scanner
-from cullumi.settings_service import save_profile, save_settings
+from cullumi.settings_service import estimate_profile, save_profile, save_settings
 from cullumi.similarity import SimilarityGroupCache
 
 
 class SettingsServiceTests(unittest.TestCase):
+    def test_profile_estimate_uses_planned_pairs_without_mutating_database(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            photos = root / "photos"
+            photos.mkdir()
+            config = ConfigStore(root / "config.json")
+            config.data["default_cache_root"] = str(root / "cache")
+            config.save()
+            manager = ProjectManager(config)
+            project = manager.open(str(photos))
+            scanner = Scanner(config, manager)
+            with closing(connect_db(project.db_path)) as conn:
+                conn.executemany(
+                    """INSERT INTO photos(
+                           relative_path,size,status,error,width,height,megapixels,
+                           luminance,contrast,dark_clip,bright_clip,sharpness,entropy,
+                           phash,dhash,sha256,media_type,motion_sha256,cover_source
+                       ) VALUES(?,2000000,'active','',6000,4000,24,110,40,0.01,
+                                0.01,300,7,?,?,?,'image','','still')""",
+                    [
+                        (f"album-{index}/photo.jpg", f"{index:016x}", f"{index:016x}", "same")
+                        for index in range(3)
+                    ],
+                )
+                ids = [int(row[0]) for row in conn.execute("SELECT id FROM photos")]
+                conn.execute(
+                    """INSERT INTO similar_pairs(
+                           a_id,b_id,score,kind,recommended_id,face_safe
+                       ) VALUES(?,?,?,?,?,?)""",
+                    (ids[0], ids[1], 0.5, "similar", ids[0], 0),
+                )
+                conn.commit()
+
+            with (
+                mock.patch.object(
+                    scanner,
+                    "rebuild_similarity",
+                    side_effect=AssertionError("estimate must not rebuild a database copy"),
+                ),
+                mock.patch.object(
+                    scanner,
+                    "plan_similarity_pairs",
+                    wraps=scanner.plan_similarity_pairs,
+                ) as planner,
+            ):
+                result = estimate_profile(
+                    manager,
+                    scanner,
+                    project.project_id,
+                    BUILTIN_PROFILES["balanced"],
+                )
+
+            self.assertEqual(
+                result,
+                {
+                    "counts": {"remove": 0, "review": 0, "keep": 3, "unreadable": 0},
+                    "estimated_pairs": 2,
+                    "estimated_groups": 1,
+                },
+            )
+            planner.assert_called_once()
+            with closing(connect_db(project.db_path)) as conn:
+                stored = conn.execute(
+                    "SELECT kind,score FROM similar_pairs"
+                ).fetchall()
+            self.assertEqual([tuple(row) for row in stored], [("similar", 0.5)])
+
     def test_settings_are_validated_before_filesystem_or_config_changes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

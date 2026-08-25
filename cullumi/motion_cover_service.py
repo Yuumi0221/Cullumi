@@ -2,19 +2,21 @@ from __future__ import annotations
 
 import hashlib
 import math
+import tempfile
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from .analysis_refresh import changed_photo_plan, execute_refresh
 from .classification import classify, project_photo_counts
 from .config import ConfigStore
-from .media import analyze_photo
 from .motion import (
     ensure_motion_video,
     extract_motion_asset_frame,
     extract_motion_frame,
+    locate_motion_still_time,
     motion_asset_from_row,
     motion_fingerprint,
     restore_motion_source,
@@ -37,6 +39,112 @@ class MotionCoverUpdate:
     project_counts: dict[str, Any]
     source_written: bool
     source_backup: str
+
+
+def locate_motion_cover(
+    manager: ProjectManager,
+    scanner: Scanner,
+    project_id: str,
+    photo_id: int,
+) -> int:
+    project = manager.from_id(project_id)
+    with manager.data_operation(project_id), scanner.project_operation(
+        project_id, "定位动态照片封面"
+    ):
+        with closing(connect_db(project.db_path)) as conn:
+            row = conn.execute(
+                "SELECT * FROM photos WHERE id=? AND status='active'", (photo_id,)
+            ).fetchone()
+            if not row or row["media_type"] != "motion_photo":
+                raise ValueError("动态照片不存在")
+            still_time_ms = int(row["motion_still_time_ms"] or 0)
+            if still_time_ms >= 0:
+                return still_time_ms
+            photo = safe_relative_path(
+                project.root, row["relative_path"], "照片路径"
+            )
+            asset = motion_asset_from_row(project.root, row)
+            still_time_ms = locate_motion_still_time(
+                photo,
+                asset,
+                int(row["motion_duration_ms"] or 0),
+                float(row["motion_fps"] or 0),
+            )
+            conn.execute(
+                "UPDATE photos SET motion_still_time_ms=? WHERE id=?",
+                (still_time_ms, photo_id),
+            )
+            conn.commit()
+    return still_time_ms
+
+
+def recommend_motion_cover(
+    config: ConfigStore,
+    manager: ProjectManager,
+    scanner: Scanner,
+    project_id: str,
+    photo_id: int,
+) -> dict[str, Any]:
+    project = manager.from_id(project_id)
+    profile = config.get_profile(project.profile_id)
+    with closing(connect_db(project.db_path)) as conn:
+        row = conn.execute(
+            "SELECT * FROM photos WHERE id=? AND status='active'", (photo_id,)
+        ).fetchone()
+    if not row or row["media_type"] != "motion_photo":
+        raise ValueError("动态照片不存在")
+    duration = int(row["motion_duration_ms"] or 0)
+    if duration <= 0:
+        raise ValueError("动态照片时长无效")
+    asset = motion_asset_from_row(project.root, row)
+    motion_dir = project.motion_dir or project.project_dir / "motion"
+    video = ensure_motion_video(asset, motion_dir)
+    count = min(15, max(2, int(row["motion_frame_count"] or 2)))
+    times = {
+        round(index * max(0, duration - 1) / (count - 1))
+        for index in range(count)
+    }
+    if row["cover_source"] == "motion":
+        times.add(int(row["cover_time_ms"] or 0))
+    candidates = _motion_cover_candidates(
+        scanner, video, sorted(times), row, profile
+    )
+    recommended = max(
+        candidates,
+        key=lambda item: (item["quality_score"], -item["time_ms"]),
+    )
+    return {"recommended": recommended, "candidates": candidates}
+
+
+def _motion_cover_candidates(
+    scanner: Scanner,
+    video: Path,
+    times: list[int],
+    row: Any,
+    profile: dict[str, Any],
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    with tempfile.TemporaryDirectory() as temporary:
+        temp_root = Path(temporary)
+        for index, time_ms in enumerate(times):
+            frame = temp_root / f"frame-{index}.jpg"
+            thumb = temp_root / f"thumb-{index}.jpg"
+            extract_motion_frame(video, time_ms, frame)
+            metrics = scanner.analyze_photo(frame, thumb)
+            metrics.update({"cover_source": "motion", "size": row["size"]})
+            score = round(
+                max(0.0, min(1.0, quality_score(metrics, profile))) * 100, 1
+            )
+            candidates.append(
+                {
+                    "time_ms": time_ms,
+                    "frame_index": round(
+                        time_ms * float(row["motion_fps"] or 0) / 1000
+                    ),
+                    "quality_score": score,
+                }
+            )
+    return candidates
 
 
 def update_motion_cover(
@@ -92,13 +200,13 @@ def update_motion_cover(
                     extract_motion_asset_frame(asset, selected_time, frame)
                 else:
                     extract_motion_frame(video, selected_time, frame)
-                metrics = analyze_photo(frame, new_thumb)
+                metrics = scanner.analyze_photo(frame, new_thumb)
                 frame_index = round(selected_time * fps / 1000)
             else:
                 original = safe_relative_path(
                     project.root, row["relative_path"], "照片路径"
                 )
-                metrics = analyze_photo(original, new_thumb)
+                metrics = scanner.analyze_photo(original, new_thumb)
             if metrics["error"]:
                 new_thumb.unlink(missing_ok=True)
                 raise RuntimeError(metrics["error"])
@@ -204,4 +312,9 @@ def update_motion_cover(
     )
 
 
-__all__ = ["MotionCoverUpdate", "update_motion_cover"]
+__all__ = [
+    "MotionCoverUpdate",
+    "locate_motion_cover",
+    "recommend_motion_cover",
+    "update_motion_cover",
+]
