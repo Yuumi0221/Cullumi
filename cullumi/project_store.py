@@ -254,6 +254,12 @@ def connect_db(path: Path) -> sqlite3.Connection:
     try:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
+        conn.create_function(
+            "CASEFOLD",
+            1,
+            lambda value: str(value or "").casefold(),
+            deterministic=True,
+        )
         with _DATABASE_CONFIGURATION_LOCK:
             fingerprint = _database_fingerprint(resolved_path)
             existed = fingerprint[2] > 0

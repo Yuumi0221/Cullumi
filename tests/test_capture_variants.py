@@ -10,8 +10,10 @@ from unittest import mock
 
 from cullumi import http_api, project_store
 from cullumi.capture_variants import (
+    active_variant_rows,
     rebuild_capture_variants,
     variant_metadata,
+    variant_metadata_from_rows,
 )
 from cullumi.config import BUILTIN_PROFILES, ConfigStore
 from cullumi.project_store import ProjectManager, connect_db
@@ -485,6 +487,144 @@ class CaptureVariantTests(unittest.TestCase):
             }
         )
         self.assertEqual(empty, {"total": 0, "items": []})
+
+    def test_similar_groups_are_paginated_and_search_raw_paths_casefolded(
+        self,
+    ) -> None:
+        with closing(connect_db(self.project.db_path)) as conn:
+            groups = []
+            for index, folder in enumerate(("旅行", "Straße", "归档")):
+                jpg = insert_photo(
+                    conn,
+                    f"{folder}/IMG_{index:04d}.JPG",
+                    taken=f"2026:01:0{index + 1} 12:00:00",
+                )
+                raw = insert_photo(
+                    conn,
+                    f"{folder}/IMG_{index:04d}.NEF",
+                    size=20_000_000,
+                    taken=f"2026:01:0{index + 1} 12:00:00",
+                )
+                mate = insert_photo(
+                    conn,
+                    f"{folder}/MATE_{index:04d}.JPG",
+                    taken=f"2026:01:0{index + 1} 12:00:01",
+                )
+                groups.append((jpg, raw, mate))
+            rebuild_capture_variants(conn)
+            conn.executemany(
+                """INSERT INTO similar_pairs(
+                     a_id,b_id,score,kind,recommended_id,face_safe
+                   ) VALUES(?,?,?,?,?,?)""",
+                [
+                    (jpg, mate, 0.9, "similar", jpg, 0)
+                    for jpg, _raw, mate in groups
+                ],
+            )
+            conn.commit()
+
+        application = self.application()
+        all_groups = application.photo_queries.similar_groups(
+            {"project_id": [self.project.project_id]}
+        )
+        first_page = application.photo_queries.similar_groups(
+            {
+                "project_id": [self.project.project_id],
+                "limit": ["2"],
+                "offset": ["0"],
+            }
+        )
+        second_page = application.photo_queries.similar_groups(
+            {
+                "project_id": [self.project.project_id],
+                "limit": ["2"],
+                "offset": ["2"],
+            }
+        )
+        self.assertEqual(all_groups["total"], 3)
+        self.assertEqual(first_page["total"], 3)
+        self.assertEqual(second_page["total"], 3)
+        self.assertEqual(len(first_page["items"]), 2)
+        self.assertEqual(len(second_page["items"]), 1)
+        self.assertEqual(
+            [item["id"] for item in all_groups["items"]],
+            [
+                item["id"]
+                for item in [*first_page["items"], *second_page["items"]]
+            ],
+        )
+
+        raw_search = application.photo_queries.similar_groups(
+            {
+                "project_id": [self.project.project_id],
+                "search": ["STRASSE/img_0001.nef"],
+                "limit": ["1"],
+                "offset": ["0"],
+            }
+        )
+        self.assertEqual(raw_search["total"], 1)
+        self.assertEqual(len(raw_search["items"]), 1)
+        self.assertEqual(raw_search["items"][0]["count"], 3)
+        self.assertIn(
+            ["NEF", "JPG"],
+            [
+                photo["variant_extensions"]
+                for photo in raw_search["items"][0]["covers"]
+            ],
+        )
+        exhausted = application.photo_queries.similar_groups(
+            {
+                "project_id": [self.project.project_id],
+                "limit": ["2"],
+                "offset": ["99"],
+            }
+        )
+        self.assertEqual(exhausted, {"total": 3, "items": []})
+
+    def test_variant_rows_and_metadata_queries_scale_by_parameter_batch(
+        self,
+    ) -> None:
+        with closing(connect_db(self.project.db_path)) as conn:
+            photo_ids = []
+            for index in range(3):
+                photo_ids.extend(
+                    (
+                        insert_photo(conn, f"IMG_{index:04d}.JPG"),
+                        insert_photo(conn, f"IMG_{index:04d}.CR3"),
+                    )
+                )
+            rebuild_capture_variants(conn)
+            conn.commit()
+            statements = []
+            conn.set_trace_callback(statements.append)
+            with mock.patch(
+                "cullumi.capture_variants.SQLITE_PARAMETER_BATCH", 2
+            ):
+                rows = active_variant_rows(conn, photo_ids)
+                query_count = len(
+                    [
+                        statement
+                        for statement in statements
+                        if statement.lstrip().upper().startswith("SELECT")
+                    ]
+                )
+                metadata = variant_metadata_from_rows(rows)
+
+        self.assertEqual(query_count, 5)
+        self.assertEqual(
+            len(
+                [
+                    statement
+                    for statement in statements
+                    if statement.lstrip().upper().startswith("SELECT")
+                ]
+            ),
+            query_count,
+        )
+        self.assertEqual(set(metadata), set(photo_ids))
+        self.assertTrue(
+            all(extensions == ["CR3", "JPG"] for extensions in metadata.values())
+        )
 
     def test_photo_library_sort_orders_are_whitelisted_and_paginated(self) -> None:
         with closing(connect_db(self.project.db_path)) as conn:

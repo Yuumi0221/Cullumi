@@ -1,7 +1,7 @@
-const MOTION_PLAY_ICON = `<svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=2#motion-play"></use></svg>`;
-const MOTION_PAUSE_ICON = `<svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=2#motion-pause"></use></svg>`;
-const MOTION_MUTED_ICON = `<svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#motion-muted"></use></svg>`;
-const MOTION_SOUND_ICON = `<svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=1#motion-sound"></use></svg>`;
+const MOTION_PLAY_ICON = `<svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="${ICONS_URL}#motion-play"></use></svg>`;
+const MOTION_PAUSE_ICON = `<svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="${ICONS_URL}#motion-pause"></use></svg>`;
+const MOTION_MUTED_ICON = `<svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="${ICONS_URL}#motion-muted"></use></svg>`;
+const MOTION_SOUND_ICON = `<svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="${ICONS_URL}#motion-sound"></use></svg>`;
 
 function viewerSuggestion(p) {
   if (p._viewerBadge) return { text: p._viewerBadge, kind: p._viewerKind };

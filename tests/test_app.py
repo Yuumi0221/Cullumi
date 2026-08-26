@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -564,6 +565,31 @@ class AppSafetyTests(unittest.TestCase):
         self.assertTrue(handler._authorized())
         handler.path = "/static/js/app.js"
         self.assertTrue(handler._authorized())
+
+    def test_root_page_uses_one_revision_for_every_static_resource(self):
+        context = application_context()
+        handler = object.__new__(app.Handler)
+        handler.server = mock.Mock(application=context)
+        handler.path = f"/?token={context.token}"
+        handler.headers = {}
+        handler.wfile = io.BytesIO()
+        handler.send_response = mock.Mock()
+        handler.send_header = mock.Mock()
+        handler.end_headers = mock.Mock()
+
+        handler.do_GET()
+
+        html = handler.wfile.getvalue().decode("utf-8")
+        expected = app.static_asset_revision(context.web_root)
+        revisions = re.findall(r"/static/[^\"'#?]+\?v=([^\"'#]+)", html)
+        self.assertTrue(revisions)
+        self.assertEqual(set(revisions), {expected})
+        self.assertIn(f'window.ASSET_REVISION="{expected}"', html)
+        self.assertNotIn("__ASSET_REVISION__", html)
+        self.assertIn(
+            mock.call("Cache-Control", "no-store"),
+            handler.send_header.call_args_list,
+        )
 
     def test_invalid_settings_do_not_partially_mutate_configuration(self):
         with tempfile.TemporaryDirectory() as temporary:

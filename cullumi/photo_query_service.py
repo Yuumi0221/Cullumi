@@ -8,6 +8,7 @@ from .capture_variants import (
     active_variant_rows,
     format_category,
     variant_metadata,
+    variant_metadata_from_rows,
 )
 from .classification import (
     PHOTO_AI_FILTERS,
@@ -31,6 +32,7 @@ PHOTO_SORT_EXPRESSIONS = {
     "taken": "taken",
 }
 PHOTO_SORT_DIRECTIONS = {"asc": "ASC", "desc": "DESC"}
+SIMILAR_GROUP_PAGE_LIMIT = 500
 
 
 def photo_sort_order(sort: str, direction: str = "asc") -> str:
@@ -83,6 +85,24 @@ def expanded_similarity_members(
     return expanded
 
 
+def _matching_similarity_photo_ids(
+    conn: Any, search: str
+) -> set[int]:
+    matching: set[int] = set()
+    for row in conn.execute(
+        """SELECT p.id,cv.representative_id
+             FROM photos p
+             LEFT JOIN capture_variant_members cv ON cv.photo_id=p.id
+            WHERE p.status='active'
+              AND INSTR(CASEFOLD(p.relative_path),?)>0""",
+        (search.casefold(),),
+    ):
+        matching.add(int(row["id"]))
+        if row["representative_id"] is not None:
+            matching.add(int(row["representative_id"]))
+    return matching
+
+
 class PhotoQueryService:
     """Read and serialize library and similarity-group photos."""
 
@@ -103,7 +123,7 @@ class PhotoQueryService:
         project_id: str,
         row: Any,
         profile: dict[str, Any] | None = None,
-        variant_extensions: list[str] | None = None,
+        variant_extensions: list[str] | tuple[str, ...] = (),
     ) -> dict[str, Any]:
         data = {key: row[key] for key in row.keys()}
         data.pop("capture_representative_id", None)
@@ -114,13 +134,7 @@ class PhotoQueryService:
         data["format_category"] = format_category(
             data.get("extension"), data.get("relative_path")
         )
-        if variant_extensions is None:
-            project = self.manager.from_id(project_id)
-            with closing(connect_db(project.db_path)) as conn:
-                variant_extensions = variant_metadata(
-                    conn, [int(row["id"])]
-                ).get(int(row["id"]), [])
-        data["variant_extensions"] = variant_extensions
+        data["variant_extensions"] = list(variant_extensions)
         if not str(row["error"] or ""):
             if profile is None:
                 project = self.manager.from_id(project_id)
@@ -218,15 +232,33 @@ class PhotoQueryService:
 
     def similar_groups(self, query: dict[str, list[str]]) -> dict[str, Any]:
         project_id = query.get("project_id", [""])[0]
-        search = query.get("search", [""])[0].casefold()
+        search = query.get("search", [""])[0].strip()
+        raw_limit = query.get("limit", [None])[0]
+        limit = (
+            None
+            if raw_limit is None
+            else min(SIMILAR_GROUP_PAGE_LIMIT, max(1, int(raw_limit)))
+        )
+        offset = max(0, int(query.get("offset", ["0"])[0]))
         project = self.manager.from_id(project_id)
         profile = self.config.get_profile(project.profile_id)
         blink_enabled = bool(
             self.config.snapshot().get("blink_detection_enabled", True)
         )
         with closing(connect_db(project.db_path)) as conn:
-            groups = self.similarity_groups.get(
-                project_id, conn, profile, blink_enabled
+            participant_ids = (
+                _matching_similarity_photo_ids(conn, search)
+                if search
+                else None
+            )
+            total, groups = self.similarity_groups.get_page(
+                project_id,
+                conn,
+                profile,
+                blink_enabled,
+                offset=offset,
+                limit=limit,
+                participant_ids=participant_ids,
             )
             variant_rows = active_variant_rows(
                 conn,
@@ -236,22 +268,10 @@ class PhotoQueryService:
                     for row in group["members"]
                 ),
             )
-            variants = variant_metadata(
-                conn,
-                (
-                    int(row["id"])
-                    for group in groups
-                    for row in group["members"]
-                ),
-            )
+            variants = variant_metadata_from_rows(variant_rows)
         items = []
         for group in groups:
             expanded = expanded_similarity_members(group, variant_rows)
-            if search and not any(
-                search in str(row["relative_path"]).casefold()
-                for row, _source_id in expanded
-            ):
-                continue
             items.append({
                 "id": group["id"],
                 "count": len(expanded),
@@ -275,7 +295,7 @@ class PhotoQueryService:
                 ],
                 "face_safe": group["face_safe"],
             })
-        return {"total": len(items), "items": items}
+        return {"total": total, "items": items}
 
     def similar_group(self, query: dict[str, list[str]]) -> dict[str, Any]:
         project_id = query.get("project_id", [""])[0]
@@ -295,9 +315,7 @@ class PhotoQueryService:
                     conn, (int(row["id"]) for row in group["members"])
                 )
                 expanded = expanded_similarity_members(group, variant_rows)
-                variants = variant_metadata(
-                    conn, (int(row["id"]) for row, _source_id in expanded)
-                )
+                variants = variant_metadata_from_rows(variant_rows)
             else:
                 expanded = []
                 variants = {}

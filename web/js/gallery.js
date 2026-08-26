@@ -1,19 +1,11 @@
-const setEquals = (set, values) =>
-  set.size === values.length && values.every((value) => set.has(value));
+let libraryTools, similarTools;
 function projectFormatValues(project = state.project) {
   return (project?.format_categories || [])
     .map((item) => item.id)
     .filter((value) => FORMAT_VALUES.includes(value));
 }
 function renderFormatFilterOptions() {
-  const available = new Set(projectFormatValues());
-  $$('[data-format-option]').forEach((label) =>
-    label.classList.toggle(
-      "hidden",
-      !available.has(label.dataset.formatOption),
-    ),
-  );
-  $("#formatFilter").classList.toggle("hidden", !available.size);
+  libraryTools?.sync();
 }
 function libraryPresetName() {
   if (
@@ -49,85 +41,75 @@ function setActiveNav(name) {
     button.classList.toggle("active", button.dataset.nav === name),
   );
 }
-function filterSummary(values, allValues, labels) {
-  if (values.size === allValues.length) return "全部";
-  if (!values.size) return "未选择";
-  if (values.size === 1) return labels[[...values][0]];
-  return `已选 ${values.size} 项`;
-}
-function libraryFilterAllValues(group) {
-  if (group === "decisions") return DECISION_VALUES;
-  if (group === "ai") return AI_VALUES;
-  return projectFormatValues();
-}
 function syncFilterControls() {
-  $$("[data-filter-group]").forEach(
-    (input) =>
-      (input.checked = state.filters[input.dataset.filterGroup].has(
-        input.value,
-      )),
-  );
-  const decision = $("#decisionFilterSummary"),
-    ai = $("#aiFilterSummary"),
-    formats = $("#formatFilterSummary"),
-    availableFormats = projectFormatValues();
-  decision.textContent = filterSummary(
-    state.filters.decisions,
-    DECISION_VALUES,
-    { undecided: "未决定", keep: "已保留", remove: "已移除" },
-  );
-  ai.textContent = filterSummary(state.filters.ai, AI_VALUES, {
-    remove: "建议移除",
-    review: "人工复查",
-    no_suggestion: "无建议",
-  });
-  formats.textContent = filterSummary(
-    state.filters.formats,
-    availableFormats,
-    Object.fromEntries(
-      (state.project?.format_categories || []).map((item) => [
-        item.id,
-        item.label,
-      ]),
-    ),
-  );
-  decision
-    .closest(".gallery-view-option")
-    .classList.toggle("empty-selection", !state.filters.decisions.size);
-  ai.closest(".gallery-view-option").classList.toggle(
-    "empty-selection",
-    !state.filters.ai.size,
-  );
-  formats.closest(".gallery-view-option").classList.toggle(
-    "empty-selection",
-    !!availableFormats.length && !state.filters.formats.size,
-  );
-  $$("[data-select-all]").forEach((button) => {
-    const all = libraryFilterAllValues(button.dataset.selectAll);
-    button.textContent =
-      all.length && setEquals(state.filters[button.dataset.selectAll], all)
-        ? "全不选"
-        : "全选";
-  });
+  libraryTools?.sync();
 }
 function syncSortControls() {
-  $$("[data-sort-value]").forEach((input) => {
-    input.checked = input.dataset.sortValue === state.librarySort;
-  });
-  $$("[data-sort-direction]").forEach((input) => {
-    input.checked =
-      input.dataset.sortDirection === state.librarySortDirection;
-  });
-  const sortLabels = {
-      suggestion: "建议",
-      filename: "名称",
-      size: "大小",
-      taken: "日期（拍摄日期）",
+  libraryTools?.sync();
+}
+function defaultGalleryChoices(group) {
+  return GALLERY_FILTER_DEFINITIONS.find((item) => item.key === group).values.map(
+    ([id, label]) => ({ id, label }),
+  );
+}
+function initializeGalleryTools() {
+  libraryTools = createGalleryTools({
+    root: "#libraryFilters",
+    prefix: "library",
+    viewMenu: "view",
+    sortMenu: "sort",
+    ids: {
+      viewTool: "libraryViewTool",
+      viewPanel: "libraryViewPanel",
+      sortTool: "librarySortTool",
+      sortPanel: "librarySortPanel",
+      decisions: { item: "libraryDecisionViewItem", summary: "decisionFilterSummary" },
+      ai: { item: "libraryAiViewItem", summary: "aiFilterSummary" },
+      formats: { item: "formatFilter", summary: "formatFilterSummary" },
     },
-    directionLabel =
-      state.librarySortDirection === "desc" ? "递减" : "递增";
-  const trigger = $("[data-filter-menu=\"sort\"] .gallery-tool-trigger");
-  trigger.title = `排序：${sortLabels[state.librarySort]} · ${directionLabel}`;
+    available: (group) =>
+      group === "formats"
+        ? state.project?.format_categories || []
+        : defaultGalleryChoices(group),
+    values: (group) => state.filters[group],
+    setValues: (group, values) => (state.filters[group] = values),
+    sort: () => state.librarySort,
+    setSort: (value) => (state.librarySort = value),
+    direction: () => state.librarySortDirection,
+    setDirection: (value) => (state.librarySortDirection = value),
+    onFilterChange: () => {
+      setActiveNav(libraryPresetName());
+      loadView();
+    },
+    onSortChange: loadView,
+  });
+  similarTools = createGalleryTools({
+    root: "#similarTools",
+    prefix: "similar",
+    viewMenu: "similar-view",
+    sortMenu: "similar-sort",
+    ids: {
+      viewTool: "similarViewTool",
+      viewPanel: "similarViewPanel",
+      sortTool: "similarSortTool",
+      sortPanel: "similarSortPanel",
+      decisions: { item: "similarDecisionViewItem", summary: "similarDecisionFilterSummary" },
+      ai: { item: "similarAiViewItem", summary: "similarAiFilterSummary" },
+      formats: { item: "similarFormatViewItem", summary: "similarFormatFilterSummary" },
+    },
+    available: (group) =>
+      group === "formats"
+        ? state.similar.formatCategories
+        : defaultGalleryChoices(group),
+    values: (group) => state.similar[group],
+    setValues: (group, values) => (state.similar[group] = values),
+    sort: () => state.similar.sort,
+    setSort: (value) => (state.similar.sort = value),
+    direction: () => state.similar.sortDirection,
+    setDirection: (value) => (state.similar.sortDirection = value),
+    onFilterChange: renderSimilarGroupMembers,
+    onSortChange: renderSimilarGroupMembers,
+  });
 }
 function applyLibraryPreset(name) {
   const presets = {
@@ -287,7 +269,7 @@ async function loadView() {
     if (state.view === "library") {
       await loadLibraryPage(true);
     } else if (state.view === "similar") {
-      await loadSimilarView();
+      await loadSimilarView(true);
     } else if (state.view === "quarantine") {
       const d = await json(
         `/api/quarantine/batches?project_id=${state.project.id}`,
@@ -455,6 +437,10 @@ async function syncViewerDecisions() {
   state.viewerDirtyIds.clear();
   if (state.view === "library") {
     ids.forEach(reconcileLibraryDecision);
+    return;
+  }
+  if (state.view === "similar" && state.similar.selectedId) {
+    renderSimilarGroupMembers();
     return;
   }
   await loadView();
@@ -657,80 +643,11 @@ function selectNavigationView(event) {
   loadView();
 }
 
-function bindLibraryFilterEvents() {
-  $$(".multi-filter-trigger").forEach(
-    (button) =>
-      (button.onclick = (event) => {
-        event.stopPropagation();
-        const owner = button.closest(".multi-filter");
-        const panel = owner.querySelector(".multi-filter-panel");
-        const opening = panel.classList.contains("hidden");
-        closeFilterMenus();
-        if (opening) {
-          panel.classList.remove("hidden");
-          button.setAttribute("aria-expanded", "true");
-        }
-      }),
-  );
-  $$(".multi-filter-panel").forEach(
-    (panel) => (panel.onclick = (event) => event.stopPropagation()),
-  );
-  $$("[data-filter-group]").forEach(
-    (input) =>
-      (input.onchange = () => {
-        const values = state.filters[input.dataset.filterGroup];
-        input.checked ? values.add(input.value) : values.delete(input.value);
-        syncFilterControls();
-        setActiveNav(libraryPresetName());
-        loadView();
-      }),
-  );
-  $$("[data-select-all]").forEach(
-    (button) =>
-      (button.onclick = () => {
-        const group = button.dataset.selectAll;
-        const all = libraryFilterAllValues(group);
-        state.filters[group] =
-          all.length && setEquals(state.filters[group], all)
-            ? new Set()
-            : new Set(all);
-        syncFilterControls();
-        setActiveNav(libraryPresetName());
-        loadView();
-      }),
-  );
-  $$("[data-sort-value]").forEach((input) => {
-    input.onchange = () => {
-      if (
-        input.checked &&
-        LIBRARY_SORT_VALUES.includes(input.dataset.sortValue)
-      ) {
-        state.librarySort = input.dataset.sortValue;
-        syncSortControls();
-        loadView();
-      } else syncSortControls();
-    };
-  });
-  $$("[data-sort-direction]").forEach((input) => {
-    input.onchange = () => {
-      if (
-        input.checked &&
-        ["asc", "desc"].includes(input.dataset.sortDirection)
-      ) {
-        state.librarySortDirection = input.dataset.sortDirection;
-        syncSortControls();
-        loadView();
-      } else syncSortControls();
-    };
-  });
-}
-
 function bindGalleryEvents() {
   [$("#gallery"), $("#similarDetailGallery")].forEach((container) =>
     container.addEventListener("click", handleGalleryClick),
   );
   $("#nav").onclick = selectNavigationView;
-  bindLibraryFilterEvents();
   let searchTimer;
   $("#searchInput").oninput = () => {
     let refresh = loadView;

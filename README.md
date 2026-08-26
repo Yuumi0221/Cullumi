@@ -70,11 +70,14 @@ Cullumi 只监听 `127.0.0.1`，接口使用每次启动随机生成的会话令
 - `cullumi/motion_cover_service.py` 负责动态封面更新及相关数据库事务。
 - `cullumi/photo_query_service.py` 负责照片列表、相似组查询和接口数据整理。
 - `cullumi/settings_service.py` 负责设置保存、模式应用和分析刷新事务。
-- `cullumi/workflows.py` 负责决定导入导出、批量标记、隔离与恢复。
+- `cullumi/decision_service.py` 负责单张与批量决定、CSV 导入导出和拍摄变体同步。
+- `cullumi/quarantine_service.py` 负责隔离清单、文件移动回滚与恢复。
+- `cullumi/workflows.py` 保留旧版决定和隔离导入入口的兼容导出。
 - `cullumi/similarity.py` 负责相似候选索引、结构比较、分组和推荐排序。
 - `cullumi/fs_utils.py` 提供路径边界判断与原子 JSON 写入。
 - `cullumi/core.py` 保留旧版 Python 导入入口的兼容导出。
 - `web/js/runtime.js` 提供共享状态、接口请求、提示与主题功能。
+- `web/js/gallery-tools.js` 生成照片库与相似组共用的查看、排序组件。
 - `web/js/session.js` 负责最近项目、项目打开和扫描进度。
 - `web/js/similar.js` 负责相似照片列表与分组浏览。
 - `web/js/settings.js` 负责模式、设置、确认框和更新提示。
@@ -82,7 +85,7 @@ Cullumi 只监听 `127.0.0.1`，接口使用每次启动随机生成的会话令
 - `web/js/viewer.js` 负责图片预览、缩放和 Live Photo 控制。
 - `web/js/app.js` 负责统一初始化和全局快捷键。
 
-前端使用无需构建工具的经典脚本。脚本依次加载 `runtime`、`session`、`similar`、`settings`、`gallery`、`viewer` 和 `app`。样式依次加载 `base`、`workspace`、`viewer`、`settings`、`theme`、`responsive` 和 `home`。
+前端使用无需构建工具的经典脚本。脚本依次加载 `runtime`、`gallery-tools`、`session`、`similar`、`settings`、`gallery`、`viewer` 和 `app`。样式依次加载 `base`、`workspace`、`viewer`、`settings`、`theme`、`responsive` 和 `home`。静态资源 URL 使用内容修订号统一刷新缓存。
 
 创建运行环境并启动Cullumi 。
 

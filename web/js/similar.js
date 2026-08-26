@@ -53,11 +53,6 @@ function similarAiValue(photo) {
     ? photo.suggestion
     : "no_suggestion";
 }
-function similarFilterAllValues(group) {
-  if (group === "decisions") return DECISION_VALUES;
-  if (group === "ai") return AI_VALUES;
-  return similarFormatValues();
-}
 function similarSuggestionRank(photo) {
   return { remove: 0, review: 1, unreadable: 2 }[photo.suggestion] ?? 3;
 }
@@ -91,73 +86,7 @@ function compareSimilarPhotos(left, right) {
   return pathResult || left.id - right.id;
 }
 function syncSimilarControls() {
-  const availableValues = similarFormatValues(),
-    available = new Set(availableValues),
-    decisionSummary = $("#similarDecisionFilterSummary"),
-    aiSummary = $("#similarAiFilterSummary"),
-    formatSummary = $("#similarFormatFilterSummary");
-  $$("[data-similar-format-option]").forEach((label) => {
-    const category = label.dataset.similarFormatOption;
-    label.classList.toggle("hidden", !available.has(category));
-  });
-  $$("[data-similar-filter-group]").forEach((input) => {
-    input.checked = state.similar[input.dataset.similarFilterGroup].has(
-      input.value,
-    );
-  });
-  decisionSummary.textContent = filterSummary(
-    state.similar.decisions,
-    DECISION_VALUES,
-    { undecided: "未决定", keep: "已保留", remove: "已移除" },
-  );
-  aiSummary.textContent = filterSummary(state.similar.ai, AI_VALUES, {
-    remove: "建议移除",
-    review: "人工复查",
-    no_suggestion: "无建议",
-  });
-  formatSummary.textContent = filterSummary(
-    state.similar.formats,
-    availableValues,
-    FORMAT_LABELS,
-  );
-  decisionSummary.closest(".gallery-view-option").classList.toggle(
-    "empty-selection",
-    !state.similar.decisions.size,
-  );
-  aiSummary.closest(".gallery-view-option").classList.toggle(
-    "empty-selection",
-    !state.similar.ai.size,
-  );
-  formatSummary.closest(".gallery-view-option").classList.toggle(
-    "empty-selection",
-    !!availableValues.length && !state.similar.formats.size,
-  );
-  $$("[data-similar-select-all]").forEach((button) => {
-    const group = button.dataset.similarSelectAll,
-      all = similarFilterAllValues(group);
-    button.textContent =
-      all.length && setEquals(state.similar[group], all) ? "全不选" : "全选";
-  });
-  $("#similarFormatViewItem").classList.toggle(
-    "hidden",
-    !availableValues.length,
-  );
-  $$("[data-similar-sort-value]").forEach((input) => {
-    input.checked = input.dataset.similarSortValue === state.similar.sort;
-  });
-  $$("[data-similar-sort-direction]").forEach((input) => {
-    input.checked =
-      input.dataset.similarSortDirection === state.similar.sortDirection;
-  });
-  const sortLabels = {
-      suggestion: "建议",
-      filename: "名称",
-      size: "大小",
-      taken: "日期（拍摄日期）",
-    },
-    directionLabel = state.similar.sortDirection === "desc" ? "递减" : "递增";
-  $("#similarSortTool .gallery-tool-trigger").title =
-    `排序：${sortLabels[state.similar.sort]} · ${directionLabel}`;
+  similarTools?.sync();
 }
 function applySimilarMode() {
   const selected = !!state.similar.selectedId,
@@ -210,27 +139,68 @@ function blinkStatusLabel(photo, recommended, kind) {
   );
   return (faceCount - uncertainCount) / faceCount >= minimum ? "眨眼" : "";
 }
-async function loadSimilarView() {
-  const listSearch = encodeURIComponent(state.similar.listSearch);
-  const list = await json(
-    `/api/similar-groups?project_id=${state.project.id}&search=${listSearch}`,
-  );
-  state.similar.groups = list.items;
-  if (
-    state.similar.selectedId &&
-    !list.items.some((group) => group.id === state.similar.selectedId)
-  ) {
-    closeSimilarDetail(false);
-    toast("原相似组已发生变化，已返回相似组列表");
+function updateSimilarGroupSentinel() {
+  const sentinel = $("#similarGroupSentinel");
+  sentinel.textContent = state.similar.done
+    ? ""
+    : state.similar.loading
+      ? "正在加载更多相似组…"
+      : "继续向下滚动加载";
+  sentinel.classList.toggle("hidden", state.similar.done);
+}
+async function loadSimilarView(reset = false) {
+  if (!state.project || state.view !== "similar") return;
+  if (reset) {
+    state.similar.offset = 0;
+    state.similar.total = 0;
+    state.similar.done = false;
+    state.similar.loading = false;
+    state.similar.generation += 1;
+    state.similar.groups = [];
+    renderSimilarFolders();
   }
-  renderSimilarFolders();
-  applySimilarMode();
-  if (state.similar.selectedId) await loadSimilarGroupMembers();
-  else {
-    state.items = [];
-    $("#viewSubtitle").textContent =
-      `${list.total} 组相似照片${list.items.some((group) => group.face_safe) ? " · 人物照片请检查表情" : ""}`;
-    $("#empty").classList.toggle("hidden", !!list.items.length);
+  if (state.similar.loading || state.similar.done) return;
+  const generation = state.similar.generation,
+    params = new URLSearchParams({
+      project_id: state.project.id,
+      search: state.similar.listSearch,
+      limit: String(SIMILAR_GROUP_PAGE_SIZE),
+      offset: String(state.similar.offset),
+    });
+  state.similar.loading = true;
+  updateSimilarGroupSentinel();
+  try {
+    const list = await json(`/api/similar-groups?${params.toString()}`);
+    if (generation !== state.similar.generation || state.view !== "similar")
+      return;
+    const known = new Set(state.similar.groups.map((group) => group.id));
+    state.similar.groups.push(
+      ...list.items.filter((group) => !known.has(group.id)),
+    );
+    state.similar.offset += list.items.length;
+    state.similar.total = list.total;
+    state.similar.done =
+      state.similar.offset >= list.total || !list.items.length;
+    renderSimilarFolders();
+    applySimilarMode();
+    if (state.similar.selectedId && reset) {
+      try {
+        await loadSimilarGroupMembers();
+      } catch (error) {
+        closeSimilarDetail(false);
+        toast("原相似组已发生变化，已返回相似组列表");
+      }
+    } else if (!state.similar.selectedId) {
+      state.items = [];
+      $("#viewSubtitle").textContent =
+        `${list.total} 组相似照片${state.similar.groups.some((group) => group.face_safe) ? " · 人物照片请检查表情" : ""}`;
+      $("#empty").classList.toggle("hidden", !!list.total);
+    }
+  } finally {
+    if (generation === state.similar.generation) {
+      state.similar.loading = false;
+      updateSimilarGroupSentinel();
+    }
   }
 }
 async function loadSimilarGroupMembers() {
@@ -362,8 +332,8 @@ function closeSimilarDetail(restoreSearch = true) {
   renderSimilarFolders();
   applySimilarMode();
   $("#viewSubtitle").textContent =
-    `${state.similar.groups.length} 组相似照片${state.similar.groups.some((group) => group.face_safe) ? " · 人物照片请检查表情" : ""}`;
-  $("#empty").classList.toggle("hidden", !!state.similar.groups.length);
+    `${state.similar.total} 组相似照片${state.similar.groups.some((group) => group.face_safe) ? " · 人物照片请检查表情" : ""}`;
+  $("#empty").classList.toggle("hidden", !!state.similar.total);
 }
 function expandSimilarDetail() {
   if (!state.similar.selectedId) return;
@@ -376,48 +346,6 @@ function bindSimilarEvents() {
   $("#similarCollapseBtn").onclick = () => closeSimilarDetail();
   $("#similarBackBtn").onclick = () => closeSimilarDetail();
   $("#similarExpandBtn").onclick = expandSimilarDetail;
-  $$("[data-similar-filter-group]").forEach((input) => {
-    input.onchange = () => {
-      const values = state.similar[input.dataset.similarFilterGroup];
-      input.checked
-        ? values.add(input.value)
-        : values.delete(input.value);
-      renderSimilarGroupMembers();
-    };
-  });
-  $$("[data-similar-select-all]").forEach((button) => {
-    button.onclick = () => {
-      const group = button.dataset.similarSelectAll,
-        all = similarFilterAllValues(group);
-      state.similar[group] =
-        all.length && setEquals(state.similar[group], all)
-          ? new Set()
-          : new Set(all);
-      renderSimilarGroupMembers();
-    };
-  });
-  $$("[data-similar-sort-value]").forEach((input) => {
-    input.onchange = () => {
-      if (
-        input.checked &&
-        LIBRARY_SORT_VALUES.includes(input.dataset.similarSortValue)
-      ) {
-        state.similar.sort = input.dataset.similarSortValue;
-        renderSimilarGroupMembers();
-      } else syncSimilarControls();
-    };
-  });
-  $$("[data-similar-sort-direction]").forEach((input) => {
-    input.onchange = () => {
-      if (
-        input.checked &&
-        ["asc", "desc"].includes(input.dataset.similarSortDirection)
-      ) {
-        state.similar.sortDirection = input.dataset.similarSortDirection;
-        renderSimilarGroupMembers();
-      } else syncSimilarControls();
-    };
-  });
   $("#similarFolderPane").onclick = (event) => {
     if (
       state.similar.mode === "side" &&
@@ -431,6 +359,17 @@ function bindSimilarEvents() {
     event.stopPropagation();
     openSimilarGroup(button.dataset.similarGroup);
   };
+  const similarObserver = new IntersectionObserver(
+    (entries) => {
+      if (
+        entries.some((entry) => entry.isIntersecting) &&
+        state.view === "similar"
+      )
+        loadSimilarView(false).catch((error) => toast(error.message));
+    },
+    { root: $("#similarFolderPane"), rootMargin: "400px 0px" },
+  );
+  similarObserver.observe($("#similarGroupSentinel"));
   window.addEventListener("resize", () => {
     if (
       state.view === "similar" &&

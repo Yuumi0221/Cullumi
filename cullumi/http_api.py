@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import mimetypes
 import os
@@ -17,12 +18,18 @@ from typing import Any
 from . import __version__
 from .analysis_worker import PhotoAnalysisRunner
 from .capture_variants import (
-    active_variant_photo_ids,
     format_category_counts,
     variant_metadata,
 )
 from .classification import project_photo_counts
 from .config import ConfigStore
+from .decision_service import (
+    clear_decisions,
+    export_decisions,
+    import_decisions,
+    mark_ai_remove_suggestions,
+    set_photo_decision,
+)
 from .face_analysis import FaceAnalyzer
 from .media import (
     DISPLAY_PREVIEW_EXTENSIONS,
@@ -48,6 +55,11 @@ from .project_store import (
     project_thumbnail_path,
     safe_relative_path,
 )
+from .quarantine_service import (
+    apply_quarantine,
+    quarantine_preview,
+    restore_batch,
+)
 from .scanner import Scanner
 from .settings_service import (
     apply_profile,
@@ -57,15 +69,6 @@ from .settings_service import (
 )
 from .similarity import SimilarityGroupCache
 from .updates import RELEASES_PAGE_URL, check_for_update, download_release_asset
-from .workflows import (
-    apply_quarantine,
-    clear_decisions,
-    export_decisions,
-    import_decisions,
-    mark_ai_remove_suggestions,
-    quarantine_preview,
-    restore_batch,
-)
 
 CONFIG: ConfigStore
 MANAGER: ProjectManager
@@ -120,6 +123,21 @@ POST_ROUTES = {
     "/api/quarantine/apply": "api_quarantine_apply",
     "/api/quarantine/restore": "api_restore",
 }
+
+
+def static_asset_revision(web_root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(
+        (item for item in web_root.rglob("*") if item.is_file()),
+        key=lambda item: item.relative_to(web_root).as_posix(),
+    ):
+        if path.name == "index.html":
+            continue
+        digest.update(path.relative_to(web_root).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()[:12]
 
 
 @dataclass(frozen=True)
@@ -226,7 +244,14 @@ def photo_payload(
 ) -> dict[str, Any]:
     application = application or current_application()
     assert application.photo_queries is not None
-    return application.photo_queries.photo_payload(project_id, row, profile)
+    project = application.manager.from_id(project_id)
+    with closing(connect_db(project.db_path)) as conn:
+        extensions = variant_metadata(conn, [int(row["id"])]).get(
+            int(row["id"]), []
+        )
+    return application.photo_queries.photo_payload(
+        project_id, row, profile, extensions
+    )
 
 
 def project_summary(
@@ -499,9 +524,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             parsed = self._parsed()
             if parsed.path == "/":
+                revision = static_asset_revision(self.application.web_root)
                 html = (self.application.web_root / "index.html").read_text(
                     encoding="utf-8"
-                ).replace("__APP_TOKEN__", self.application.token)
+                ).replace("__APP_TOKEN__", self.application.token).replace(
+                    "__ASSET_REVISION__", revision
+                )
                 data = html.encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -775,67 +803,37 @@ class Handler(BaseHTTPRequestHandler):
     def api_decision(self, body: dict[str, Any]) -> None:
         project_id = body["project_id"]
         decision = body.get("decision", "")
-        if decision not in {"", "keep", "remove"}:
-            raise ValueError("无效决定")
         with self.manager.data_operation(project_id):
             project = self.manager.from_id(project_id)
-            with closing(connect_db(project.db_path)) as conn:
-                photo_id = int(body["photo_id"])
-                source = conn.execute(
-                    "SELECT id FROM photos WHERE id=? AND status='active'",
-                    (photo_id,),
-                ).fetchone()
-                if not source:
-                    raise ValueError("照片不存在或当前不可用")
-                sync_variants = bool(
-                    self.config.snapshot().get("sync_variant_decisions", True)
-                )
-                target_ids = active_variant_photo_ids(
-                    conn, photo_id, sync_variants
-                )
-                placeholders = ",".join("?" for _ in target_ids)
-                previous = {
-                    int(row["id"]): str(row["decision"] or "")
-                    for row in conn.execute(
-                        f"""SELECT id,decision FROM photos
-                              WHERE id IN ({placeholders}) AND status='active'""",
-                        target_ids,
+            result = set_photo_decision(
+                project,
+                int(body["photo_id"]),
+                decision,
+                bool(
+                    self.config.snapshot().get(
+                        "sync_variant_decisions", True
                     )
-                }
-                conn.execute(
-                    f"""UPDATE photos SET decision=?
-                          WHERE id IN ({placeholders}) AND status='active'""",
-                    [decision, *target_ids],
+                ),
+            )
+            profile = self.config.get_profile(project.profile_id)
+            assert self.application.photo_queries is not None
+            affected_photos = []
+            for row in result.rows:
+                photo_id = int(row["id"])
+                item = self.application.photo_queries.photo_payload(
+                    project_id,
+                    row,
+                    profile,
+                    result.variant_extensions.get(photo_id, []),
                 )
-                conn.commit()
-                rows = conn.execute(
-                    f"""SELECT * FROM photos
-                          WHERE id IN ({placeholders}) AND status='active'
-                          ORDER BY id""",
-                    target_ids,
-                ).fetchall()
-                variants = variant_metadata(
-                    conn, (int(row["id"]) for row in rows)
-                )
-                counts = project_photo_counts(conn)
-                profile = self.config.get_profile(project.profile_id)
-                assert self.application.photo_queries is not None
-                affected_photos = []
-                for row in rows:
-                    item = self.application.photo_queries.photo_payload(
-                        project_id,
-                        row,
-                        profile,
-                        variants.get(int(row["id"]), []),
-                    )
-                    item["previous_decision"] = previous.get(int(row["id"]), "")
-                    affected_photos.append(item)
+                item["previous_decision"] = result.previous.get(photo_id, "")
+                affected_photos.append(item)
         self._send_json({
             "saved": True,
-            "photo_id": photo_id,
-            "decision": decision,
+            "photo_id": result.photo_id,
+            "decision": result.decision,
             "affected_photos": affected_photos,
-            "project_counts": counts,
+            "project_counts": result.project_counts,
         })
 
     def api_decision_clear(self, body: dict[str, Any]) -> None:

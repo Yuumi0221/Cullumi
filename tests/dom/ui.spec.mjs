@@ -4,6 +4,8 @@ import { expect, test } from "playwright/test";
 const token = process.env.CULLUMI_DOM_TOKEN || "cullumi-dom-test";
 const image = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='24'%3E%3Crect width='32' height='24' fill='%23d9b7bd'/%3E%3C/svg%3E";
 const runtimeProblems = new WeakMap();
+const iconHref = (name) =>
+  new RegExp(`^/static/assets/icons\\.svg\\?v=[0-9a-f]{12}#${name}$`);
 
 const profiles = [
   { id: "conservative", name: "保守筛选", builtin: true, similarity: { blink: { face_confidence_min: 0.85, open_confidence_min: 0.8, closed_confidence_min: 0.8, min_eye_distance_px: 12, reliable_coverage_min: 0.8 } } },
@@ -323,6 +325,51 @@ async function installApi(page, options = {}) {
       });
     }
     if (url.pathname === "/api/similar-groups") {
+      const search = url.searchParams.get("search") || "";
+      if (options.similarRaceGate) {
+        if (search === "slow") await options.similarRaceGate;
+        if (search === "empty") return fulfill({ total: 0, items: [] });
+        const label = search || "initial";
+        const sources = [similarPhoto(701), similarPhoto(702)];
+        sources[0].relative_path = `相似组/${label}-1.jpg`;
+        sources[1].relative_path = `相似组/${label}-2.jpg`;
+        return fulfill({
+          total: 1,
+          items: [{
+            id: `similar-${label}`,
+            count: 2,
+            capture_count: 2,
+            kind: "similar",
+            face_safe: false,
+            recommended: sources[0],
+            covers: sources,
+          }],
+        });
+      }
+      if (options.similarPagination) {
+        const total = options.similarPagination;
+        const offset = Number(url.searchParams.get("offset") || 0);
+        const limit = Number(url.searchParams.get("limit") || total);
+        if (offset > 0 && options.similarPageGate)
+          await options.similarPageGate;
+        const items = Array.from(
+          { length: Math.max(0, Math.min(limit, total - offset)) },
+          (_, itemIndex) => {
+            const index = offset + itemIndex + 1;
+            const sources = [similarPhoto(index * 2 - 1), similarPhoto(index * 2)];
+            return {
+              id: `similar-${index}`,
+              count: 2,
+              capture_count: 2,
+              kind: "similar",
+              face_safe: false,
+              recommended: sources[0],
+              covers: sources,
+            };
+          },
+        );
+        return fulfill({ total, items });
+      }
       const sources = [similarPhoto(1), similarPhoto(2)];
       return fulfill({
         total: 1,
@@ -395,15 +442,15 @@ test("首页加载全部脚本并异步渲染最近项目", async ({ page }) => 
 
   await expect(page).toHaveTitle("Cullumi");
   await expect(page.locator("#appVersion")).toHaveText("v1.0.3");
-  await expect(page.locator("#chooseBtn svg use")).toHaveAttribute("href", "/static/assets/icons.svg?v=2#home-folder");
+  await expect(page.locator("#chooseBtn svg use")).toHaveAttribute("href", iconHref("home-folder"));
   await expect(page.locator("#recentList .recent-meta")).toContainText("2 张");
   await expect(page.locator("#recentList .recent-thumb img")).toHaveCount(1);
-  await expect(page.locator("#recentList .recent-more svg use").first()).toHaveAttribute("href", "/static/assets/icons.svg?v=3#home-more");
+  await expect(page.locator("#recentList .recent-more svg use").first()).toHaveAttribute("href", iconHref("home-more"));
 
   const scripts = await page.locator("script[src]").evaluateAll(nodes =>
     nodes.map(node => new URL(node.src).pathname.split("/").pop())
   );
-  expect(scripts).toEqual(["runtime.js", "session.js", "similar.js", "settings.js", "gallery.js", "viewer.js", "app.js"]);
+  expect(scripts).toEqual(["runtime.js", "gallery-tools.js", "session.js", "similar.js", "settings.js", "gallery.js", "viewer.js", "app.js"]);
 
   await page.locator("#recentSearch").fill("不存在的项目");
   await expect(page.locator("#recentList")).toContainText("没有匹配的项目");
@@ -419,11 +466,11 @@ test("项目照片可以通过真实卡片交互标记为移除", async ({ page 
   const viewTrigger = viewMenu.locator(".gallery-tool-trigger");
   await expect(viewTrigger.locator("svg use").first()).toHaveAttribute(
     "href",
-    "/static/assets/icons.svg?v=7#gallery-filter",
+    iconHref("gallery-filter"),
   );
   await expect(viewTrigger.locator("svg use").last()).toHaveAttribute(
     "href",
-    "/static/assets/icons.svg?v=1#chevron-down",
+    iconHref("chevron-down"),
   );
   await viewTrigger.click();
   await expect(viewTrigger).toHaveAttribute("aria-expanded", "true");
@@ -504,11 +551,11 @@ test("照片库排序菜单使用实心圆点单选样式并传递排序方向",
   const trigger = sortMenu.locator(".gallery-tool-trigger");
   await expect(trigger.locator("svg use").first()).toHaveAttribute(
     "href",
-    "/static/assets/icons.svg?v=7#gallery-sort",
+    iconHref("gallery-sort"),
   );
   await expect(trigger.locator("svg use").last()).toHaveAttribute(
     "href",
-    "/static/assets/icons.svg?v=1#chevron-down",
+    iconHref("chevron-down"),
   );
   const centered = await page
     .locator("#libraryFilters .gallery-tool-trigger")
@@ -569,6 +616,48 @@ test("照片库排序菜单使用实心圆点单选样式并传递排序方向",
   }).toBe("size:desc");
 });
 
+test("智能建议工具栏按内容区宽度分行且标题保持单行", async ({ page }) => {
+  await page.setViewportSize({ width: 1190, height: 720 });
+  await openApp(page);
+  await openProject(page);
+  await page.locator('[data-nav="ai"]').click();
+
+  const positions = () => page.locator(".toolbar").evaluate(toolbar => {
+    const box = selector => {
+      const node = selector === ":scope" ? toolbar : toolbar.querySelector(selector);
+      const rect = node.getBoundingClientRect();
+      return {
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        left: rect.left,
+        width: rect.width,
+        height: rect.height,
+      };
+    };
+    return {
+      toolbar: box(":scope"),
+      heading: box(":scope > div:first-child"),
+      title: box("#viewTitle"),
+      filters: box("#libraryFilters"),
+      action: box("#aiBatchAction"),
+      search: box(".search"),
+    };
+  });
+  const medium = await positions();
+  expect(medium.title.height).toBeLessThan(30);
+  expect(medium.heading.bottom).toBeLessThanOrEqual(medium.filters.top);
+  expect(Math.abs(medium.filters.top - medium.action.top)).toBeLessThan(1);
+  expect(medium.search.right).toBeLessThanOrEqual(medium.toolbar.right);
+
+  await page.setViewportSize({ width: 1040, height: 720 });
+  const narrow = await positions();
+  expect(narrow.title.height).toBeLessThan(30);
+  expect(Math.abs(narrow.filters.top - narrow.action.top)).toBeLessThan(1);
+  expect(narrow.search.top).toBeGreaterThanOrEqual(narrow.filters.bottom);
+  expect(narrow.search.right).toBeLessThanOrEqual(narrow.toolbar.right);
+});
+
 test("相似组使用照片库同款查看排序组件并组合筛选 RAW", async ({ page }) => {
   await openApp(page, {
     similarVariantPairs: true,
@@ -584,19 +673,19 @@ test("相似组使用照片库同款查看排序组件并组合筛选 RAW", asyn
   await expect(sortTool).toBeVisible();
   await expect(viewTool.locator(".gallery-tool-trigger svg use").first()).toHaveAttribute(
     "href",
-    "/static/assets/icons.svg?v=7#gallery-filter",
+    iconHref("gallery-filter"),
   );
   await expect(viewTool.locator(".gallery-tool-trigger svg use").last()).toHaveAttribute(
     "href",
-    "/static/assets/icons.svg?v=1#chevron-down",
+    iconHref("chevron-down"),
   );
   await expect(sortTool.locator(".gallery-tool-trigger svg use").first()).toHaveAttribute(
     "href",
-    "/static/assets/icons.svg?v=7#gallery-sort",
+    iconHref("gallery-sort"),
   );
   await expect(sortTool.locator(".gallery-tool-trigger svg use").last()).toHaveAttribute(
     "href",
-    "/static/assets/icons.svg?v=1#chevron-down",
+    iconHref("chevron-down"),
   );
   await viewTool.locator(".gallery-tool-trigger").click();
 
@@ -659,6 +748,83 @@ test("相似组使用照片库同款查看排序组件并组合筛选 RAW", asyn
   expect(positions.sortLeft).toBeGreaterThan(positions.viewRight);
 });
 
+test("相似组首屏分页后继续加载且不重复创建文件夹", async ({ page }) => {
+  let releaseNextPage;
+  const nextPage = new Promise(resolve => {
+    releaseNextPage = resolve;
+  });
+  const requests = await openApp(page, {
+    similarPagination: 125,
+    similarPageGate: nextPage,
+  });
+  await openProject(page);
+  await page.locator('[data-nav="similar"]').click();
+
+  await expect(page.locator("#similarFolders .similar-folder")).toHaveCount(120);
+  expect(
+    requests.find(
+      request =>
+        request.path === "/api/similar-groups" && request.query.offset === "0",
+    )?.query.limit,
+  ).toBe("120");
+
+  await page.evaluate(() => {
+    loadSimilarView(false);
+  });
+  await expect.poll(() =>
+    requests.some(
+      request =>
+        request.path === "/api/similar-groups" && request.query.offset === "120",
+    ),
+  ).toBe(true);
+  releaseNextPage();
+
+  const folders = page.locator("#similarFolders .similar-folder");
+  await expect(folders).toHaveCount(125);
+  await expect(page.locator("#similarGroupSentinel")).toBeHidden();
+  expect(await folders.evaluateAll(nodes => new Set(nodes.map(node => node.dataset.similarGroup)).size)).toBe(125);
+  expect(
+    requests.filter(request => request.path === "/api/similar-groups").map(
+      request => request.query.offset,
+    ),
+  ).toEqual(["0", "120"]);
+});
+
+test("相似组搜索废弃乱序旧响应并正确显示空结果", async ({ page }) => {
+  let releaseSlowSearch;
+  const slowSearch = new Promise(resolve => {
+    releaseSlowSearch = resolve;
+  });
+  const requests = await openApp(page, { similarRaceGate: slowSearch });
+  await openProject(page);
+  await page.locator('[data-nav="similar"]').click();
+  await expect(page.locator('[data-similar-group="similar-initial"]')).toBeVisible();
+
+  const search = page.locator("#searchInput");
+  await search.fill("slow");
+  await expect.poll(() =>
+    requests.some(
+      request =>
+        request.path === "/api/similar-groups" && request.query.search === "slow",
+    ),
+  ).toBe(true);
+  await search.fill("fast");
+  await expect(page.locator('[data-similar-group="similar-fast"]')).toBeVisible();
+
+  const slowResponse = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.pathname === "/api/similar-groups" && url.searchParams.get("search") === "slow";
+  });
+  releaseSlowSearch();
+  await slowResponse;
+  await expect(page.locator('[data-similar-group="similar-fast"]')).toBeVisible();
+  await expect(page.locator('[data-similar-group="similar-slow"]')).toHaveCount(0);
+
+  await search.fill("empty");
+  await expect(page.locator("#similarFolders .similar-folder")).toHaveCount(0);
+  await expect(page.locator("#viewSubtitle")).toContainText("0 组相似照片");
+});
+
 test("多格式决定同步更新卡片且自动前进跳过关联格式", async ({ page }) => {
   await openApp(page, {
     variantPair: true,
@@ -709,7 +875,7 @@ test("自定义模式恢复按钮使用统一图标并停留在字段标题行",
   expect(await resets.count()).toBe(await fields.count());
   await expect(resets.first().locator("svg use")).toHaveAttribute(
     "href",
-    "/static/assets/icons.svg?v=1#motion-reset",
+    iconHref("motion-reset"),
   );
   await expect(resets.first().locator("svg")).toHaveCSS("width", "14px");
 
@@ -883,9 +1049,9 @@ test("查看器可以在真实照片集合中前后导航", async ({ page }) => 
   await openProject(page);
   await page.locator('[data-photo-id="1"] [data-open-id]').click();
   await expect(page.locator("#viewerName")).toHaveText("海边-1.jpg");
-  await expect(page.locator('#viewer [data-close] svg use')).toHaveAttribute("href", "/static/assets/icons.svg?v=1#viewer-close");
-  await expect(page.locator("#viewerPrev svg use")).toHaveAttribute("href", "/static/assets/icons.svg?v=1#viewer-prev");
-  await expect(page.locator("#viewerNext svg use")).toHaveAttribute("href", "/static/assets/icons.svg?v=1#viewer-next");
+  await expect(page.locator('#viewer [data-close] svg use')).toHaveAttribute("href", iconHref("viewer-close"));
+  await expect(page.locator("#viewerPrev svg use")).toHaveAttribute("href", iconHref("viewer-prev"));
+  await expect(page.locator("#viewerNext svg use")).toHaveAttribute("href", iconHref("viewer-next"));
   await expect(page.locator("#viewerBadge.badge-review")).toHaveCSS("background-color", "rgb(255, 255, 255)");
   await expect(page.locator("#viewerBadge.badge-review")).toHaveCSS("color", "rgb(166, 111, 0)");
   await expect(page.locator("#viewerBadge.badge-review")).toHaveCSS("border-color", "rgb(166, 111, 0)");
@@ -913,17 +1079,17 @@ test("动态照片使用 SVG 控件并支持播放、缩放和末帧封面", asy
   await page.locator('[data-photo-id="1"] [data-open-id]').click();
   await expect(page.locator("#motionControls")).toBeVisible();
   await expect(page.locator("#motionMute")).toHaveAttribute("aria-label", "播放声音");
-  await expect(page.locator("#motionMute svg use")).toHaveAttribute("href", "/static/assets/icons.svg?v=1#motion-muted");
+  await expect(page.locator("#motionMute svg use")).toHaveAttribute("href", iconHref("motion-muted"));
   expect(await page.locator("#motionMute").evaluate(button => button.previousElementSibling?.id)).toBe("motionTimelineWrap");
   expect(await page.locator("#motionSetCover").evaluate(button => button.previousElementSibling?.id)).toBe("motionMute");
   expect(await page.locator("#motionResetCover").evaluate(button => button.previousElementSibling?.id)).toBe("motionSetCover");
   await expect(page.locator("#motionSetCover")).toHaveAttribute("aria-label", "设为封面");
-  await expect(page.locator("#motionSetCover svg use")).toHaveAttribute("href", "/static/assets/icons.svg?v=2#motion-set-cover");
+  await expect(page.locator("#motionSetCover svg use")).toHaveAttribute("href", iconHref("motion-set-cover"));
   await expect(page.locator("#motionSetCover")).toHaveText("");
   await expect(page.locator("#motionRecommend")).toHaveCount(0);
   await expect(page.locator("#motionResetCover")).toHaveAttribute("aria-label", "恢复原始封面");
   await expect(page.locator("#motionResetCover svg")).toHaveAttribute("viewBox", "0 0 1024 1024");
-  await expect(page.locator("#motionResetCover svg use")).toHaveAttribute("href", "/static/assets/icons.svg?v=1#motion-reset");
+  await expect(page.locator("#motionResetCover svg use")).toHaveAttribute("href", iconHref("motion-reset"));
   await expect(page.locator("#motionResetCover svg use")).toHaveAttribute("transform", "translate(1024 0) scale(-1 1)");
   await expect(page.locator("#motionResetCover")).toHaveText("");
   await expect(page.locator("#motionCoverMarker")).toBeVisible();
@@ -1030,17 +1196,17 @@ test("动态照片使用 SVG 控件并支持播放、缩放和末帧封面", asy
   await page.locator("#motionMute").click();
   await expect(page.locator("#viewerVideo")).toHaveJSProperty("muted", false);
   await expect(page.locator("#motionMute")).toHaveAttribute("aria-label", "静音");
-  await expect(page.locator("#motionMute svg use")).toHaveAttribute("href", "/static/assets/icons.svg?v=1#motion-sound");
+  await expect(page.locator("#motionMute svg use")).toHaveAttribute("href", iconHref("motion-sound"));
   await page.locator("#motionMute").click();
   await expect(page.locator("#viewerVideo")).toHaveJSProperty("muted", true);
   await expect(page.locator("#motionMute")).toHaveAttribute("aria-label", "播放声音");
 
   await page.locator("#viewerVideo").click();
   await expect(page.locator("#motionPlay")).toHaveAttribute("aria-label", "暂停");
-  await expect(page.locator("#motionPlay svg use")).toHaveAttribute("href", "/static/assets/icons.svg?v=2#motion-pause");
+  await expect(page.locator("#motionPlay svg use")).toHaveAttribute("href", iconHref("motion-pause"));
   await page.locator("#viewerVideo").click();
   await expect(page.locator("#motionPlay")).toHaveAttribute("aria-label", "播放");
-  await expect(page.locator("#motionPlay svg use")).toHaveAttribute("href", "/static/assets/icons.svg?v=2#motion-play");
+  await expect(page.locator("#motionPlay svg use")).toHaveAttribute("href", iconHref("motion-play"));
   await page.keyboard.press("Space");
   await expect(page.locator("#motionPlay")).toHaveAttribute("aria-label", "暂停");
   await page.keyboard.press("Space");

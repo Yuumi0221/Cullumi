@@ -581,6 +581,33 @@ class SimilarityGroupCache:
         )
         return self._hydrate(conn, topology)
 
+    def get_page(
+        self,
+        project_id: str,
+        conn: sqlite3.Connection,
+        profile: dict[str, Any],
+        blink_detection_enabled: bool = True,
+        *,
+        offset: int = 0,
+        limit: int | None = None,
+        participant_ids: set[int] | None = None,
+    ) -> tuple[int, list[dict[str, Any]]]:
+        topology = self._topology(
+            project_id, conn, profile, blink_detection_enabled
+        )
+        selected = (
+            topology
+            if participant_ids is None
+            else [
+                group
+                for group in topology
+                if participant_ids.intersection(group["member_ids"])
+            ]
+        )
+        total = len(selected)
+        stop = None if limit is None else offset + limit
+        return total, self._hydrate(conn, selected[offset:stop])
+
     @staticmethod
     def _hydrate(
         conn: sqlite3.Connection,

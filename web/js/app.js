@@ -53,6 +53,7 @@ function bindGlobalEvents() {
 }
 
 function startApplication() {
+  initializeGalleryTools();
   bindSessionEvents();
   bindSimilarEvents();
   bindSettingsEvents();

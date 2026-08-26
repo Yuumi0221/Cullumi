@@ -518,7 +518,7 @@ function addProfileResetButtons() {
     button.type = "button";
     button.className = "field-reset";
     button.innerHTML =
-      '<svg viewBox="0 0 1024 1024" aria-hidden="true"><use transform="translate(1024 0) scale(-1 1)" href="/static/assets/icons.svg?v=1#motion-reset"></use></svg>';
+      `<svg viewBox="0 0 1024 1024" aria-hidden="true"><use transform="translate(1024 0) scale(-1 1)" href="${ICONS_URL}#motion-reset"></use></svg>`;
     button.title = "恢复基础模式默认值";
     button.setAttribute("aria-label", button.title);
     label.classList.add("field-reset-label");

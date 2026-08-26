@@ -271,6 +271,7 @@ nav button.active em {
 }
 
 .content {
+  container: workspace-content / inline-size;
   min-width:0;
   padding:24px 26px 34px
 }
@@ -288,7 +289,8 @@ nav button.active em {
 .toolbar h2 {
   margin:0;
   font-size:26px;
-  line-height:1.05
+  line-height:1.05;
+  white-space:nowrap
 }
 
 .toolbar span {

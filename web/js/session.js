@@ -34,7 +34,7 @@ function renderRecentProjects() {
             : project.load_error
               ? "项目数据暂时无法读取"
               : recentProjectTime(project.last_opened);
-          return `<button class="recent" data-pid="${project.id}" title="${esc(project.load_error || project.root)}"><span class="recent-thumb">${project.thumbnail_url ? `<img src="${esc(project.thumbnail_url)}" alt="">` : `<span class="recent-thumb-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6Z"/></svg></span>`}</span><span class="recent-info"><b>${esc(recentProjectName(project))}</b><span class="recent-meta">${meta}</span><small>${esc(status)}</small></span><span class="recent-more" aria-label="项目操作" title="项目操作"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=3#home-more"></use></svg></span></button>`;
+          return `<button class="recent" data-pid="${project.id}" title="${esc(project.load_error || project.root)}"><span class="recent-thumb">${project.thumbnail_url ? `<img src="${esc(project.thumbnail_url)}" alt="">` : `<span class="recent-thumb-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6Z"/></svg></span>`}</span><span class="recent-info"><b>${esc(recentProjectName(project))}</b><span class="recent-meta">${meta}</span><small>${esc(status)}</small></span><span class="recent-more" aria-label="项目操作" title="项目操作"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="${ICONS_URL}#home-more"></use></svg></span></button>`;
         })
         .join("")
     : `<div class="empty recent-empty"><b>${state.recentProjects.length ? "没有匹配的项目" : "暂无最近筛选"}</b><span>${state.recentProjects.length ? "请尝试其他项目名称" : "选择一个照片文件夹即可开始"}</span></div>`;
@@ -158,6 +158,11 @@ async function showProject(p) {
     formats: new Set(),
     sort: "suggestion",
     sortDirection: "asc",
+    offset: 0,
+    total: 0,
+    done: false,
+    loading: false,
+    generation: 0,
   };
   document.body.classList.add("project-open");
   $("#home").classList.add("hidden");

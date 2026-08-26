@@ -18,16 +18,22 @@ from contextlib import closing
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
+from unittest import mock
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
+from cullumi.capture_variants import rebuild_capture_variants  # noqa: E402
 from cullumi.config import BUILTIN_PROFILES  # noqa: E402
+from cullumi.photo_query_service import PhotoQueryService  # noqa: E402
 from cullumi.project_store import Project, connect_db  # noqa: E402
 from cullumi.scanner import ScanCancelled, Scanner  # noqa: E402
 from cullumi.settings_service import estimate_profile  # noqa: E402
-from cullumi.similarity import build_similarity_groups  # noqa: E402
+from cullumi.similarity import (  # noqa: E402
+    SimilarityGroupCache,
+    build_similarity_groups,
+)
 
 if os.name == "nt":
     class _ProcessMemoryCounters(ctypes.Structure):
@@ -63,6 +69,7 @@ class BenchmarkScale:
     similar_edges: int = 10_000
     exact_photos: int = 5_000
     exact_size_groups: int = 100
+    variant_pairs: int = 1_000
 
 
 class BenchmarkConfig:
@@ -71,6 +78,9 @@ class BenchmarkConfig:
             "projects": {},
             "blink_detection_enabled": False,
         }
+
+    def get_profile(self, profile_id: str) -> dict[str, Any]:
+        return copy.deepcopy(BUILTIN_PROFILES[profile_id])
 
 
 class BenchmarkManager:
@@ -313,6 +323,55 @@ def _populate_photo_database(project: Project, photo_count: int, edge_count: int
         conn.commit()
 
 
+def _add_capture_variants(project: Project, count: int) -> None:
+    copied_columns = (
+        "mtime",
+        "width",
+        "height",
+        "megapixels",
+        "taken",
+        "luminance",
+        "contrast",
+        "dark_clip",
+        "bright_clip",
+        "sharpness",
+        "entropy",
+        "phash",
+        "dhash",
+        "thumbnail",
+        "error",
+        "suggestion",
+        "reason",
+        "status",
+        "analyzed_at",
+        "media_type",
+        "cover_source",
+        "quality_score",
+    )
+    insert_columns = ("relative_path", "extension", "size", *copied_columns)
+    with closing(connect_db(project.db_path)) as conn:
+        rows = conn.execute(
+            f"""SELECT relative_path,size,{','.join(copied_columns)}
+                  FROM photos ORDER BY id LIMIT ?""",
+            (count,),
+        ).fetchall()
+        conn.executemany(
+            f"""INSERT INTO photos({','.join(insert_columns)})
+                 VALUES({','.join('?' for _ in insert_columns)})""",
+            (
+                (
+                    str(Path(row["relative_path"]).with_suffix(".cr3")),
+                    ".cr3",
+                    int(row["size"] or 0) * 5,
+                    *(row[column] for column in copied_columns),
+                )
+                for row in rows
+            ),
+        )
+        rebuild_capture_variants(conn)
+        conn.commit()
+
+
 def _groups_summary(groups: list[dict[str, Any]]) -> dict[str, Any]:
     digest = hashlib.sha256()
     member_count = 0
@@ -354,6 +413,128 @@ def benchmark_similarity_groups(project: Project) -> dict[str, Any]:
         **metrics,
         "sql_queries": queries.report(),
         "summary": _groups_summary(groups),
+    }
+
+
+def measure_query_service(
+    operation: Callable[[], Any],
+) -> tuple[Any, dict[str, Any], dict[str, Any]]:
+    queries = QueryCounter()
+
+    def traced_connect_db(path: Path):
+        conn = connect_db(path)
+        conn.set_trace_callback(queries)
+        return conn
+
+    with mock.patch(
+        "cullumi.photo_query_service.connect_db", new=traced_connect_db
+    ):
+        result, metrics = measure(operation)
+    return result, metrics, queries.report()
+
+
+def benchmark_photo_queries(project: Project) -> dict[str, Any]:
+    service = PhotoQueryService(
+        BenchmarkConfig(),
+        BenchmarkManager(project),
+        SimilarityGroupCache(),
+        "benchmark-token",
+    )
+
+    with closing(connect_db(project.db_path)) as conn:
+        photo_count = int(conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0])
+    deep_offset = max(0, photo_count - 120)
+
+    def load_pages() -> list[dict[str, Any]]:
+        pages = []
+        for sort, direction, offset in (
+            ("suggestion", "asc", 0),
+            ("filename", "asc", deep_offset),
+            ("size", "desc", deep_offset),
+            ("taken", "desc", deep_offset),
+        ):
+            pages.append(
+                service.photos(
+                    {
+                        "project_id": [project.project_id],
+                        "sort": [sort],
+                        "direction": [direction],
+                        "offset": [str(offset)],
+                        "limit": ["120"],
+                        "decisions": ["all"],
+                        "ai_states": ["all"],
+                        "formats": ["all"],
+                    }
+                )
+            )
+        return pages
+
+    pages, metrics, queries = measure_query_service(load_pages)
+    payload = json.dumps(pages, ensure_ascii=False, separators=(",", ":"))
+    return {
+        **metrics,
+        "sql_queries": queries,
+        "response_bytes": len(payload.encode("utf-8")),
+        "summary": {
+            "totals": [page["total"] for page in pages],
+            "page_sizes": [len(page["items"]) for page in pages],
+            "first_ids": [
+                int(page["items"][0]["id"]) if page["items"] else 0
+                for page in pages
+            ],
+        },
+    }
+
+
+def benchmark_similarity_api(project: Project) -> dict[str, Any]:
+    config = BenchmarkConfig()
+    groups = SimilarityGroupCache()
+    service = PhotoQueryService(
+        config,
+        BenchmarkManager(project),
+        groups,
+        "benchmark-token",
+    )
+    profile = config.get_profile(project.profile_id)
+    with closing(connect_db(project.db_path)) as conn:
+        groups.count(project.project_id, conn, profile, False)
+    result, metrics, queries = measure_query_service(
+        lambda: service.similar_groups(
+            {
+                "project_id": [project.project_id],
+                "limit": ["120"],
+                "offset": ["0"],
+                "search": [""],
+            }
+        )
+    )
+    payload = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+    summary_payload = [
+        {
+            "id": item["id"],
+            "count": item["count"],
+            "capture_count": item["capture_count"],
+            "recommended_id": item["recommended_id"],
+        }
+        for item in result["items"]
+    ]
+    result_digest = hashlib.sha256(
+        json.dumps(
+            summary_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        **metrics,
+        "sql_queries": queries,
+        "response_bytes": len(payload.encode("utf-8")),
+        "summary": {
+            "total": result["total"],
+            "page_size": len(result["items"]),
+            "result_digest": result_digest,
+        },
     }
 
 
@@ -482,6 +663,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--similar-edges", type=int, default=10_000)
     parser.add_argument("--exact-photos", type=int, default=5_000)
     parser.add_argument("--exact-size-groups", type=int, default=100)
+    parser.add_argument("--variant-pairs", type=int, default=1_000)
     parser.add_argument(
         "--quick",
         action="store_true",
@@ -495,7 +677,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--compare", type=Path)
     parser.add_argument(
         "--only",
-        choices=("all", "discovery", "similarity_groups", "profile_estimate", "exact_duplicates"),
+        choices=(
+            "all",
+            "discovery",
+            "similarity_groups",
+            "similarity_api",
+            "photo_queries",
+            "profile_estimate",
+            "exact_duplicates",
+        ),
         default="all",
         help="Run one scenario when investigating a specific regression.",
     )
@@ -505,7 +695,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     scale = (
-        BenchmarkScale(2_000, 2_000, 500, 500, 20)
+        BenchmarkScale(2_000, 2_000, 500, 500, 20, 100)
         if args.quick
         else BenchmarkScale(
             args.discovery_files,
@@ -513,6 +703,7 @@ def main() -> int:
             args.similar_edges,
             args.exact_photos,
             args.exact_size_groups,
+            args.variant_pairs,
         )
     )
     if min(asdict(scale).values()) < 1:
@@ -523,16 +714,27 @@ def main() -> int:
         scenarios: dict[str, Any] = {}
         if args.only in {"all", "discovery"}:
             scenarios["discovery"] = benchmark_discovery(base, scale.discovery_files)
-        if args.only in {"all", "similarity_groups", "profile_estimate"}:
+        if args.only in {
+            "all",
+            "similarity_groups",
+            "similarity_api",
+            "photo_queries",
+            "profile_estimate",
+        }:
             photo_root = base / "photo-library"
             photo_cache = base / "photo-cache"
             photo_root.mkdir()
             project = _new_project(photo_root, photo_cache, "photos")
             _populate_photo_database(project, scale.photos, scale.similar_edges)
+            _add_capture_variants(project, scale.variant_pairs)
             if args.only in {"all", "similarity_groups"}:
                 scenarios["similarity_groups"] = benchmark_similarity_groups(project)
             if args.only in {"all", "profile_estimate"}:
                 scenarios["profile_estimate"] = benchmark_profile_estimate(project)
+            if args.only in {"all", "photo_queries"}:
+                scenarios["photo_queries"] = benchmark_photo_queries(project)
+            if args.only in {"all", "similarity_api"}:
+                scenarios["similarity_api"] = benchmark_similarity_api(project)
         if args.only in {"all", "exact_duplicates"}:
             scenarios["exact_duplicates"] = benchmark_exact_duplicates(
                 base, scale.exact_photos, scale.exact_size_groups

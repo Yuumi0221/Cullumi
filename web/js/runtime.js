@@ -1,4 +1,5 @@
 const TOKEN = window.APP_TOKEN;
+const ICONS_URL = `/static/assets/icons.svg?v=${encodeURIComponent(window.ASSET_REVISION || "dev")}`;
 const DECISION_VALUES = ["undecided", "keep", "remove"],
   AI_VALUES = ["remove", "review", "no_suggestion"],
   FORMAT_VALUES = ["raw", "jpeg", "heif", "png", "other"],
@@ -10,7 +11,8 @@ const DECISION_VALUES = ["undecided", "keep", "remove"],
     other: "其他",
   },
   LIBRARY_SORT_VALUES = ["suggestion", "filename", "size", "taken"],
-  LIBRARY_PAGE_SIZE = 120;
+  LIBRARY_PAGE_SIZE = 120,
+  SIMILAR_GROUP_PAGE_SIZE = 120;
 const state = {
   project: null,
   view: "library",
@@ -50,6 +52,11 @@ const state = {
     formats: new Set(),
     sort: "suggestion",
     sortDirection: "asc",
+    offset: 0,
+    total: 0,
+    done: false,
+    loading: false,
+    generation: 0,
   },
   viewerTransform: {
     scale: 1,

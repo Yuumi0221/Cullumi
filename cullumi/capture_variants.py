@@ -159,18 +159,15 @@ def variant_memberships(conn: sqlite3.Connection) -> dict[int, int]:
     }
 
 
-def representative_photo_ids(
+def _requested_memberships(
     conn: sqlite3.Connection, photo_ids: Iterable[int]
-) -> set[int]:
-    requested = {int(photo_id) for photo_id in photo_ids}
-    if not requested:
-        return set()
-    mapped: dict[int, int] = {}
-    ordered = sorted(requested)
-    for offset in range(0, len(ordered), SQLITE_PARAMETER_BATCH):
-        batch = ordered[offset : offset + SQLITE_PARAMETER_BATCH]
+) -> tuple[list[int], dict[int, int]]:
+    requested = list(dict.fromkeys(int(photo_id) for photo_id in photo_ids))
+    memberships: dict[int, int] = {}
+    for offset in range(0, len(requested), SQLITE_PARAMETER_BATCH):
+        batch = requested[offset : offset + SQLITE_PARAMETER_BATCH]
         placeholders = ",".join("?" for _ in batch)
-        mapped.update(
+        memberships.update(
             (int(row["photo_id"]), int(row["representative_id"]))
             for row in conn.execute(
                 f"""SELECT photo_id,representative_id
@@ -179,6 +176,15 @@ def representative_photo_ids(
                 batch,
             )
         )
+    return requested, memberships
+
+
+def representative_photo_ids(
+    conn: sqlite3.Connection, photo_ids: Iterable[int]
+) -> set[int]:
+    requested, mapped = _requested_memberships(conn, photo_ids)
+    if not requested:
+        return set()
     return {mapped.get(photo_id, photo_id) for photo_id in requested}
 
 
@@ -211,22 +217,9 @@ def active_variant_photo_ids(
 def active_variant_rows(
     conn: sqlite3.Connection, photo_ids: Iterable[int]
 ) -> dict[int, list[sqlite3.Row]]:
-    requested = list(dict.fromkeys(int(photo_id) for photo_id in photo_ids))
+    requested, memberships = _requested_memberships(conn, photo_ids)
     if not requested:
         return {}
-    memberships: dict[int, int] = {}
-    for offset in range(0, len(requested), SQLITE_PARAMETER_BATCH):
-        batch = requested[offset : offset + SQLITE_PARAMETER_BATCH]
-        placeholders = ",".join("?" for _ in batch)
-        memberships.update(
-            (int(row["photo_id"]), int(row["representative_id"]))
-            for row in conn.execute(
-                f"""SELECT photo_id,representative_id
-                       FROM capture_variant_members
-                      WHERE photo_id IN ({placeholders})""",
-                batch,
-            )
-        )
     groups: dict[int, list[sqlite3.Row]] = defaultdict(list)
     representative_ids = sorted(set(memberships.values()))
     for offset in range(0, len(representative_ids), SQLITE_PARAMETER_BATCH):
@@ -281,25 +274,39 @@ def _display_extension_key(value: str) -> tuple[int, str]:
     return FORMAT_CATEGORY_ORDER.index(category), value
 
 
+def variant_metadata_from_rows(
+    variants: dict[int, list[Any]],
+) -> dict[int, list[str]]:
+    metadata: dict[int, list[str]] = {}
+    cached: dict[tuple[int, ...], list[str]] = {}
+    for photo_id, rows in variants.items():
+        member_ids = tuple(int(_row_value(row, "id", 0) or 0) for row in rows)
+        values = cached.get(member_ids)
+        if values is None:
+            extensions = {
+                _display_extension(
+                    _row_value(row, "extension"),
+                    _row_value(row, "relative_path"),
+                )
+                for row in rows
+            }
+            values = sorted(
+                (value for value in extensions if value),
+                key=_display_extension_key,
+            )
+            cached[member_ids] = values
+        metadata[photo_id] = values
+        for row in rows:
+            metadata[int(_row_value(row, "id", 0) or 0)] = values
+    return metadata
+
+
 def variant_metadata(
     conn: sqlite3.Connection, photo_ids: Iterable[int]
 ) -> dict[int, list[str]]:
-    requested = list(dict.fromkeys(int(photo_id) for photo_id in photo_ids))
+    requested, memberships = _requested_memberships(conn, photo_ids)
     if not requested:
         return {}
-    memberships: dict[int, int] = {}
-    for offset in range(0, len(requested), SQLITE_PARAMETER_BATCH):
-        batch = requested[offset : offset + SQLITE_PARAMETER_BATCH]
-        placeholders = ",".join("?" for _ in batch)
-        memberships.update(
-            (int(row["photo_id"]), int(row["representative_id"]))
-            for row in conn.execute(
-                f"""SELECT photo_id,representative_id
-                       FROM capture_variant_members
-                      WHERE photo_id IN ({placeholders})""",
-                batch,
-            )
-        )
     representative_ids = sorted(set(memberships.values()))
     extensions: dict[int, set[str]] = defaultdict(set)
     for offset in range(0, len(representative_ids), SQLITE_PARAMETER_BATCH):
@@ -374,4 +381,5 @@ __all__ = [
     "representative_photo_ids",
     "variant_memberships",
     "variant_metadata",
+    "variant_metadata_from_rows",
 ]

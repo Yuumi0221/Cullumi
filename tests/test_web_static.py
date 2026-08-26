@@ -1,10 +1,14 @@
 import re
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from cullumi.http_api import static_asset_revision
+
 WEB_SCRIPT_FILES = (
     "js/runtime.js",
+    "js/gallery-tools.js",
     "js/session.js",
     "js/similar.js",
     "js/settings.js",
@@ -47,6 +51,34 @@ class WebResourceContractTests(unittest.TestCase):
                 positions.append(self.markup.index(source))
             self.assertEqual(positions, sorted(positions))
 
+    def test_static_references_use_one_asset_revision_placeholder(self):
+        revisions = re.findall(
+            r"/static/[^\"'#?]+\?v=([^\"'#]+)", self.markup
+        )
+        self.assertTrue(revisions)
+        self.assertEqual(set(revisions), {"__ASSET_REVISION__"})
+        self.assertIn(
+            'window.ASSET_REVISION="__ASSET_REVISION__"', self.markup
+        )
+
+    def test_asset_revision_changes_only_when_static_content_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            web = Path(temporary)
+            (web / "css").mkdir()
+            index = web / "index.html"
+            asset = web / "css" / "app.css"
+            index.write_text("first index", encoding="utf-8")
+            asset.write_text("first asset", encoding="utf-8")
+            first = static_asset_revision(web)
+
+            index.write_text("second index", encoding="utf-8")
+            self.assertEqual(static_asset_revision(web), first)
+
+            asset.write_text("second asset", encoding="utf-8")
+            second = static_asset_revision(web)
+            self.assertNotEqual(second, first)
+            self.assertRegex(second, r"^[0-9a-f]{12}$")
+
     def test_svg_symbols_and_references_are_exactly_in_sync(self):
         sprite = self.web / "assets" / "icons.svg"
         namespace = {"svg": "http://www.w3.org/2000/svg"}
@@ -61,7 +93,7 @@ class WebResourceContractTests(unittest.TestCase):
             match.group(1)
             for source in sources
             for match in re.finditer(
-                r"icons\.svg[^#\"']*#([A-Za-z0-9_-]+)",
+                r"(?:icons\.svg[^#\"']*|ICONS_URL\})#([A-Za-z0-9_-]+)",
                 source.read_text(encoding="utf-8"),
             )
         }

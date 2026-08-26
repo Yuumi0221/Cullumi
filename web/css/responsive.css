@@ -1,11 +1,13 @@
-@media (max-width: 1180px) {
+@container workspace-content (max-width: 900px) {
   .toolbar {
     flex-wrap: wrap;
     gap: 10px;
   }
 
   .toolbar > div:first-child {
-    width: 100%;
+    flex: 1 0 100%;
+    width: auto;
+    min-width: 0;
   }
 
   .library-filters {
@@ -58,10 +60,11 @@
   }
 }
 
-@media (max-width: 1050px) {
+@container workspace-content (max-width: 750px) {
   body:not(.similar-view-open) .toolbar {
     display:grid;
-    grid-template-columns:minmax(0,1fr) auto
+    grid-template-columns:minmax(0,1fr) auto;
+    align-items:center
   }
 
   body:not(.similar-view-open) .toolbar > div:first-child {
@@ -80,7 +83,8 @@
 
   body:not(.similar-view-open) .search {
     grid-column:1 / -1;
-    width:100%;
+    justify-self:end;
+    width:min(100%,260px);
     margin-left:0
   }
 
@@ -152,4 +156,3 @@
 }
 
 /* Homepage: font, theme tokens, layout, cards, and responsive rules */
-
