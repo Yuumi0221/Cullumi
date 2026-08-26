@@ -998,6 +998,127 @@ body.similar-side-open .similar-browser {
   user-select: text;
 }
 
+#updateDialog {
+  box-sizing: border-box;
+  width: min(680px, calc(100vw - 32px));
+  min-width: 0;
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+}
+
+.update-release-notes {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.update-release-notes h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.update-release-notes-body {
+  max-height: clamp(72px, calc(100vh - 300px), 340px);
+  min-height: 72px;
+  overflow: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.update-release-notes-body.empty {
+  color: var(--muted);
+}
+
+.update-release-notes-body > :first-child {
+  margin-top: 0;
+}
+
+.update-release-notes-body > :last-child {
+  margin-bottom: 0;
+}
+
+.update-release-notes-body h4,
+.update-release-notes-body h5,
+.update-release-notes-body h6 {
+  margin: 16px 0 8px;
+  color: var(--ink);
+  line-height: 1.35;
+}
+
+.update-release-notes-body h4 {
+  font-size: 18px;
+}
+
+.update-release-notes-body h5 {
+  font-size: 15px;
+}
+
+.update-release-notes-body h6 {
+  font-size: 13px;
+}
+
+.update-release-notes-body p,
+.update-release-notes-body ul,
+.update-release-notes-body ol,
+.update-release-notes-body blockquote,
+.update-release-notes-body pre {
+  margin: 0 0 11px;
+}
+
+.update-release-notes-body ul,
+.update-release-notes-body ol {
+  padding-left: 22px;
+}
+
+.update-release-notes-body li + li {
+  margin-top: 5px;
+}
+
+.update-release-notes-body blockquote {
+  padding: 8px 12px;
+  border-left: 3px solid var(--border-hover);
+  color: var(--muted);
+}
+
+.update-release-notes-body hr {
+  margin: 14px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.update-release-notes-body code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--card);
+  font: 12px/1.5 Consolas, monospace;
+}
+
+.update-release-notes-body pre {
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  white-space: pre-wrap;
+}
+
+.update-release-notes-body pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.update-release-notes-body a {
+  color: var(--pink-hover);
+  text-underline-offset: 2px;
+}
+
 .context-menu {
   position: fixed;
   z-index: 100;

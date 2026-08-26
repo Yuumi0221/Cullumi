@@ -282,6 +282,16 @@ async function installApi(page, options = {}) {
       if (typeof body.sync_variant_decisions === "boolean") syncVariantDecisions = body.sync_variant_decisions;
       return fulfill({ saved: true, settings: { theme: body.theme || "day", motion_cover_writeback: writebackMode, blink_detection_enabled: blinkEnabled, sync_variant_decisions: syncVariantDecisions }, blink_rescan_required: blinkEnabled && !!options.blinkRescanRequired });
     }
+    if (url.pathname === "/api/update/check") {
+      return fulfill(options.updateRelease || {
+        current_version: "1.0.3",
+        latest_version: "1.0.3",
+        update_available: false,
+        download_available: false,
+        release_notes: "",
+        no_release: false,
+      });
+    }
     if (url.pathname === "/api/choose-csv") {
       return fulfill({ path: "C:\\照片\\决定.csv" });
     }
@@ -886,6 +896,44 @@ test("自定义模式恢复按钮使用统一图标并停留在字段标题行",
     return { resetBottom: reset.bottom, fieldTop: field.top };
   });
   expect(positions.resetBottom).toBeLessThanOrEqual(positions.fieldTop);
+});
+
+test("检查更新弹窗显示 GitHub Release 更新说明", async ({ page }) => {
+  const releaseNotes =
+    "# Cullumi 1.0.4\n\n## 主要更新\n\n- 修复 **RAW/JPG** 重复判断\n- 优化 `相似组` 加载\n\n[查看详情](https://github.com/Yuumi0221/Cullumi/releases/tag/v1.0.4)\n\n```text\nCullumi.exe\n```\n\n<b id=\"release-note-markup\">原样文本</b>\n\n[危险链接](javascript:alert(1))";
+  await openApp(page, {
+    updateRelease: {
+      current_version: "1.0.3",
+      latest_version: "1.0.4",
+      update_available: true,
+      download_available: true,
+      asset_name: "Cullumi-v1.0.4-Windows-Portable.zip",
+      release_notes: releaseNotes,
+      no_release: false,
+    },
+  });
+  await openProject(page);
+  await page.locator("#settingsBtn").click();
+  await page.locator("#checkUpdateBtn").click();
+
+  await expect(page.locator("#updateDialog")).toBeVisible();
+  await expect(page.locator("#updateTitle")).toHaveText("发现新版本 v1.0.4");
+  const notes = page.locator("#updateReleaseNotesBody");
+  await expect(notes.locator("h4")).toHaveText("Cullumi 1.0.4");
+  await expect(notes.locator("h5")).toHaveText("主要更新");
+  await expect(notes.locator("li")).toHaveCount(2);
+  await expect(notes.locator("strong")).toHaveText("RAW/JPG");
+  await expect(notes.locator("li code")).toHaveText("相似组");
+  await expect(notes.locator("pre code")).toHaveText("Cullumi.exe");
+  await expect(notes.locator("a")).toHaveCount(1);
+  await expect(notes.locator("a")).toHaveAttribute(
+    "href",
+    "https://github.com/Yuumi0221/Cullumi/releases/tag/v1.0.4",
+  );
+  await expect(notes.locator("a")).toHaveAttribute("target", "_blank");
+  await expect(notes).toContainText("<b id=\"release-note-markup\">原样文本</b>");
+  await expect(notes).toContainText("[危险链接](javascript:alert(1))");
+  await expect(page.locator("#release-note-markup")).toHaveCount(0);
 });
 
 test("眨眼检测重新开启时按项目状态提示需要重新扫描", async ({ page }) => {

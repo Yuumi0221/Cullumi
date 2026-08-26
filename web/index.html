@@ -286,7 +286,7 @@
   <dialog id="motionWritebackConfirm" class="confirm"><h2>是否修改原图</h2><div><p>确认后将备份并修改原图，使所选动态帧成为当前封面。视频帧的分辨率可能低于原始照片。</p><label class="toggle confirm-option"><input id="motionWritebackDontAsk" type="checkbox"><span>不再提醒，可以在设置中重新修改</span></label></div><footer><button id="motionWritebackNo">不修改</button><button id="motionWritebackYes" class="primary">确认修改</button></footer></dialog>
   <dialog id="startupWarning" class="confirm" data-backdrop-close><h2>配置已安全恢复</h2><div id="startupWarningBody"></div><footer><button class="primary" data-close>知道了</button></footer></dialog>
   <dialog id="profileInUseWarning" class="confirm" data-backdrop-close><h2>此模式正在使用中</h2><div id="profileInUseWarningBody"></div><footer><button class="primary" data-close>知道了</button></footer></dialog>
-  <dialog id="updateDialog" class="confirm"><h2 id="updateTitle">发现新版本</h2><div id="updateBody"></div><footer><button data-close>以后再说</button><button id="updateDownload" class="primary">下载更新</button></footer></dialog>
+  <dialog id="updateDialog" class="confirm"><h2 id="updateTitle">发现新版本</h2><div id="updateBody"></div><section id="updateReleaseNotes" class="update-release-notes" aria-labelledby="updateReleaseNotesTitle"><h3 id="updateReleaseNotesTitle">更新说明</h3><div id="updateReleaseNotesBody" class="update-release-notes-body"></div></section><footer><button data-close>以后再说</button><button id="updateDownload" class="primary">下载更新</button></footer></dialog>
   <div id="recentMenu" class="context-menu hidden" role="menu">
     <button id="recentOpenFolder" role="menuitem">在文件管理器中打开</button>
     <button id="recentRemove" class="context-danger" role="menuitem">移除项目</button>

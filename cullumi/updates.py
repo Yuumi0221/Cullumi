@@ -69,6 +69,7 @@ def check_for_update(
                 "update_available": False,
                 "download_available": False,
                 "release_url": RELEASES_PAGE_URL,
+                "release_notes": "",
                 "no_release": True,
             }
         raise RuntimeError(f"GitHub 返回错误状态 {error.code}") from error
@@ -83,6 +84,7 @@ def check_for_update(
     latest_version = tag.lstrip("vV")
     asset = select_release_asset(list(release.get("assets") or []))
     update_available = version_key(latest_version) > version_key(current_version)
+    release_body = release.get("body")
     return {
         "current_version": current_version,
         "latest_version": latest_version,
@@ -90,6 +92,7 @@ def check_for_update(
         "download_available": bool(update_available and asset),
         "release_url": str(release.get("html_url") or RELEASES_PAGE_URL),
         "release_name": str(release.get("name") or tag),
+        "release_notes": release_body if isinstance(release_body, str) else "",
         "asset_name": str(asset.get("name") or "") if asset else "",
         "download_url": str(asset.get("browser_download_url") or "") if asset else "",
         "no_release": False,

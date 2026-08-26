@@ -249,11 +249,142 @@ async function checkForUpdates(manual = true) {
     button.disabled = false;
   }
 }
+function appendReleaseNotesInline(parent, source) {
+  const pattern =
+    /(`[^`\n]+`|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\)|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/gi;
+  let offset = 0;
+  for (const match of source.matchAll(pattern)) {
+    parent.append(document.createTextNode(source.slice(offset, match.index)));
+    const token = match[0],
+      link = token.match(/^\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)$/i);
+    if (link) {
+      const anchor = document.createElement("a");
+      anchor.textContent = link[1];
+      anchor.href = link[2];
+      anchor.target = "_blank";
+      anchor.rel = "noopener noreferrer";
+      anchor.referrerPolicy = "no-referrer";
+      parent.append(anchor);
+    } else if (token.startsWith("`")) {
+      const code = document.createElement("code");
+      code.textContent = token.slice(1, -1);
+      parent.append(code);
+    } else if (token.startsWith("**") || token.startsWith("__")) {
+      const strong = document.createElement("strong");
+      strong.textContent = token.slice(2, -2);
+      parent.append(strong);
+    } else {
+      const emphasis = document.createElement("em");
+      emphasis.textContent = token.slice(1, -1);
+      parent.append(emphasis);
+    }
+    offset = match.index + token.length;
+  }
+  parent.append(document.createTextNode(source.slice(offset)));
+}
+function renderReleaseNotesMarkdown(target, markdown) {
+  const source = typeof markdown === "string" ? markdown.trim() : "";
+  target.replaceChildren();
+  target.classList.toggle("empty", !source);
+  if (!source) {
+    target.textContent = "本次发布暂未提供更新说明。";
+    return;
+  }
+
+  const lines = source.replace(/\r\n?/g, "\n").split("\n");
+  let paragraph = [],
+    list = null,
+    fencedCode = null;
+  const flushParagraph = () => {
+      if (!paragraph.length) return;
+      const element = document.createElement("p");
+      appendReleaseNotesInline(element, paragraph.join(" "));
+      target.append(element);
+      paragraph = [];
+    },
+    flushCode = () => {
+      if (!fencedCode) return;
+      const pre = document.createElement("pre"),
+        code = document.createElement("code");
+      code.textContent = fencedCode.lines.join("\n");
+      if (fencedCode.language) code.dataset.language = fencedCode.language;
+      pre.append(code);
+      target.append(pre);
+      fencedCode = null;
+    };
+
+  for (const line of lines) {
+    if (fencedCode) {
+      if (/^\s*```\s*$/.test(line)) flushCode();
+      else fencedCode.lines.push(line);
+      continue;
+    }
+    const fence = line.match(/^\s*```([\w.+-]*)\s*$/);
+    if (fence) {
+      flushParagraph();
+      list = null;
+      fencedCode = { language: fence[1], lines: [] };
+      continue;
+    }
+    if (!line.trim()) {
+      flushParagraph();
+      list = null;
+      continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
+    if (heading) {
+      flushParagraph();
+      list = null;
+      const level = Math.min(6, heading[1].length + 3),
+        element = document.createElement(`h${level}`);
+      appendReleaseNotesInline(element, heading[2]);
+      target.append(element);
+      continue;
+    }
+    if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+      flushParagraph();
+      list = null;
+      target.append(document.createElement("hr"));
+      continue;
+    }
+    const unordered = line.match(/^\s{0,3}[-*+]\s+(.+)$/),
+      ordered = line.match(/^\s{0,3}\d+[.)]\s+(.+)$/);
+    if (unordered || ordered) {
+      flushParagraph();
+      const tag = unordered ? "UL" : "OL";
+      if (!list || list.tagName !== tag) {
+        list = document.createElement(tag.toLowerCase());
+        target.append(list);
+      }
+      const item = document.createElement("li");
+      appendReleaseNotesInline(item, (unordered || ordered)[1]);
+      list.append(item);
+      continue;
+    }
+    const quote = line.match(/^\s{0,3}>\s?(.*)$/);
+    if (quote) {
+      flushParagraph();
+      list = null;
+      const element = document.createElement("blockquote");
+      appendReleaseNotesInline(element, quote[1]);
+      target.append(element);
+      continue;
+    }
+    list = null;
+    paragraph.push(line.trim());
+  }
+  flushParagraph();
+  flushCode();
+}
 function showUpdatePrompt(update) {
   $("#updateTitle").textContent = `发现新版本 v${update.latest_version}`;
   $("#updateBody").innerHTML = update.download_available
     ? `<p>当前版本为 v${esc(update.current_version)}，是否将 <b>${esc(update.asset_name)}</b> 下载到系统 Downloads 文件夹？</p><p id="updateDownloadStatus" class="update-download-status">照片和项目数据不会受到影响。</p>`
     : `<p>当前版本为 v${esc(update.current_version)}，新版本已经发布，但发布页没有可直接下载的 Windows 附件。</p><p id="updateDownloadStatus" class="update-download-status">可以前往 Releases 页面查看详情。</p>`;
+  renderReleaseNotesMarkdown(
+    $("#updateReleaseNotesBody"),
+    update.release_notes,
+  );
   const button = $("#updateDownload");
   button.disabled = false;
   button.textContent = update.download_available ? "下载更新" : "查看发布页";

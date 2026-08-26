@@ -40,6 +40,7 @@ class UpdateTests(unittest.TestCase):
         release = {
             "tag_name": "v1.4.0",
             "name": "Cullumi 1.4.0",
+            "body": "## 更新说明\n\n- 修复 RAW/JPG 重复判断\n- 优化相似组加载",
             "html_url": "https://github.com/Yuumi0221/Cullumi/releases/tag/v1.4.0",
             "assets": [{
                 "name": "Cullumi-v1.4.0-windows.zip",
@@ -56,6 +57,7 @@ class UpdateTests(unittest.TestCase):
         self.assertTrue(result["update_available"])
         self.assertTrue(result["download_available"])
         self.assertEqual(result["latest_version"], "1.4.0")
+        self.assertEqual(result["release_notes"], release["body"])
 
     def test_download_release_asset_uses_unique_downloads_filename(self):
         with tempfile.TemporaryDirectory() as temp:
