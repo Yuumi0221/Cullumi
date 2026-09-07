@@ -1,0 +1,21 @@
+{
+  "reference": "cullumi-quality-lab/src/cullumi_quality_lab/niqe.py",
+  "reference_sha256": "209cbf998378f9e3a4a1118a718268dc3fef47fae6fc4ce5ca6bfd2371b8c6fc",
+  "parameters_sha256": "2a7c182a68c9e7f1b2e2e5ec723279d6f65d912b6fcaf37eb2bf03d7367c4296",
+  "numpy": "2.5.2",
+  "opencv": "4.14.0",
+  "pillow": "12.3.0",
+  "tolerance_absolute": 0.001,
+  "scores": {
+    "noise-6": 30.261472409374573,
+    "noise-1": 29.455793466780854,
+    "noise-19": 28.80826891497312,
+    "noise-21": 40.36797151971802,
+    "noise-25": 25.42076002747616,
+    "blur-0.5": 14.161985198666864,
+    "blur-1.5": 9.7323366665842,
+    "blur-3": 10.914476721669287,
+    "jpeg-10": 9.782695224535734,
+    "jpeg-60": 25.403726563978438
+  }
+}

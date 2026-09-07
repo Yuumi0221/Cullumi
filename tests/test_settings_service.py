@@ -116,6 +116,9 @@ class SettingsServiceTests(unittest.TestCase):
             self.assertEqual(saved["default_cache_root"], str(cache.resolve()))
             self.assertEqual(saved["theme"], "night")
             self.assertFalse(saved["auto_advance"])
+            self.assertTrue(
+                config.get_profile("balanced")["quality"]["enabled"]["niqe"]
+            )
 
     def test_active_profile_blink_change_reapplies_and_rolls_back_on_failure(self):
         with tempfile.TemporaryDirectory() as temporary:

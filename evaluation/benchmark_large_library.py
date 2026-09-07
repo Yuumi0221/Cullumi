@@ -74,13 +74,12 @@ class BenchmarkScale:
 
 class BenchmarkConfig:
     def snapshot(self) -> dict[str, Any]:
-        return {
-            "projects": {},
-            "blink_detection_enabled": False,
-        }
+        return {"projects": {}}
 
     def get_profile(self, profile_id: str) -> dict[str, Any]:
-        return copy.deepcopy(BUILTIN_PROFILES[profile_id])
+        profile = copy.deepcopy(BUILTIN_PROFILES[profile_id])
+        profile["similarity"]["blink"]["enabled"] = False
+        return profile
 
 
 class BenchmarkManager:

@@ -17,8 +17,10 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from .classification import PHOTO_ROW_COLUMNS
+from .niqe import valid_niqe
 
 SIMILARITY_TOPOLOGY_COLUMNS = (
+    "niqe_score", "niqe_error",
     "id",
     "relative_path",
     "taken",
@@ -146,23 +148,33 @@ def image_structure(path_a: Path, path_b: Path) -> float:
 def quality_score(row: sqlite3.Row | dict[str, Any], profile: dict[str, Any]) -> float:
     q = profile["quality"]
     weights = q["weights"]
-    sharpness = math.log1p(max(0, row["sharpness"] or 0)) / 10
+    sharpness = min(1.0, math.log1p(max(0, row["sharpness"] or 0)) / 10)
     exposure = 1 - min(
         1.0,
-        abs((row["luminance"] or 128) - 110) / 140
+        abs((row["luminance"] if row["luminance"] is not None else 128) - 110) / 140
         + (row["dark_clip"] or 0)
         + (row["bright_clip"] or 0),
     )
     contrast = min(1.0, (row["contrast"] or 0) / 70)
     entropy = min(1.0, (row["entropy"] or 0) / 8)
     resolution = min(1.0, (row["megapixels"] or 0) / 12)
-    return (
-        sharpness * weights["sharpness"]
-        + exposure * weights["exposure"]
-        + contrast * weights["contrast"]
-        + entropy * weights["entropy"]
-        + resolution * weights["resolution"]
-    )
+    components = {
+        "sharpness": (sharpness, ("sharpness",)),
+        "exposure": (exposure, ("luminance", "dark_clip", "bright_clip")),
+        "contrast": (contrast, ("contrast",)),
+        "entropy": (entropy, ("entropy",)),
+        "resolution": (resolution, ("megapixels",)),
+    }
+    active = {
+        key: value for key, (value, fields) in components.items()
+        if all(row[field] is not None and math.isfinite(row[field]) for field in fields)
+    }
+    niqe = valid_niqe(row)
+    if niqe is not None and q.get("enabled", {}).get("niqe", True):
+        good, bad = q["niqe_quality_good"], q["niqe_quality_bad"]
+        active["niqe"] = max(0.0, min(1.0, (bad - niqe) / (bad - good)))
+    total = sum(weights.get(key, 0) for key in active)
+    return sum(value * weights.get(key, 0) for key, value in active.items()) / total if total else 0.0
 
 
 def filename_sequence(name: str) -> int:

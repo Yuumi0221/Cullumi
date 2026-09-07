@@ -6,10 +6,12 @@ from typing import Any, Iterable
 import numpy as np
 
 from .capture_variants import FORMAT_CATEGORY_IDS, format_filter_clause
+from .niqe import valid_niqe
 
 PHOTO_DECISION_FILTERS = frozenset({"undecided", "keep", "remove"})
 PHOTO_AI_FILTERS = frozenset({"remove", "review", "no_suggestion"})
 PHOTO_ANALYSIS_COLUMNS = (
+    "niqe_score", "niqe_error", "niqe_version",
     "relative_path", "extension", "size", "mtime", "width", "height",
     "megapixels", "taken", "luminance", "contrast", "dark_clip",
     "bright_clip", "sharpness", "entropy", "phash", "dhash", "sha256",
@@ -27,6 +29,7 @@ PHOTO_ANALYSIS_COLUMNS = (
 )
 PHOTO_ROW_COLUMNS = ("id", "decision", *PHOTO_ANALYSIS_COLUMNS)
 CLASSIFICATION_COLUMNS = (
+    "niqe_score", "niqe_error",
     "id",
     "error",
     "sharpness",
@@ -192,6 +195,19 @@ def classify(row: sqlite3.Row | dict[str, Any], profile: dict[str, Any], percent
         size_kb = row["size"] / 1024
         flag("file_size", size_kb < q["min_size_kb_remove"], True, "文件异常小")
         flag("file_size", q["min_size_kb_remove"] <= size_kb < q["min_size_kb_review"], False, "文件较小")
+    niqe = valid_niqe(row) if enabled.get("niqe", True) else None
+    flag(
+        "niqe",
+        niqe is not None and niqe >= q["niqe_remove"],
+        True,
+        "NIQE 严重偏高",
+    )
+    flag(
+        "niqe",
+        niqe is not None and q["niqe_review"] <= niqe < q["niqe_remove"],
+        False,
+        "NIQE 偏高",
+    )
     match_all = q.get("match_mode") == "all"
     if reasons_remove and (not match_all or len(reasons_remove) >= 2):
         return "remove", "、".join(dict.fromkeys(reasons_remove))

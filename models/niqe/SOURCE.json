@@ -1,0 +1,13 @@
+{
+  "algorithm": "NIQE",
+  "upstream": "https://github.com/XPixelGroup/BasicSR",
+  "license": "Apache-2.0",
+  "retrieved_at": "2026-09-06",
+  "parameters_url": "https://raw.githubusercontent.com/XPixelGroup/BasicSR/master/basicsr/metrics/niqe_pris_params.npz",
+  "parameters_sha256": "2a7c182a68c9e7f1b2e2e5ec723279d6f65d912b6fcaf37eb2bf03d7367c4296",
+  "reference_code_url": "https://raw.githubusercontent.com/XPixelGroup/BasicSR/master/basicsr/metrics/niqe.py",
+  "reference_code_sha256": "d8052aa4617d2c0f7712f1871078d0244209481aa00cfce8a9ce1998f83a0088",
+  "license_sha256": "5447872f21ddc29dc0dc060d5c885513c01c904e9da9931bba69898a6fb4d415",
+  "adaptation": "NumPy/OpenCV CPU implementation; rounded MATLAB Y, 96x96 non-overlapping blocks, two scales, antialiased Keys bicubic half-size. Reject fewer than two valid blocks. No human labels used.",
+  "report_preprocessing": "Cullumi RGB preview with maximum side 512 pixels; RAW uses embedded preview. Scores are preview-scale measurements, not full-resolution quality or deletion decisions."
+}

@@ -22,7 +22,7 @@ from .capture_variants import (
     variant_metadata,
 )
 from .classification import project_photo_counts
-from .config import ConfigStore
+from .config import ConfigStore, profile_blink_enabled
 from .decision_service import (
     clear_decisions,
     export_decisions,
@@ -263,9 +263,7 @@ def project_summary(
         photo_counts = project_photo_counts(conn)
         pairs = conn.execute("SELECT COUNT(*) FROM similar_pairs").fetchone()[0]
         profile = application.config.get_profile(project.profile_id)
-        blink_enabled = bool(
-            application.config.snapshot().get("blink_detection_enabled", True)
-        )
+        blink_enabled = profile_blink_enabled(profile)
         similar_groups = application.similarity_groups.count(
             project_id,
             conn,
@@ -278,6 +276,9 @@ def project_summary(
             else False
         )
         formats = format_category_counts(conn)
+        niqe_rescan_required = application.scanner.niqe_rescan_required(
+            conn, profile
+        )
     return {
         "id": project_id,
         "root": str(project.root),
@@ -287,6 +288,7 @@ def project_summary(
         "pairs": pairs,
         "similar_groups": similar_groups,
         "blink_rescan_required": blink_rescan_required,
+        "niqe_rescan_required": niqe_rescan_required,
         "format_categories": formats,
     }
 
@@ -576,9 +578,6 @@ class Handler(BaseHTTPRequestHandler):
                 "motion_cover_writeback": config_data.get(
                     "motion_cover_writeback", "ask"
                 ),
-                "blink_detection_enabled": config_data.get(
-                    "blink_detection_enabled", True
-                ),
                 "sync_variant_decisions": config_data.get(
                     "sync_variant_decisions", True
                 ),
@@ -864,21 +863,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_settings(self, body: dict[str, Any]) -> None:
         settings = save_settings(self.config, body)
-        rescan_required = False
         project_id = str(body.get("project_id") or "")
-        if project_id and settings.get("blink_detection_enabled", True):
-            project = self.manager.from_id(project_id)
-            profile = self.config.get_profile(project.profile_id)
-            with closing(connect_db(project.db_path)) as conn:
-                rescan_required = self.scanner.blink_rescan_required(
-                    project, conn, profile
-                )
         if project_id:
             self.similarity_groups.invalidate(project_id)
         self._send_json({
             "saved": True,
             "settings": settings,
-            "blink_rescan_required": rescan_required,
         })
 
     def api_profile_save(self, body: dict[str, Any]) -> None:

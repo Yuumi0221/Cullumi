@@ -19,7 +19,7 @@
     <div class="top-actions">
       <span class="select-field topbar-select project-only-action"><select id="profileSelect" title="分析模式"></select><svg class="select-chevron" viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=__ASSET_REVISION__#chevron-down"></use></svg></span>
       <button id="scanBtn" class="project-only-action">开始扫描</button>
-      <button id="settingsBtn" class="icon-button ghost project-only-action" title="设置" aria-label="设置"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=__ASSET_REVISION__#topbar-setting"></use></svg></button>
+      <button id="settingsBtn" class="icon-button ghost" title="设置" aria-label="设置"><svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=__ASSET_REVISION__#topbar-setting"></use></svg></button>
       <button id="themeBtn" class="icon-button ghost" title="切换夜间模式" aria-label="切换夜间模式">
         <svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 15.4A8.6 8.6 0 0 1 8.6 3.8 8.8 8.8 0 1 0 20.2 15.4Z"/></svg>
         <svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
@@ -114,6 +114,9 @@
           </section>
         </section>
         <div id="empty" class="empty hidden"><b id="emptyTitle">这里还没有内容</b><span id="emptyText">扫描完成后会显示结果。</span></div>
+        <button id="libraryBackToTop" class="library-back-to-top" type="button" aria-label="回到照片库顶部" title="回到顶部" aria-hidden="true" tabindex="-1">
+          <svg viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=__ASSET_REVISION__#chevron-down"></use></svg>
+        </button>
       </section>
     </section>
   </main>
@@ -181,10 +184,6 @@
                 <div class="setting-copy"><label for="syncVariantDecisions">相同照片同时决定</label><small>同目录、同名的 RAW 与其他图片格式会同步保留或移除，已有决定不会自动改写。</small></div>
                 <label class="setting-switch" aria-label="相同照片同时决定"><input id="syncVariantDecisions" type="checkbox"><span aria-hidden="true"></span></label>
               </div>
-              <div class="settings-row">
-                <div class="setting-copy"><label for="blinkDetectionEnabled">启用眨眼检测</label><small id="blinkRescanStatus" class="setting-warning hidden">需要重新扫描</small></div>
-                <label class="setting-switch" aria-label="启用眨眼检测"><input id="blinkDetectionEnabled" type="checkbox"><span aria-hidden="true"></span></label>
-              </div>
               <div class="settings-row settings-choice">
                 <div class="setting-copy"><label for="motionCoverWriteback">Live图处理方式</label><small>修改原图前会在项目缓存中备份；视频帧的分辨率可能低于原始静态照片。</small></div>
                 <span class="select-field settings-select"><select id="motionCoverWriteback"><option value="never">不修改原图</option><option value="ask">每次修改前提醒</option><option value="always">始终修改原图</option></select><svg class="select-chevron" viewBox="0 0 1024 1024" aria-hidden="true"><use href="/static/assets/icons.svg?v=__ASSET_REVISION__#chevron-down"></use></svg></span>
@@ -210,7 +209,7 @@
                 <div class="setting-copy"><label for="defaultCache">全局默认数据库与缩略图位置</label><input id="defaultCache" readonly aria-label="全局默认存储位置"></div>
                 <button id="defaultCacheBtn">更改存储路径</button>
               </div>
-              <div class="settings-row storage-row">
+              <div id="projectCacheSettingsRow" class="settings-row storage-row">
                 <div class="setting-copy"><label for="projectCache">当前项目存储位置</label><input id="projectCache" readonly aria-label="当前项目存储位置"></div>
                 <button id="projectCacheBtn">迁移存储位置</button>
               </div>
@@ -249,6 +248,11 @@
         <label>对比度评分权重<input type="number" step=".01" data-p="quality.weights.contrast" min="0" max="10"></label>
         <label>细节评分权重<input type="number" step=".01" data-p="quality.weights.entropy" min="0" max="10"></label>
         <label>分辨率评分权重<input type="number" step=".01" data-p="quality.weights.resolution" min="0" max="10"></label>
+        <label>NIQE 评分权重<input type="number" step=".01" data-p="quality.weights.niqe" min="0" max="10"></label>
+        <label>NIQE 优质映射<input type="number" step=".1" data-p="quality.niqe_quality_good" min="0" max="1000"></label>
+        <label>NIQE 劣质映射<input type="number" step=".1" data-p="quality.niqe_quality_bad" min="0" max="1000"></label>
+        <label>NIQE 复看阈值<input type="number" step=".1" data-p="quality.niqe_review" min="0" max="1000"></label>
+        <label>NIQE 严重阈值<input type="number" step=".1" data-p="quality.niqe_remove" min="0" max="1000"></label>
         <label>pHash 最大距离<input type="number" data-p="similarity.phash_max" min="0" max="64"></label>
         <label>dHash 最大距离<input type="number" data-p="similarity.dhash_max" min="0" max="64"></label>
         <label>最低结构相似度<input type="number" step=".01" data-p="similarity.structure_min" min="-1" max="1"></label>
@@ -263,6 +267,8 @@
         <label>最低可靠人脸覆盖率<input type="number" step=".01" data-p="similarity.blink.reliable_coverage_min" min=".5" max="1"></label>
       </div>
           <div class="check-grid">
+            <label class="mode-toggle"><span>启用眨眼检测</span><span class="setting-switch"><input type="checkbox" data-p="similarity.blink.enabled"><span aria-hidden="true"></span></span></label>
+            <label class="mode-toggle"><span>启用 NIQE 照片质量分析模型</span><span class="setting-switch"><input type="checkbox" data-p="quality.enabled.niqe"><span aria-hidden="true"></span></span></label>
             <label class="mode-toggle"><span>启用清晰度</span><span class="setting-switch"><input type="checkbox" data-p="quality.enabled.sharpness"><span aria-hidden="true"></span></span></label>
             <label class="mode-toggle"><span>启用亮度/暗部</span><span class="setting-switch"><input type="checkbox" data-p="quality.enabled.luminance"><span aria-hidden="true"></span></span></label>
             <label class="mode-toggle"><span>启用高光溢出</span><span class="setting-switch"><input type="checkbox" data-p="quality.enabled.bright_clip"><span aria-hidden="true"></span></span></label>

@@ -90,8 +90,6 @@ async function boot() {
   $("#appVersion").textContent = `v${b.version}`;
   renderProfiles();
   $("#autoAdvance").checked = !!b.settings.auto_advance;
-  $("#blinkDetectionEnabled").checked =
-    b.settings.blink_detection_enabled !== false;
   $("#syncVariantDecisions").checked =
     b.settings.sync_variant_decisions !== false;
   $("#autoCheckUpdates").checked = !!b.settings.auto_check_updates;
@@ -130,6 +128,7 @@ async function chooseProject() {
 async function openProject(pid) {
   try {
     await showProject(await json(`/api/project?project_id=${pid}`));
+    await startRequiredAnalysis();
   } catch (e) {
     toast(e.message);
   }
@@ -176,7 +175,6 @@ async function showProject(p) {
   syncFilterControls();
   syncSortControls();
   updateCounts(p);
-  setBlinkRescanRequired(p.blink_rescan_required);
   setActiveNav("library");
   await loadView();
 }
@@ -218,7 +216,15 @@ async function refreshProject() {
   renderFormatFilterOptions();
   syncFilterControls();
   updateCounts(state.project);
-  setBlinkRescanRequired(state.project.blink_rescan_required);
+}
+async function startRequiredAnalysis() {
+  if (!state.project) return;
+  const niqe = state.project.niqe_rescan_required;
+  const blink = state.project.blink_rescan_required;
+  if (!niqe && !blink) return;
+  const label = niqe && blink ? "NIQE 与眨眼" : niqe ? "NIQE" : "眨眼";
+  toast(`正在补充${label}分析，已有人工决定将保留`);
+  await startScan();
 }
 async function startScan() {
   if (!state.project) return;

@@ -78,7 +78,7 @@ class CullumiTests(unittest.TestCase):
         self.assertEqual(progress["stage"], "complete", progress)
 
     def test_profile_validation(self):
-        self.assertEqual(__version__, "1.0.3")
+        self.assertEqual(__version__, "1.0.4")
         self.assertEqual(self.config.data["theme"], "day")
         self.assertTrue(self.config.data["auto_check_updates"])
         validate_profile(BUILTIN_PROFILES["balanced"])
@@ -95,6 +95,7 @@ class CullumiTests(unittest.TestCase):
         for update in (
             lambda value: value["quality"].update({"threshold_mode": "sometimes"}),
             lambda value: value["quality"]["enabled"].update({"sharpness": "yes"}),
+            lambda value: value["similarity"]["blink"].update({"enabled": "yes"}),
             lambda value: value["similarity"].update({"exact_duplicates": 1}),
             lambda value: value["quality"].update({"blur_review": float("nan")}),
             lambda value: value["quality"].pop("dark_review"),
@@ -727,7 +728,7 @@ class CullumiTests(unittest.TestCase):
         scanner = Scanner(self.config, self.manager)
         real_analyze = scanner_module.analyze_photo
 
-        def analyze_then_remove(path, thumbnail, stat=None):
+        def analyze_then_remove(path, thumbnail, stat=None, **kwargs):
             result = real_analyze(path, thumbnail, stat)
             path.unlink()
             return result

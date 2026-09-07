@@ -6,6 +6,11 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 msvcp140 = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "msvcp140.dll")
 fallback_internal = os.environ.get("CULLUMI_BUILD_INTERNAL", "")
 runtime_datas = []
+# Keep pristine NIQE statistics and their provenance/license together in the
+# models tree below. Fail packaging early if any distributable resource is absent.
+for niqe_resource in ("niqe_pris_params.npz", "SOURCE.json", "LICENSE.txt"):
+    if not os.path.isfile(os.path.join("models", "niqe", niqe_resource)):
+        raise FileNotFoundError(f"Missing NIQE resource: {niqe_resource}")
 runtime_datas.extend(collect_data_files("imageio_ffmpeg"))
 runtime_binaries = collect_dynamic_libs("onnxruntime")
 if fallback_internal:

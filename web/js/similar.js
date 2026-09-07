@@ -114,10 +114,13 @@ function applySimilarMode() {
   );
 }
 function blinkStatusLabel(photo, recommended, kind) {
+  const profile = state.profiles.find(
+    (item) => item.id === state.project?.profile_id,
+  );
   if (
     recommended ||
     kind !== "similar" ||
-    state.settings.blink_detection_enabled === false
+    profile?.similarity?.blink?.enabled === false
   )
     return "";
   if (
@@ -131,9 +134,6 @@ function blinkStatusLabel(photo, recommended, kind) {
     Number(photo.blink_uncertain_face_count) || 0,
   );
   if (!faceCount) return "";
-  const profile = state.profiles.find(
-    (item) => item.id === state.project?.profile_id,
-  );
   const minimum = Number(
     profile?.similarity?.blink?.reliable_coverage_min ?? 0.8,
   );

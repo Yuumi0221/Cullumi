@@ -86,7 +86,10 @@ async function saveProfile() {
     renderProfiles();
     $("#profileEditorSelect").value = p.id;
     editorLoad(p.id);
-    if (state.project?.profile_id === p.id) await refreshProject();
+    if (state.project?.profile_id === p.id) {
+      await refreshProject();
+      await startRequiredAnalysis();
+    }
     profileSaveStatus("✓ 自定义模式已保存");
     toast("自定义模式已保存");
   } catch (e) {
@@ -129,7 +132,8 @@ async function applyProfile(id) {
     });
     updateCounts(state.project);
     toast("已切换分析模式");
-    loadView();
+    await loadView();
+    await startRequiredAnalysis();
   } catch (e) {
     toast(e.message);
   }
@@ -703,7 +707,10 @@ function configureProfileInputs() {
 function bindSettingsEvents() {
   $("#settingsBtn").onclick = () => {
     $("#settings").showModal();
-    if (state.project) $("#projectCache").value = state.project.cache_root;
+    const projectOpen = document.body.classList.contains("project-open");
+    $("#projectCacheSettingsRow").classList.toggle("hidden", !projectOpen);
+    if (projectOpen && state.project)
+      $("#projectCache").value = state.project.cache_root;
     $("#profileEditorSelect").value =
       state.project?.profile_id || state.profiles[0]?.id;
     editorLoad($("#profileEditorSelect").value);
@@ -726,22 +733,6 @@ function bindSettingsEvents() {
     } catch (error) {
       event.target.checked = previous;
       toast(`保存同步决定设置失败：${error.message}`);
-    }
-  };
-  $("#blinkDetectionEnabled").onchange = async (event) => {
-    const previous = state.settings.blink_detection_enabled !== false;
-    try {
-      const saved = await json("/api/settings", {
-        blink_detection_enabled: event.target.checked,
-        project_id: state.project?.id || "",
-      });
-      state.settings.blink_detection_enabled =
-        saved.settings.blink_detection_enabled;
-      setBlinkRescanRequired(saved.blink_rescan_required);
-      if (state.view === "similar") await loadView();
-    } catch (error) {
-      event.target.checked = previous;
-      toast(`保存眨眼检测设置失败：${error.message}`);
     }
   };
   $("#autoCheckUpdates").onchange = async (event) => {
@@ -772,14 +763,4 @@ function bindSettingsEvents() {
   $("#deleteProfile").onclick = confirmDeleteProfile;
   addProfileResetButtons();
   configureProfileInputs();
-}
-
-function setBlinkRescanRequired(required) {
-  const visible = Boolean(
-    required &&
-      state.settings.blink_detection_enabled !== false &&
-      state.project,
-  );
-  $("#blinkRescanStatus").classList.toggle("hidden", !visible);
-  if (state.project) state.project.blink_rescan_required = visible;
 }

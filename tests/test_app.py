@@ -411,7 +411,11 @@ class AppSafetyTests(unittest.TestCase):
             payload = handler._send_json.call_args.args[0]
             self.assertEqual(payload["startup_warning"], config.load_warning)
             self.assertIn("已备份", payload["startup_warning"])
-            self.assertTrue(payload["settings"]["blink_detection_enabled"])
+            self.assertNotIn("blink_detection_enabled", payload["settings"])
+            self.assertNotIn("niqe_analysis_enabled", payload["settings"])
+            self.assertTrue(
+                payload["profiles"][0]["similarity"]["blink"]["enabled"]
+            )
 
     def test_api_photo_builds_a_high_resolution_tiff_preview(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -615,7 +619,7 @@ class AppSafetyTests(unittest.TestCase):
                 self.assertEqual(config.data, before)
 
                 with self.assertRaisesRegex(ValueError, "布尔值"):
-                    handler.api_settings({"blink_detection_enabled": "false"})
+                    handler.api_settings({"sync_variant_decisions": "false"})
                 self.assertEqual(config.data, before)
 
                 with self.assertRaisesRegex(ValueError, "封面修改设置"):

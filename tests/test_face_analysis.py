@@ -279,19 +279,15 @@ class BlinkScannerTests(unittest.TestCase):
     def test_disabled_or_cancelled_analysis_never_loads_the_model(self):
         analyzer = FakeFaceAnalyzer()
         scanner = Scanner(self.config, self.manager, face_analyzer=analyzer)
-        with self.config.edit() as data:
-            data["blink_detection_enabled"] = False
+        disabled = copy.deepcopy(BUILTIN_PROFILES["balanced"])
+        disabled["similarity"]["blink"]["enabled"] = False
         with closing(connect_db(self.project.db_path)) as conn:
             self.assertEqual(
-                scanner.analyze_blinks(
-                    self.project, conn, BUILTIN_PROFILES["balanced"]
-                ),
+                scanner.analyze_blinks(self.project, conn, disabled),
                 0,
             )
         self.assertEqual(analyzer.calls, 0)
 
-        with self.config.edit() as data:
-            data["blink_detection_enabled"] = True
         cancelled = threading.Event()
         cancelled.set()
         with closing(connect_db(self.project.db_path)) as conn:

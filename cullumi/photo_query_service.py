@@ -16,7 +16,7 @@ from .classification import (
     parse_photo_filter,
     photo_filter_where,
 )
-from .config import ConfigStore
+from .config import ConfigStore, profile_blink_enabled
 from .project_store import ProjectManager, connect_db
 from .similarity import SimilarityGroupCache, quality_score
 
@@ -242,9 +242,7 @@ class PhotoQueryService:
         offset = max(0, int(query.get("offset", ["0"])[0]))
         project = self.manager.from_id(project_id)
         profile = self.config.get_profile(project.profile_id)
-        blink_enabled = bool(
-            self.config.snapshot().get("blink_detection_enabled", True)
-        )
+        blink_enabled = profile_blink_enabled(profile)
         with closing(connect_db(project.db_path)) as conn:
             participant_ids = (
                 _matching_similarity_photo_ids(conn, search)
@@ -303,9 +301,7 @@ class PhotoQueryService:
         search = query.get("search", [""])[0].casefold()
         project = self.manager.from_id(project_id)
         profile = self.config.get_profile(project.profile_id)
-        blink_enabled = bool(
-            self.config.snapshot().get("blink_detection_enabled", True)
-        )
+        blink_enabled = profile_blink_enabled(profile)
         with closing(connect_db(project.db_path)) as conn:
             group = self.similarity_groups.get_one(
                 project_id, group_id, conn, profile, blink_enabled

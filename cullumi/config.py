@@ -16,7 +16,17 @@ from typing import Any
 
 APP_NAME = "Cullumi"
 
+# Experimental preview-scale defaults; not calibrated with human labels.
+NIQE_DEFAULTS = {
+    "niqe_quality_good": 2.0,
+    "niqe_quality_bad": 8.0,
+    "niqe_review": 5.0,
+    "niqe_remove": 8.0,
+}
+NIQE_DEFAULT_WEIGHT = 0.20
+
 BLINK_DEFAULTS = {
+    "enabled": True,
     "face_confidence_min": 0.85,
     "open_confidence_min": 0.80,
     "closed_confidence_min": 0.80,
@@ -25,9 +35,39 @@ BLINK_DEFAULTS = {
 }
 
 
+def profile_niqe_enabled(profile: dict[str, Any]) -> bool:
+    return bool(profile.get("quality", {}).get("enabled", {}).get("niqe", True))
+
+
+def profile_blink_enabled(profile: dict[str, Any]) -> bool:
+    return bool(profile.get("similarity", {}).get("blink", {}).get("enabled", True))
+
+
 def normalize_profile(profile: dict[str, Any]) -> dict[str, Any]:
     """Fill optional profile sections introduced after profile version 1."""
     normalized = copy.deepcopy(profile)
+    quality = normalized.get("quality")
+    if isinstance(quality, dict):
+        for key, value in NIQE_DEFAULTS.items():
+            quality.setdefault(key, value)
+        enabled = quality.setdefault("enabled", {})
+        if isinstance(enabled, dict):
+            enabled.setdefault("niqe", True)
+        weights = quality.get("weights")
+        if isinstance(weights, dict) and "niqe" not in weights:
+            # Preserve relative custom weights and reject malformed legacy data
+            # through the existing validator, rather than silently replacing it.
+            try:
+                numeric = {k: float(v) for k, v in weights.items()}
+            except (TypeError, ValueError):
+                numeric = {}
+            if numeric and all(math.isfinite(v) and 0 <= v <= 10 for v in numeric.values()):
+                total = sum(numeric.values())
+                if total > 0:
+                    quality["weights"] = {
+                        k: v / total * (1 - NIQE_DEFAULT_WEIGHT) for k, v in numeric.items()
+                    }
+                    quality["weights"]["niqe"] = NIQE_DEFAULT_WEIGHT
     similarity = normalized.setdefault("similarity", {})
     if not isinstance(similarity, dict):
         return normalized
@@ -64,7 +104,9 @@ def _profile(
         "name": name,
         "builtin": True,
         "quality": {
+            **NIQE_DEFAULTS,
             "enabled": {
+                "niqe": True,
                 "sharpness": True,
                 "luminance": True,
                 "dark_clip": True,
@@ -95,11 +137,12 @@ def _profile(
             "min_size_kb_review": 20,
             "min_size_kb_remove": 1,
             "weights": {
-                "sharpness": 0.45,
-                "exposure": 0.25,
-                "contrast": 0.12,
-                "entropy": 0.10,
-                "resolution": 0.08,
+                "sharpness": 0.36,
+                "exposure": 0.20,
+                "contrast": 0.096,
+                "entropy": 0.08,
+                "resolution": 0.064,
+                "niqe": NIQE_DEFAULT_WEIGHT,
             },
         },
         "similarity": {
@@ -165,6 +208,7 @@ def _normalize_simple_settings(
         "auto_advance",
         "auto_check_updates",
         "blink_detection_enabled",
+        "niqe_analysis_enabled",
         "sync_variant_decisions",
     ):
         if key in loaded and not isinstance(loaded[key], bool):
@@ -327,6 +371,7 @@ class ConfigStore:
             "auto_advance": True,
             "auto_check_updates": True,
             "blink_detection_enabled": True,
+            "niqe_analysis_enabled": True,
             "sync_variant_decisions": True,
             "motion_cover_writeback": "ask",
             "theme": "day",
@@ -517,6 +562,10 @@ class ConfigStore:
 
 
 QUALITY_NUMBER_RANGES = {
+    "niqe_quality_good": (0, 1000),
+    "niqe_quality_bad": (0, 1000),
+    "niqe_review": (0, 1000),
+    "niqe_remove": (0, 1000),
     "blur_review": (0, 10000),
     "blur_remove": (0, 10000),
     "dark_review": (0, 255),
@@ -550,8 +599,9 @@ SIMILARITY_NUMBER_RANGES = {
     "sequence_gap": (0, 10000),
     "min_group_size": (2, 1000),
 }
-WEIGHT_KEYS = ("sharpness", "exposure", "contrast", "entropy", "resolution")
+WEIGHT_KEYS = ("sharpness", "exposure", "contrast", "entropy", "resolution", "niqe")
 ORDERED_QUALITY_FIELDS = (
+    ("niqe_review", "niqe_remove", "NIQE 复看阈值不能高于移除阈值"),
     ("blur_remove", "blur_review", "移除清晰度阈值不能高于复看阈值"),
     ("dark_remove", "dark_review", "严重欠曝阈值不能高于偏暗阈值"),
     ("dark_clip_review", "dark_clip_remove", "暗部溢出复看阈值不能高于移除阈值"),
@@ -591,6 +641,8 @@ def _validate_number_ranges(
 
 
 def _validate_quality_order(q: dict[str, Any]) -> None:
+    if _profile_number(q, "niqe_quality_good") >= _profile_number(q, "niqe_quality_bad"):
+        raise ValueError("NIQE 优质映射阈值必须小于劣质映射阈值")
     for lower_key, upper_key, error_text in ORDERED_QUALITY_FIELDS:
         if _profile_number(q, lower_key) > _profile_number(q, upper_key):
             raise ValueError(error_text)
@@ -628,6 +680,8 @@ def _profile_sections(
     blink = s.get("blink", {})
     if not isinstance(blink, dict):
         raise ValueError("眨眼检测配置格式无效")
+    if not isinstance(blink.get("enabled", True), bool):
+        raise ValueError("眨眼检测开关必须为布尔值")
     return q, s, blink
 
 

@@ -28,7 +28,7 @@ from .classification import (
     classification_percentiles,
     classify,
 )
-from .config import ConfigStore
+from .config import ConfigStore, profile_blink_enabled, profile_niqe_enabled
 from .face_analysis import (
     MODEL_VERSION,
     BlinkThresholds,
@@ -51,6 +51,7 @@ from .motion import (
     paired_motion_asset,
     probe_motion,
 )
+from .niqe import NIQE_VERSION, niqe_is_current
 from .project_store import (
     Project,
     ProjectManager,
@@ -75,6 +76,7 @@ from .workflows import QUARANTINE_DIR, import_decisions
 DATABASE_BATCH_SIZE = 500
 DISCOVERY_PROGRESS_CHECK_INTERVAL = 64
 SCAN_EXISTING_COLUMNS = (
+    "niqe_score", "niqe_error", "niqe_version",
     "id",
     "relative_path",
     "size",
@@ -110,6 +112,7 @@ EXACT_HASH_COLUMNS = (
     "motion_sha256",
 )
 SIMILARITY_REBUILD_COLUMNS = (
+    "niqe_score", "niqe_error",
     "id",
     "relative_path",
     "taken",
@@ -521,11 +524,14 @@ class Scanner:
         thumbnail: Path,
         cancel: threading.Event | None = None,
         stat: os.stat_result | None = None,
+        niqe_enabled: bool = True,
     ) -> dict[str, Any]:
         if self.analysis_runner is None:
-            return analyze_photo(path, thumbnail, stat)
+            return analyze_photo(path, thumbnail, stat, niqe_enabled=niqe_enabled)
         try:
-            return self.analysis_runner.analyze(path, thumbnail, cancel)
+            return self.analysis_runner.analyze(
+                path, thumbnail, cancel, niqe_enabled=niqe_enabled
+            )
         except AnalysisCancelled as error:
             if cancel is not None:
                 raise ScanCancelled from error
@@ -835,12 +841,13 @@ class Scanner:
         )
         return identity_same, unchanged
 
-    @staticmethod
     def _photo_is_current(
+        self,
         project: Project,
         old: sqlite3.Row | None,
         stat: os.stat_result | None,
         motion_same: bool,
+        niqe_enabled: bool,
     ) -> bool:
         thumbnail = (
             project_thumbnail_path(project, old["thumbnail"])
@@ -854,6 +861,7 @@ class Scanner:
             and abs(old["mtime"] - stat.st_mtime) < 0.001
             and motion_same
             and not old["error"]
+            and (not niqe_enabled or niqe_is_current(old))
             and not old["motion_error"]
             and thumbnail is not None
             and thumbnail.is_file()
@@ -917,6 +925,7 @@ class Scanner:
         thumbnail: Path,
         stat: os.stat_result | None,
         cancel: threading.Event,
+        niqe_enabled: bool,
     ) -> tuple[dict[str, Any] | None, int, int]:
         if not (
             asset
@@ -937,7 +946,9 @@ class Scanner:
                 f"{motion_fingerprint(asset)}.motion-cover-{cover_time_ms}.jpg"
             )
             extract_motion_frame(video, cover_time_ms, frame)
-            metrics = self.analyze_photo(frame, thumbnail, cancel)
+            metrics = self.analyze_photo(
+                frame, thumbnail, cancel, niqe_enabled=niqe_enabled
+            )
             source_stat = stat or path.stat()
             metrics.update(
                 {
@@ -969,6 +980,7 @@ class Scanner:
         profile: dict[str, Any],
         cancel: threading.Event,
     ) -> dict[str, Any]:
+        niqe_enabled = profile_niqe_enabled(profile)
         thumb_name = hashlib.sha1(rel.encode("utf-8")).hexdigest() + ".jpg"
         thumbnail = project.thumb_dir / thumb_name
         motion_values = self._probe_motion_values(
@@ -984,10 +996,13 @@ class Scanner:
             thumbnail,
             stat,
             cancel,
+            niqe_enabled,
         )
         cover_source = "motion" if metrics is not None else "still"
         if metrics is None:
-            metrics = self.analyze_photo(path, thumbnail, cancel, stat)
+            metrics = self.analyze_photo(
+                path, thumbnail, cancel, stat, niqe_enabled=niqe_enabled
+            )
         if metrics.get("thumbnail"):
             metrics["thumbnail"] = project_thumbnail_storage_path(
                 metrics["thumbnail"]
@@ -1045,7 +1060,8 @@ class Scanner:
         motion_identity_same, motion_same = self._motion_state_matches(
             old, asset_values
         )
-        if self._photo_is_current(project, old, stat, motion_same):
+        niqe_enabled = profile_niqe_enabled(profile)
+        if self._photo_is_current(project, old, stat, motion_same, niqe_enabled):
             if old is not None and old["status"] != "active":
                 conn.execute(
                     "UPDATE photos SET status='active' WHERE id=?", (old["id"],)
@@ -1326,6 +1342,18 @@ class Scanner:
             params,
         ).fetchall()
 
+    def niqe_rescan_required(
+        self, conn: sqlite3.Connection, profile: dict[str, Any]
+    ) -> bool:
+        """A completed failure is cacheable; absent or outdated analysis is not."""
+        if not profile_niqe_enabled(profile):
+            return False
+        return conn.execute(
+            """SELECT 1 FROM photos WHERE status='active' AND COALESCE(error,'')=''
+               AND (niqe_version<>? OR (niqe_score IS NULL AND niqe_error='')) LIMIT 1""",
+            (NIQE_VERSION,),
+        ).fetchone() is not None
+
     def blink_rescan_required(
         self,
         project: Project,
@@ -1333,7 +1361,7 @@ class Scanner:
         profile: dict[str, Any],
     ) -> bool:
         """Check cached blink fingerprints without creating ONNX sessions."""
-        if not self.config.snapshot().get("blink_detection_enabled", True):
+        if not profile_blink_enabled(profile):
             return False
         thresholds = BlinkThresholds.from_profile(profile)
         reusable_statuses = {"open", "closed", "uncertain", "no_face"}
@@ -1367,7 +1395,7 @@ class Scanner:
         photo_ids: set[int] | None = None,
     ) -> int:
         """Incrementally analyze non-exact similar candidates from thumbnails."""
-        if not self.config.snapshot().get("blink_detection_enabled", True):
+        if not profile_blink_enabled(profile):
             return 0
         if self.face_analyzer is None:
             return 0

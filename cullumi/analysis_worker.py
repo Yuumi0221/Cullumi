@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .media import analyze_photo, failed_photo_analysis
+from .niqe import initialize_niqe
 
 DEFAULT_ANALYSIS_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_TASKS_PER_WORKER = 50
@@ -122,13 +123,19 @@ def _worker_main(
     memory_limit: int,
 ) -> None:
     _apply_windows_memory_limit(memory_limit)
+    niqe_initialized = False
     while True:
         request = requests.get()
         if request is None:
             return
-        task_id, source, thumbnail = request
+        task_id, source, thumbnail, niqe_enabled = request
+        if niqe_enabled and not niqe_initialized:
+            initialize_niqe()
+            niqe_initialized = True
         try:
-            result = analyze_photo(Path(source), Path(thumbnail))
+            result = analyze_photo(
+                Path(source), Path(thumbnail), niqe_enabled=niqe_enabled
+            )
         except BaseException as error:
             result = failed_photo_analysis(
                 Path(source), Path(thumbnail), str(error) or error.__class__.__name__
@@ -217,6 +224,7 @@ class PhotoAnalysisRunner:
         source: Path,
         thumbnail: Path,
         cancel: threading.Event | None = None,
+        niqe_enabled: bool = True,
     ) -> dict[str, Any]:
         self._acquire(cancel)
         try:
@@ -228,7 +236,9 @@ class PhotoAnalysisRunner:
             assert self._responses is not None
             self._task_id += 1
             task_id = self._task_id
-            self._requests.put((task_id, str(source), str(thumbnail)))
+            self._requests.put(
+                (task_id, str(source), str(thumbnail), niqe_enabled)
+            )
             deadline = time.monotonic() + self.timeout_seconds
             while True:
                 if self._closed.is_set() or (cancel is not None and cancel.is_set()):

@@ -1,4 +1,35 @@
 let libraryTools, similarTools;
+let backToTopFrame = 0;
+
+function updateLibraryBackToTop() {
+  backToTopFrame = 0;
+  const main = document.querySelector("body > main"),
+    button = $("#libraryBackToTop"),
+    libraryOpen = Boolean(
+      state.project &&
+        state.view === "library" &&
+        document.body.classList.contains("project-open"),
+    );
+  let controlsVisible = true;
+  if (libraryOpen && main.scrollTop > 0) {
+    const viewport = main.getBoundingClientRect();
+    controlsVisible = [$("#libraryFilters"), document.querySelector(".toolbar > .search")]
+      .filter((element) => element && !element.classList.contains("hidden"))
+      .some((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.bottom > viewport.top && rect.top < viewport.bottom;
+      });
+  }
+  const visible = libraryOpen && main.scrollTop > 0 && !controlsVisible;
+  button.classList.toggle("is-visible", visible);
+  button.setAttribute("aria-hidden", String(!visible));
+  button.tabIndex = visible ? 0 : -1;
+}
+
+function scheduleLibraryBackToTopUpdate() {
+  if (backToTopFrame) return;
+  backToTopFrame = requestAnimationFrame(updateLibraryBackToTop);
+}
 function projectFormatValues(project = state.project) {
   return (project?.format_categories || [])
     .map((item) => item.id)
@@ -265,6 +296,7 @@ async function loadView() {
   $("#gallery").classList.toggle("hidden", state.view === "similar");
   $("#similarBrowser").classList.toggle("hidden", state.view !== "similar");
   $("#librarySentinel").classList.toggle("hidden", state.view !== "library");
+  scheduleLibraryBackToTopUpdate();
   try {
     if (state.view === "library") {
       await loadLibraryPage(true);
@@ -683,6 +715,20 @@ function bindGalleryEvents() {
   $("#quarantineBtn").onclick = quarantine;
   $("#clearDecisionsBtn").onclick = confirmClearDecisions;
   $("#markAiRemoveBtn").onclick = confirmAiRemoveSuggestions;
+  const main = document.querySelector("body > main");
+  main.addEventListener("scroll", scheduleLibraryBackToTopUpdate, {
+    passive: true,
+  });
+  window.addEventListener("resize", scheduleLibraryBackToTopUpdate);
+  $("#libraryBackToTop").onclick = () => {
+    main.scrollTo({
+      top: 0,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+    });
+  };
+  scheduleLibraryBackToTopUpdate();
   bindViewerEvents();
   const libraryObserver = new IntersectionObserver(
     (entries) => {

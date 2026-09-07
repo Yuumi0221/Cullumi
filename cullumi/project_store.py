@@ -15,7 +15,7 @@ from typing import Any
 
 from .fs_utils import is_within
 
-DATABASE_SCHEMA_VERSION = 5
+DATABASE_SCHEMA_VERSION = 6
 _WAL_CONFIGURED_DATABASES: dict[Path, tuple[int, int]] = {}
 _INITIALIZED_DATABASES: dict[Path, tuple[int, int, int, int]] = {}
 _DATABASE_CONFIGURATION_LOCK = threading.RLock()
@@ -79,6 +79,8 @@ CREATE TABLE IF NOT EXISTS photos (
   width INTEGER, height INTEGER, megapixels REAL, taken TEXT,
   luminance REAL, contrast REAL, dark_clip REAL, bright_clip REAL,
   sharpness REAL, entropy REAL, phash TEXT, dhash TEXT, sha256 TEXT,
+  niqe_score REAL, niqe_error TEXT NOT NULL DEFAULT '',
+  niqe_version TEXT NOT NULL DEFAULT '',
   thumbnail TEXT, error TEXT DEFAULT '', suggestion TEXT DEFAULT 'keep',
   reason TEXT DEFAULT '', decision TEXT DEFAULT '', status TEXT DEFAULT 'active',
   analyzed_at TEXT,
@@ -137,6 +139,9 @@ QUERY_INDEXES = (
 )
 
 PHOTO_SCHEMA_COLUMNS = {
+    "niqe_score": "REAL",
+    "niqe_error": "TEXT NOT NULL DEFAULT ''",
+    "niqe_version": "TEXT NOT NULL DEFAULT ''",
     "media_type": "TEXT NOT NULL DEFAULT 'image'",
     "motion_kind": "TEXT NOT NULL DEFAULT ''",
     "motion_relative_path": "TEXT NOT NULL DEFAULT ''",

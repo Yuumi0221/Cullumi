@@ -27,7 +27,6 @@ def save_settings(config: ConfigStore, body: dict[str, Any]) -> dict[str, Any]:
     for key in (
         "auto_advance",
         "auto_check_updates",
-        "blink_detection_enabled",
         "sync_variant_decisions",
     ):
         if key in body:

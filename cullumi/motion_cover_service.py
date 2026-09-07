@@ -11,7 +11,7 @@ from typing import Any
 
 from .analysis_refresh import changed_photo_plan, execute_refresh
 from .classification import classify, project_photo_counts
-from .config import ConfigStore
+from .config import ConfigStore, profile_niqe_enabled
 from .motion import (
     ensure_motion_video,
     extract_motion_asset_frame,
@@ -130,7 +130,9 @@ def _motion_cover_candidates(
             frame = temp_root / f"frame-{index}.jpg"
             thumb = temp_root / f"thumb-{index}.jpg"
             extract_motion_frame(video, time_ms, frame)
-            metrics = scanner.analyze_photo(frame, thumb)
+            metrics = scanner.analyze_photo(
+                frame, thumb, niqe_enabled=profile_niqe_enabled(profile)
+            )
             metrics.update({"cover_source": "motion", "size": row["size"]})
             score = round(
                 max(0.0, min(1.0, quality_score(metrics, profile))) * 100, 1
@@ -148,6 +150,7 @@ def _motion_cover_candidates(
 
 
 MOTION_COVER_METRIC_COLUMNS = (
+    "niqe_score", "niqe_error", "niqe_version",
     "width", "height", "megapixels", "luminance", "contrast",
     "dark_clip", "bright_clip", "sharpness", "entropy", "phash",
     "dhash", "thumbnail", "suggestion", "reason", "quality_score",
@@ -176,6 +179,7 @@ def _prepare_cover(
     time_ms: int,
     write_source: bool,
     revision: int,
+    profile: dict[str, Any],
 ) -> _PreparedCover:
     thumb_name = (
         f"{hashlib.sha1(str(row['relative_path']).encode('utf-8')).hexdigest()}"
@@ -201,11 +205,15 @@ def _prepare_cover(
             extract_motion_asset_frame(asset, selected_time, frame)
         else:
             extract_motion_frame(video, selected_time, frame)
-        metrics = scanner.analyze_photo(frame, thumbnail)
+        metrics = scanner.analyze_photo(
+            frame, thumbnail, niqe_enabled=profile_niqe_enabled(profile)
+        )
         frame_index = round(selected_time * fps / 1000)
     else:
         original = safe_relative_path(project.root, row["relative_path"], "照片路径")
-        metrics = scanner.analyze_photo(original, thumbnail)
+        metrics = scanner.analyze_photo(
+            original, thumbnail, niqe_enabled=profile_niqe_enabled(profile)
+        )
     if metrics["error"]:
         thumbnail.unlink(missing_ok=True)
         raise RuntimeError(metrics["error"])
@@ -352,7 +360,14 @@ def update_motion_cover(
                 raise ValueError("动态照片不存在")
             revision = int(row["cover_revision"] or 0) + 1
             prepared = _prepare_cover(
-                scanner, project, row, source, time_ms, write_source, revision
+                scanner,
+                project,
+                row,
+                source,
+                time_ms,
+                write_source,
+                revision,
+                profile,
             )
             writeback = None
             original = prepared.original

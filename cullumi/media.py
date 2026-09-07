@@ -11,6 +11,8 @@ from typing import Any
 import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from .niqe import NIQE_VERSION, evaluate_preview
+
 try:
     from pillow_heif import from_pillow, open_heif, register_heif_opener
 
@@ -209,6 +211,7 @@ def _photo_analysis_base(path: Path, thumb_path: Path) -> dict[str, Any]:
         "luminance": None, "contrast": None, "dark_clip": None, "bright_clip": None,
         "sharpness": None, "entropy": None, "phash": "", "dhash": "",
         "sha256": "", "thumbnail": str(thumb_path), "error": "",
+        "niqe_score": None, "niqe_error": "", "niqe_version": NIQE_VERSION,
     }
 
 
@@ -226,6 +229,7 @@ def analyze_photo(
     path: Path,
     thumb_path: Path,
     stat: os.stat_result | None = None,
+    niqe_enabled: bool = True,
 ) -> dict[str, Any]:
     base = _photo_analysis_base(path, thumb_path)
     image: Image.Image | None = None
@@ -240,6 +244,10 @@ def analyze_photo(
         preview = image
         image = None
         preview.thumbnail((512, 512), Image.Resampling.LANCZOS)
+        if niqe_enabled:
+            base.update(evaluate_preview(preview))
+        else:
+            base.update({"niqe_score": None, "niqe_error": "", "niqe_version": ""})
         gray = ImageOps.grayscale(preview)
         arr = np.asarray(gray, dtype=np.float32)
         center = arr[1:-1, 1:-1]

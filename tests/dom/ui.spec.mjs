@@ -8,8 +8,8 @@ const iconHref = (name) =>
   new RegExp(`^/static/assets/icons\\.svg\\?v=[0-9a-f]{12}#${name}$`);
 
 const profiles = [
-  { id: "conservative", name: "保守筛选", builtin: true, similarity: { blink: { face_confidence_min: 0.85, open_confidence_min: 0.8, closed_confidence_min: 0.8, min_eye_distance_px: 12, reliable_coverage_min: 0.8 } } },
-  { id: "custom-portrait", name: "人像精选", builtin: false, base_mode: "conservative", similarity: { blink: { face_confidence_min: 0.85, open_confidence_min: 0.8, closed_confidence_min: 0.8, min_eye_distance_px: 12, reliable_coverage_min: 0.8 } } },
+  { id: "conservative", name: "保守筛选", builtin: true, quality: { enabled: { niqe: true } }, similarity: { blink: { enabled: true, face_confidence_min: 0.85, open_confidence_min: 0.8, closed_confidence_min: 0.8, min_eye_distance_px: 12, reliable_coverage_min: 0.8 } } },
+  { id: "custom-portrait", name: "人像精选", builtin: false, base_mode: "conservative", quality: { enabled: { niqe: true } }, similarity: { blink: { enabled: true, face_confidence_min: 0.85, open_confidence_min: 0.8, closed_confidence_min: 0.8, min_eye_distance_px: 12, reliable_coverage_min: 0.8 } } },
 ];
 
 function projectPayload(decision = "", photoCount = 2, decisions = null) {
@@ -101,7 +101,6 @@ function motionPhotoPayload(decision = "", id = 1, stillTime = 0) {
 async function installApi(page, options = {}) {
   let decision = "";
   let writebackMode = options.writebackMode || "never";
-  let blinkEnabled = options.blinkEnabled ?? true;
   let syncVariantDecisions = options.syncVariantDecisions ?? true;
   const decisions = new Map();
   const requests = [];
@@ -173,13 +172,12 @@ async function installApi(page, options = {}) {
 
     if (url.pathname === "/api/bootstrap") {
       return fulfill({
-        version: "1.0.3",
+        version: "1.0.4",
         profiles,
         settings: {
           theme: "day",
           auto_advance: options.autoAdvance ?? false,
           auto_check_updates: false,
-          blink_detection_enabled: blinkEnabled,
           sync_variant_decisions: syncVariantDecisions,
           motion_cover_writeback: writebackMode,
           default_cache_root: "C:\\Cullumi缓存",
@@ -278,14 +276,13 @@ async function installApi(page, options = {}) {
     }
     if (url.pathname === "/api/settings") {
       if (body.motion_cover_writeback) writebackMode = body.motion_cover_writeback;
-      if (typeof body.blink_detection_enabled === "boolean") blinkEnabled = body.blink_detection_enabled;
       if (typeof body.sync_variant_decisions === "boolean") syncVariantDecisions = body.sync_variant_decisions;
-      return fulfill({ saved: true, settings: { theme: body.theme || "day", motion_cover_writeback: writebackMode, blink_detection_enabled: blinkEnabled, sync_variant_decisions: syncVariantDecisions }, blink_rescan_required: blinkEnabled && !!options.blinkRescanRequired });
+      return fulfill({ saved: true, settings: { theme: body.theme || "day", motion_cover_writeback: writebackMode, sync_variant_decisions: syncVariantDecisions } });
     }
     if (url.pathname === "/api/update/check") {
       return fulfill(options.updateRelease || {
-        current_version: "1.0.3",
-        latest_version: "1.0.3",
+        current_version: "1.0.4",
+        latest_version: "1.0.4",
         update_available: false,
         download_available: false,
         release_notes: "",
@@ -451,11 +448,17 @@ test("首页加载全部脚本并异步渲染最近项目", async ({ page }) => 
   await openApp(page);
 
   await expect(page).toHaveTitle("Cullumi");
-  await expect(page.locator("#appVersion")).toHaveText("v1.0.3");
+  await expect(page.locator("#appVersion")).toHaveText("v1.0.4");
   await expect(page.locator("#chooseBtn svg use")).toHaveAttribute("href", iconHref("home-folder"));
   await expect(page.locator("#recentList .recent-meta")).toContainText("2 张");
   await expect(page.locator("#recentList .recent-thumb img")).toHaveCount(1);
   await expect(page.locator("#recentList .recent-more svg use").first()).toHaveAttribute("href", iconHref("home-more"));
+  await expect(page.locator("#settingsBtn")).toBeVisible();
+  await page.locator("#settingsBtn").click();
+  await page.locator('[data-setting="storage"]').click();
+  await expect(page.locator("#projectCacheSettingsRow")).toBeHidden();
+  await expect(page.locator("#defaultCache")).toBeVisible();
+  await page.locator('#settings [data-close]').click();
 
   const scripts = await page.locator("script[src]").evaluateAll(nodes =>
     nodes.map(node => new URL(node.src).pathname.split("/").pop())
@@ -624,6 +627,41 @@ test("照片库排序菜单使用实心圆点单选样式并传递排序方向",
     const query = requests.filter(request => request.path === "/api/photos").at(-1)?.query;
     return `${query?.sort}:${query?.direction}`;
   }).toBe("size:desc");
+});
+
+test("照片库工具栏离开视野后显示圆形回到顶部按钮", async ({ page }) => {
+  await openApp(page, { photoCount: 40 });
+  await openProject(page);
+
+  const button = page.locator("#libraryBackToTop"),
+    main = page.locator("body > main");
+  await expect(button).toBeHidden();
+  await expect(button.locator("svg use")).toHaveAttribute(
+    "href",
+    iconHref("chevron-down"),
+  );
+  await expect(button.locator("svg")).toHaveCSS(
+    "transform",
+    "matrix(-1, 0, 0, -1, 0, 0)",
+  );
+  await expect(button).toHaveCSS("border-radius", "50%");
+
+  await main.evaluate((element) => element.scrollTo(0, element.scrollHeight));
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBeGreaterThan(200);
+  await expect(button).toBeVisible();
+  const controlsAreVisible = await page.evaluate(() => {
+    const root = document.querySelector("body > main").getBoundingClientRect();
+    return [document.querySelector("#libraryFilters"), document.querySelector(".toolbar > .search")]
+      .some((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.bottom > root.top && rect.top < root.bottom;
+      });
+  });
+  expect(controlsAreVisible).toBe(false);
+
+  await button.click();
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBeLessThan(2);
+  await expect(button).toBeHidden();
 });
 
 test("智能建议工具栏按内容区宽度分行且标题保持单行", async ({ page }) => {
@@ -900,14 +938,14 @@ test("自定义模式恢复按钮使用统一图标并停留在字段标题行",
 
 test("检查更新弹窗显示 GitHub Release 更新说明", async ({ page }) => {
   const releaseNotes =
-    "# Cullumi 1.0.4\n\n## 主要更新\n\n- 修复 **RAW/JPG** 重复判断\n- 优化 `相似组` 加载\n\n[查看详情](https://github.com/Yuumi0221/Cullumi/releases/tag/v1.0.4)\n\n```text\nCullumi.exe\n```\n\n<b id=\"release-note-markup\">原样文本</b>\n\n[危险链接](javascript:alert(1))";
+    "# Cullumi 1.0.5\n\n## 主要更新\n\n- 修复 **RAW/JPG** 重复判断\n- 优化 `相似组` 加载\n\n[查看详情](https://github.com/Yuumi0221/Cullumi/releases/tag/v1.0.5)\n\n```text\nCullumi.exe\n```\n\n<b id=\"release-note-markup\">原样文本</b>\n\n[危险链接](javascript:alert(1))";
   await openApp(page, {
     updateRelease: {
-      current_version: "1.0.3",
-      latest_version: "1.0.4",
+      current_version: "1.0.4",
+      latest_version: "1.0.5",
       update_available: true,
       download_available: true,
-      asset_name: "Cullumi-v1.0.4-Windows-Portable.zip",
+      asset_name: "Cullumi-v1.0.5-Windows-Portable.zip",
       release_notes: releaseNotes,
       no_release: false,
     },
@@ -917,9 +955,9 @@ test("检查更新弹窗显示 GitHub Release 更新说明", async ({ page }) =>
   await page.locator("#checkUpdateBtn").click();
 
   await expect(page.locator("#updateDialog")).toBeVisible();
-  await expect(page.locator("#updateTitle")).toHaveText("发现新版本 v1.0.4");
+  await expect(page.locator("#updateTitle")).toHaveText("发现新版本 v1.0.5");
   const notes = page.locator("#updateReleaseNotesBody");
-  await expect(notes.locator("h4")).toHaveText("Cullumi 1.0.4");
+  await expect(notes.locator("h4")).toHaveText("Cullumi 1.0.5");
   await expect(notes.locator("h5")).toHaveText("主要更新");
   await expect(notes.locator("li")).toHaveCount(2);
   await expect(notes.locator("strong")).toHaveText("RAW/JPG");
@@ -928,7 +966,7 @@ test("检查更新弹窗显示 GitHub Release 更新说明", async ({ page }) =>
   await expect(notes.locator("a")).toHaveCount(1);
   await expect(notes.locator("a")).toHaveAttribute(
     "href",
-    "https://github.com/Yuumi0221/Cullumi/releases/tag/v1.0.4",
+    "https://github.com/Yuumi0221/Cullumi/releases/tag/v1.0.5",
   );
   await expect(notes.locator("a")).toHaveAttribute("target", "_blank");
   await expect(notes).toContainText("<b id=\"release-note-markup\">原样文本</b>");
@@ -936,24 +974,16 @@ test("检查更新弹窗显示 GitHub Release 更新说明", async ({ page }) =>
   await expect(page.locator("#release-note-markup")).toHaveCount(0);
 });
 
-test("眨眼检测重新开启时按项目状态提示需要重新扫描", async ({ page }) => {
-  const requests = await openApp(page, { blinkRescanRequired: true });
+test("筛选模式提供眨眼检测开关和参数", async ({ page }) => {
+  await openApp(page);
   await openProject(page);
   await page.locator("#settingsBtn").click();
-
-  const toggle = page.locator("#blinkDetectionEnabled");
-  await expect(toggle).toBeChecked();
-  await page.locator('label[aria-label="启用眨眼检测"]').click();
-  await expect(toggle).not.toBeChecked();
-  await expect(page.locator("#blinkRescanStatus")).toBeHidden();
-  await expect.poll(() => requests.findLast(request => request.path === "/api/settings")?.body?.blink_detection_enabled).toBe(false);
-  await page.locator('label[aria-label="启用眨眼检测"]').click();
-  await expect(toggle).toBeChecked();
-  await expect(page.locator("#blinkRescanStatus")).toHaveText("需要重新扫描");
-  await expect(page.locator("#blinkRescanStatus")).toBeVisible();
-  await expect.poll(() => requests.findLast(request => request.path === "/api/settings")?.body?.project_id).toBe("project-1");
-
+  await expect(page.locator("#blinkDetectionEnabled")).toHaveCount(0);
   await page.locator('[data-setting="profiles"]').click();
+  const toggle = page.locator('[data-p="similarity.blink.enabled"]');
+  await expect(toggle).toBeChecked();
+  await toggle.locator("xpath=ancestor::label").click();
+  await expect(toggle).not.toBeChecked();
   const threshold = page.locator('[data-p="similarity.blink.face_confidence_min"]');
   await expect(threshold).toHaveAttribute("min", "0.5");
   await expect(threshold).toHaveAttribute("max", "0.99");
@@ -1111,6 +1141,38 @@ test("查看器可以在真实照片集合中前后导航", async ({ page }) => 
   await expect(page.locator("#viewerName")).toHaveText("海边-2.jpg");
   await page.locator("#viewerPrev").click();
   await expect(page.locator("#viewerName")).toHaveText("海边-1.jpg");
+});
+
+test("查看器不显示冗长的 NIQE 说明且不改变人工决定", async ({ page }) => {
+  await openApp(page, { photoCount: 2 });
+  await openProject(page);
+  await page.locator('[data-photo-id="1"] [data-open-id]').click();
+  await page.evaluate(() => {
+    Object.assign(state.items[0], { niqe_score: 3.125, niqe_error: "", decision: "keep" });
+    openViewer(0);
+  });
+  await expect(page.locator("#viewerNiqe")).toHaveCount(0);
+  await expect(page.locator("#viewer")).not.toContainText("越低通常越好");
+  await expect(page.locator("#viewer")).not.toContainText("不是单独删除依据");
+  await expect(page.locator("#viewerKeep")).toHaveClass(/active/);
+  await page.evaluate(() => {
+    Object.assign(state.items[0], { niqe_score: null, niqe_error: "too few textured blocks" });
+    openViewer(0);
+  });
+  await expect(page.locator("#viewer")).not.toContainText("综合分已按其余指标调整");
+  await expect(page.locator("#viewerKeep")).toHaveClass(/active/);
+});
+
+test("筛选模式提供 NIQE 模型开关并显示耗时提示", async ({ page }) => {
+  await openApp(page);
+  await openProject(page);
+  await page.locator("#settingsBtn").click();
+  await expect(page.locator("#niqeAnalysisEnabled")).toHaveCount(0);
+  await page.locator('[data-setting="profiles"]').click();
+  const toggle = page.locator('[data-p="quality.enabled.niqe"]');
+  await expect(toggle).toBeChecked();
+  await toggle.locator("xpath=ancestor::label").click();
+  await expect(toggle).not.toBeChecked();
 });
 
 test("动态照片使用 SVG 控件并支持播放、缩放和末帧封面", async ({ page }) => {
