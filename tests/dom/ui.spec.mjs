@@ -108,6 +108,8 @@ async function installApi(page, options = {}) {
     const photo = photoPayload("", id);
     photo.size = id * 10_000;
     photo.taken = `2026-08-${String((id % 28) + 1).padStart(2, "0")} 10:00:00`;
+    if (options.similarQualityScores?.[id] !== undefined)
+      photo.quality_score = options.similarQualityScores[id];
     const category = options.similarFormats?.[id - 1] || "jpeg";
     if (options.similarFormats) {
       const extension = {
@@ -135,7 +137,10 @@ async function installApi(page, options = {}) {
     return photo;
   };
   const similarMembers = () => {
-    const sources = [similarPhoto(1), similarPhoto(2)];
+    const sources = Array.from(
+      { length: options.similarMemberCount || 2 },
+      (_, index) => similarPhoto(index + 1),
+    );
     if (!options.similarVariantPairs) return sources;
     return sources.flatMap((source, index) => {
       const sourceId = source.id;
@@ -378,13 +383,16 @@ async function installApi(page, options = {}) {
         );
         return fulfill({ total, items });
       }
-      const sources = [similarPhoto(1), similarPhoto(2)];
+      const sources = Array.from(
+        { length: options.similarMemberCount || 2 },
+        (_, index) => similarPhoto(index + 1),
+      );
       return fulfill({
         total: 1,
         items: [{
           id: "similar-1",
-          count: options.similarVariantPairs ? 4 : 2,
-          capture_count: 2,
+          count: options.similarVariantPairs ? 4 : sources.length,
+          capture_count: sources.length,
           kind: "similar",
           face_safe: false,
           recommended: sources[0],
@@ -397,7 +405,7 @@ async function installApi(page, options = {}) {
       return fulfill({
         id: "similar-1",
         count: members.length,
-        capture_count: 2,
+        capture_count: options.similarMemberCount || 2,
         kind: "similar",
         face_safe: false,
         recommended_id: 1,
@@ -501,7 +509,9 @@ test("自定义模式预估和输入错误共用一个状态框", async ({ page 
   await page.locator('[data-p="quality.blur_review"]').fill("");
   await page.locator("#saveProfile").click();
 
-  await expect(status).toHaveText("还有项目没有输入完整，请填写标红的项目。");
+  await expect(status).toHaveText(
+    "保存失败：还有项目没有输入完整，请填写标红的项目。",
+  );
   await expect(status).toHaveClass(/failed/);
   await expect(page.locator("#profileSettings .estimate")).toHaveCount(1);
 });
@@ -834,7 +844,7 @@ test("相似组使用照片库同款查看排序组件并组合筛选 RAW", asyn
   await viewTool.locator(".gallery-tool-trigger").click();
   await sortTool.locator(".gallery-tool-trigger").click();
   await expect(sortTool.locator('[data-similar-sort-value="suggestion"]')).toBeChecked();
-  await expect(sortTool.locator('[data-similar-sort-direction="asc"]')).toBeChecked();
+  await expect(sortTool.locator('[data-similar-sort-direction="desc"]')).toBeChecked();
   await expect(sortTool.locator("input").first()).toHaveAttribute("type", "radio");
   await sortTool.locator('[data-similar-sort-value="size"]').check();
   await sortTool.locator('[data-similar-sort-direction="desc"]').check();
@@ -850,6 +860,35 @@ test("相似组使用照片库同款查看排序组件并组合筛选 RAW", asyn
   });
   expect(positions.viewLeft).toBeGreaterThan(positions.backRight);
   expect(positions.sortLeft).toBeGreaterThan(positions.viewRight);
+});
+
+test("相似组建议排序按分值递减并让推荐照片置顶", async ({ page }) => {
+  await openApp(page, {
+    similarMemberCount: 3,
+    similarQualityScores: { 1: 92.4, 2: 71.6, 3: 84.2 },
+  });
+  await openProject(page);
+  await page.locator('[data-nav="similar"]').click();
+  await page.locator('[data-similar-group="similar-1"]').click();
+
+  const cards = page.locator("#similarDetailGallery [data-photo-id]");
+  await expect(cards).toHaveCount(3);
+  await expect.poll(() => cards.evaluateAll(nodes =>
+    nodes.map(node => node.dataset.photoId),
+  )).toEqual(["1", "3", "2"]);
+  await expect(cards.first().locator("[data-context-badge]")).toHaveText(
+    "推荐保留",
+  );
+
+  const sortTool = page.locator("#similarSortTool");
+  await sortTool.locator(".gallery-tool-trigger").click();
+  await expect(
+    sortTool.locator('[data-similar-sort-direction="desc"]'),
+  ).toBeChecked();
+  await sortTool.locator('[data-similar-sort-direction="asc"]').check();
+  await expect.poll(() => cards.evaluateAll(nodes =>
+    nodes.map(node => node.dataset.photoId),
+  )).toEqual(["2", "3", "1"]);
 });
 
 test("相似组首屏分页后继续加载且不重复创建文件夹", async ({ page }) => {

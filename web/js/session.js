@@ -157,7 +157,7 @@ async function showProject(p) {
     ai: new Set(AI_VALUES),
     formats: new Set(),
     sort: "suggestion",
-    sortDirection: "asc",
+    sortDirection: "desc",
     offset: 0,
     total: 0,
     done: false,

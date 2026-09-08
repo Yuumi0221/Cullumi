@@ -53,14 +53,24 @@ function similarAiValue(photo) {
     ? photo.suggestion
     : "no_suggestion";
 }
-function similarSuggestionRank(photo) {
-  return { remove: 0, review: 1, unreadable: 2 }[photo.suggestion] ?? 3;
+function similarRecommendationRank(photo) {
+  return photo._viewerKind === "recommended" ? 1 : 0;
+}
+function similarQualityScore(photo) {
+  const score = Number(photo.quality_score);
+  return photo.quality_score !== null && photo.quality_score !== "" &&
+    Number.isFinite(score)
+    ? score
+    : -1;
 }
 function compareSimilarPhotos(left, right) {
   const direction = state.similar.sortDirection === "desc" ? -1 : 1;
   let result = 0;
   if (state.similar.sort === "suggestion") {
-    result = similarSuggestionRank(left) - similarSuggestionRank(right);
+    result =
+      similarRecommendationRank(left) - similarRecommendationRank(right);
+    if (!result)
+      result = similarQualityScore(left) - similarQualityScore(right);
   } else if (state.similar.sort === "filename") {
     const leftName = left.relative_path.split("/").pop() || "",
       rightName = right.relative_path.split("/").pop() || "";
@@ -83,7 +93,8 @@ function compareSimilarPhotos(left, right) {
     undefined,
     { numeric: true, sensitivity: "base" },
   );
-  return pathResult || left.id - right.id;
+  const fallback = pathResult || left.id - right.id;
+  return state.similar.sort === "suggestion" ? fallback * direction : fallback;
 }
 function syncSimilarControls() {
   similarTools?.sync();
@@ -299,7 +310,7 @@ async function openSimilarGroup(groupId) {
   state.similar.ai = new Set(AI_VALUES);
   state.similar.formats = new Set();
   state.similar.sort = "suggestion";
-  state.similar.sortDirection = "asc";
+  state.similar.sortDirection = "desc";
   state.similar.mode = window.innerWidth <= 850 ? "expanded" : "side";
   $("#searchInput").value = "";
   $("#searchInput").placeholder = "搜索当前组照片";
@@ -322,7 +333,7 @@ function closeSimilarDetail(restoreSearch = true) {
   state.similar.ai = new Set(AI_VALUES);
   state.similar.formats = new Set();
   state.similar.sort = "suggestion";
-  state.similar.sortDirection = "asc";
+  state.similar.sortDirection = "desc";
   state.items = [];
   if (restoreSearch) {
     $("#searchInput").value = state.similar.listSearch;
