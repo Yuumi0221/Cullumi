@@ -1,0 +1,15 @@
+# Keep repository text deterministic across operating systems.
+* text=auto eol=lf
+
+# Windows-native command scripts use CRLF in the working tree.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets must never be newline-normalized.
+*.ico binary
+*.jpg binary
+*.npz binary
+*.onnx binary
+*.otf binary
+*.png binary
