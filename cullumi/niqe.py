@@ -21,6 +21,11 @@ from PIL import Image
 PARAMETERS_SHA256 = "2a7c182a68c9e7f1b2e2e5ec723279d6f65d912b6fcaf37eb2bf03d7367c4296"
 # Bump on any algorithm, parameters, decoder or preview-preprocessing change.
 NIQE_VERSION = "niqe-2a7c182a:numpy-v1:rgb512-lanczos-matlab-y96"
+NIQE_INPUT_FAILURE_VERSION = f"{NIQE_VERSION}:input-failure"
+
+
+class NiqeInputError(ValueError):
+    """The image cannot produce a meaningful NIQE score."""
 
 
 def model_directory() -> Path:
@@ -123,7 +128,7 @@ class NiqeEvaluator:
     def compute_luminance(self, luminance) -> float:
         h, w = np.array(luminance.shape) // 96
         if h * w < 2:
-            raise ValueError("NIQE needs at least two complete 96×96 blocks")
+            raise NiqeInputError("NIQE needs at least two complete 96×96 blocks")
         img = luminance[: h * 96, : w * 96].astype(np.float64)
         scales = []
         for scale in (1, 2):
@@ -138,33 +143,52 @@ class NiqeEvaluator:
         features = np.concatenate(scales, axis=1)
         valid = features[np.isfinite(features).all(axis=1)]
         if len(valid) < 2:
-            raise ValueError("NIQE has fewer than two valid textured blocks")
+            raise NiqeInputError("NIQE has fewer than two valid textured blocks")
         delta = self.mean - np.nanmean(features, axis=0)
         covariance = (self.cov + np.cov(valid, rowvar=False)) / 2
         squared = float(delta @ np.linalg.pinv(covariance) @ delta)
         if not math.isfinite(squared) or squared < -1e-8:
-            raise ValueError("NIQE could not produce a finite statistical distance")
+            raise NiqeInputError("NIQE could not produce a finite statistical distance")
         return math.sqrt(max(0, squared))
 
 
 @lru_cache(maxsize=1)
+def _cached_evaluator() -> NiqeEvaluator:
+    """Cache only a successfully constructed evaluator."""
+    return NiqeEvaluator(model_directory() / "niqe_pris_params.npz")
+
+
 def initialize_niqe() -> tuple[NiqeEvaluator | None, str]:
-    """Load once per process, including failed initialization; no photo I/O."""
+    """Load once per process while allowing a failed initialization to recover."""
     try:
-        return NiqeEvaluator(model_directory() / "niqe_pris_params.npz"), ""
+        return _cached_evaluator(), ""
     except Exception as error:
         return None, str(error) or type(error).__name__
 
 
+initialize_niqe.cache_clear = _cached_evaluator.cache_clear  # type: ignore[attr-defined]
+
+
 def evaluate_preview(preview: Image.Image) -> dict:
     result = {"niqe_score": None, "niqe_error": "", "niqe_version": NIQE_VERSION}
-    try:
-        evaluator, error = initialize_niqe()
-        if evaluator is None:
-            raise ValueError(error)
-        result["niqe_score"] = evaluator.compute(preview)
-    except Exception as error:
-        result["niqe_error"] = str(error) or type(error).__name__
+    for attempt in range(2):
+        try:
+            evaluator, error = initialize_niqe()
+            if evaluator is None:
+                raise RuntimeError(error)
+            result["niqe_score"] = evaluator.compute(preview)
+            result["niqe_error"] = ""
+            return result
+        except NiqeInputError as error:
+            result["niqe_error"] = str(error) or type(error).__name__
+            result["niqe_version"] = NIQE_INPUT_FAILURE_VERSION
+            return result
+        except Exception as error:
+            result["niqe_error"] = str(error) or type(error).__name__
+            if attempt == 0:
+                continue
+    # Unexpected runtime and model failures are retryable on a later scan.
+    result["niqe_version"] = ""
     return result
 
 
@@ -179,8 +203,13 @@ def valid_niqe(row) -> float | None:
 
 
 def niqe_is_current(row) -> bool:
+    if "niqe_version" not in row.keys():
+        return False
     return bool(
-        "niqe_version" in row.keys()
-        and row["niqe_version"] == NIQE_VERSION
-        and (valid_niqe(row) is not None or row["niqe_error"])
+        (row["niqe_version"] == NIQE_VERSION and valid_niqe(row) is not None)
+        or (
+            row["niqe_version"] == NIQE_INPUT_FAILURE_VERSION
+            and "niqe_error" in row.keys()
+            and row["niqe_error"]
+        )
     )

@@ -22,6 +22,20 @@ def blocking_worker(requests, _responses, _memory_limit) -> None:
     time.sleep(30)
 
 
+def transient_worker(requests, responses, _memory_limit) -> None:
+    failed = False
+    while True:
+        request = requests.get()
+        if request is None:
+            return
+        task_id = request[0]
+        if not failed:
+            failed = True
+            responses.put((task_id, {"error": "temporary", "_worker_failure": True}))
+        else:
+            responses.put((task_id, {"error": ""}))
+
+
 class PhotoAnalysisRunnerTests(unittest.TestCase):
     def test_application_context_injects_one_shared_analysis_runner(self) -> None:
         scanner = Scanner(mock.Mock(), mock.Mock())
@@ -168,6 +182,19 @@ class PhotoAnalysisRunnerTests(unittest.TestCase):
                 self.assertTrue((root / "thumb.jpg").is_file())
             finally:
                 runner.close()
+
+    def test_transient_worker_failure_is_retried_once(self) -> None:
+        runner = PhotoAnalysisRunner(
+            timeout_seconds=10,
+            memory_limit=0,
+            worker_main=transient_worker,
+        )
+        try:
+            result = runner.analyze(Path("source.jpg"), Path("thumb.jpg"))
+            self.assertEqual(result["error"], "")
+            self.assertEqual(runner._task_id, 2)
+        finally:
+            runner.close()
 
     def test_parallel_capacity_obeys_cpu_and_total_memory_budget(self):
         for ram, cpus, expected in [(4, 8, 1), (8, 8, 1), (32, 8, 2), (32, 1, 1)]:

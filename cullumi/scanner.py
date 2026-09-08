@@ -58,7 +58,7 @@ from .motion import (
     paired_motion_asset,
     probe_motion,
 )
-from .niqe import NIQE_VERSION, niqe_is_current
+from .niqe import NIQE_INPUT_FAILURE_VERSION, NIQE_VERSION, niqe_is_current
 from .project_store import (
     Project,
     ProjectManager,
@@ -1037,7 +1037,7 @@ class Scanner:
                     extract_motion_frame(video, int(old["cover_time_ms"]), source)
             result = self.analyze_photo(source, thumbnail, cancel, niqe_enabled=True, niqe_only=True)
             if result["error"]:
-                result.update(niqe_score=None, niqe_error=result["error"], niqe_version=NIQE_VERSION)
+                result.update(niqe_score=None, niqe_error=result["error"], niqe_version="")
             return {"_niqe_only": True, **{k: result[k] for k in ("niqe_score", "niqe_error", "niqe_version")}}
         motion_values = self._probe_motion_values(
             path, asset, asset_values, old, motion_same
@@ -1501,8 +1501,11 @@ class Scanner:
             return False
         return conn.execute(
             """SELECT 1 FROM photos WHERE status='active' AND COALESCE(error,'')=''
-               AND (niqe_version<>? OR (niqe_score IS NULL AND niqe_error='')) LIMIT 1""",
-            (NIQE_VERSION,),
+               AND NOT (
+                 (niqe_version=? AND niqe_score IS NOT NULL AND niqe_score>=0 AND niqe_error='')
+                 OR (niqe_version=? AND niqe_error<>'')
+               ) LIMIT 1""",
+            (NIQE_VERSION, NIQE_INPUT_FAILURE_VERSION),
         ).fetchone() is not None
 
     @staticmethod

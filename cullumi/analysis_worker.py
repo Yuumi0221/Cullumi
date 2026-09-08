@@ -10,6 +10,10 @@ from multiprocessing.context import BaseContext
 from pathlib import Path
 from typing import Any
 
+# NIQE uses tiny linear algebra operations. Avoid multiplying BLAS worker
+# threads inside each spawned photo-analysis process.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
 from .media import analyze_photo, failed_photo_analysis
 from .niqe import initialize_niqe
 
@@ -143,6 +147,7 @@ def _worker_main(
             result = failed_photo_analysis(
                 Path(source), Path(thumbnail), str(error) or error.__class__.__name__
             )
+            result["_worker_failure"] = True
         responses.put((task_id, result))
 
 
@@ -234,45 +239,60 @@ class PhotoAnalysisRunner:
         try:
             if self._closed.is_set() or (cancel is not None and cancel.is_set()):
                 raise AnalysisCancelled
-            self._start()
-            assert self._process is not None
-            assert self._requests is not None
-            assert self._responses is not None
-            self._task_id += 1
-            task_id = self._task_id
-            self._requests.put(
-                (task_id, str(source), str(thumbnail), niqe_enabled, niqe_only)
-            )
-            deadline = time.monotonic() + self.timeout_seconds
-            while True:
-                if self._closed.is_set() or (cancel is not None and cancel.is_set()):
-                    self._stop()
-                    raise AnalysisCancelled
-                if not self._process.is_alive():
-                    self._stop()
-                    return failed_photo_analysis(
-                        source, thumbnail, "图片分析进程异常退出"
-                    )
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    self._stop()
-                    return failed_photo_analysis(
-                        source,
-                        thumbnail,
-                        f"图片分析超过 {self.timeout_seconds:g} 秒，已安全跳过",
-                    )
-                try:
-                    response_id, result = self._responses.get(
-                        timeout=min(0.1, remaining)
-                    )
-                except queue.Empty:
+            for attempt in range(2):
+                self._start()
+                assert self._process is not None
+                assert self._requests is not None
+                assert self._responses is not None
+                self._task_id += 1
+                task_id = self._task_id
+                self._requests.put(
+                    (task_id, str(source), str(thumbnail), niqe_enabled, niqe_only)
+                )
+                deadline = time.monotonic() + self.timeout_seconds
+                retry = False
+                while True:
+                    if self._closed.is_set() or (cancel is not None and cancel.is_set()):
+                        self._stop()
+                        raise AnalysisCancelled
+                    if not self._process.is_alive():
+                        exit_code = self._process.exitcode
+                        self._stop()
+                        if attempt == 0:
+                            retry = True
+                            break
+                        return failed_photo_analysis(
+                            source,
+                            thumbnail,
+                            f"图片分析进程异常退出（退出码 {exit_code}）",
+                        )
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        self._stop()
+                        return failed_photo_analysis(
+                            source,
+                            thumbnail,
+                            f"图片分析超过 {self.timeout_seconds:g} 秒，已安全跳过",
+                        )
+                    try:
+                        response_id, result = self._responses.get(
+                            timeout=min(0.1, remaining)
+                        )
+                    except queue.Empty:
+                        continue
+                    if response_id != task_id:
+                        continue
+                    worker_failure = bool(result.pop("_worker_failure", False))
+                    if worker_failure and attempt == 0:
+                        retry = True
+                        break
+                    self._tasks_completed += 1
+                    if self._tasks_completed >= self.max_tasks_per_worker:
+                        self._stop()
+                    return result
+                if retry:
                     continue
-                if response_id != task_id:
-                    continue
-                self._tasks_completed += 1
-                if self._tasks_completed >= self.max_tasks_per_worker:
-                    self._stop()
-                return result
+            raise AssertionError("unreachable worker retry state")
         finally:
             self._lock.release()
 

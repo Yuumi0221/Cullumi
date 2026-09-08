@@ -14,7 +14,7 @@ from unittest import mock
 import numpy as np
 from PIL import Image
 
-from cullumi import analysis_worker, motion
+from cullumi import analysis_worker, motion, niqe
 from cullumi.config import ConfigStore
 from cullumi.project_store import ProjectManager, connect_db, project_thumbnail_path
 from cullumi.scanner import Scanner
@@ -98,6 +98,32 @@ class ScannerIncrementalTests(unittest.TestCase):
         for key in ("sha256", "blink_status", "blink_input_fingerprint", "cover_revision", "decision"):
             self.assertEqual(before[key], after[key], key)
         self.assertEqual((content, mtime), (thumb.read_bytes(), thumb.stat().st_mtime_ns))
+
+    def test_niqe_only_worker_failure_is_retried_on_next_scan(self):
+        self.scan()
+        with closing(connect_db(self.project.db_path)) as conn:
+            conn.execute("UPDATE photos SET niqe_version='old' WHERE id=1")
+            conn.commit()
+        failed = {
+            "error": "temporary worker failure",
+            "niqe_score": None,
+            "niqe_error": "",
+            "niqe_version": niqe.NIQE_VERSION,
+        }
+        with mock.patch.object(self.scanner, "analyze_photo", return_value=failed):
+            self.scan()
+        with closing(connect_db(self.project.db_path)) as conn:
+            row = conn.execute("SELECT niqe_score,niqe_error,niqe_version FROM photos WHERE id=1").fetchone()
+            self.assertIsNone(row["niqe_score"])
+            self.assertEqual(row["niqe_error"], "temporary worker failure")
+            self.assertEqual(row["niqe_version"], "")
+            self.assertTrue(self.scanner.niqe_rescan_required(conn, self.config.get_profile(self.project.profile_id)))
+        self.scan()
+        with closing(connect_db(self.project.db_path)) as conn:
+            row = conn.execute("SELECT niqe_score,niqe_error,niqe_version FROM photos WHERE id=1").fetchone()
+            self.assertIsNotNone(row["niqe_score"])
+            self.assertEqual(row["niqe_error"], "")
+            self.assertEqual(row["niqe_version"], niqe.NIQE_VERSION)
 
     def test_blink_only_refresh_updates_completed_stage_once(self):
         self.scan()
@@ -186,6 +212,8 @@ class ScannerIncrementalTests(unittest.TestCase):
         source = next(self.photos.iterdir())
         failed = pool.analyze(source, self.root / "thumb.jpg", parallel=True)
         self.assertIn("异常退出", failed["error"])
+        self.assertIn("退出码", failed["error"])
+        self.assertEqual(pool._runners[0]._task_id, 2)
         pool._runners[0]._worker_main = analysis_worker._worker_main
         recovered = pool.analyze(source, self.root / "thumb.jpg", parallel=True)
         self.assertFalse(recovered["error"])
@@ -206,8 +234,11 @@ class ScannerIncrementalTests(unittest.TestCase):
         self.scan()
         after = self.rows()
         for a, b in zip(before, after, strict=True):
+            detail = f"{b['relative_path']}: error={b['error']!r}, niqe_error={b['niqe_error']!r}"
+            self.assertEqual(b["error"], "", detail)
+            self.assertEqual(b["niqe_error"], "", detail)
             for key in ("id", "relative_path", "niqe_score", "sharpness", "phash", "quality_score", "suggestion"):
-                self.assertEqual(a[key], b[key], key)
+                self.assertEqual(a[key], b[key], f"{key}: {detail}")
         with mock.patch.object(pool, "analyze", side_effect=AssertionError("cached task dispatched")):
             self.scan()
 

@@ -88,15 +88,47 @@ class NiqeTests(unittest.TestCase):
                 result = niqe.evaluate_preview(image)
                 self.assertIsNone(result["niqe_score"])
                 self.assertTrue(result["niqe_error"])
+                self.assertEqual(result["niqe_version"], niqe.NIQE_INPUT_FAILURE_VERSION)
                 self.assertTrue(niqe.niqe_is_current(result))
 
-    def test_initializer_reuses_success_and_failure(self):
-        for broken in (False, True):
+    def test_initializer_caches_only_success(self):
+        for broken, expected_calls in ((False, 1), (True, 3)):
             niqe.initialize_niqe.cache_clear()
             with mock.patch.object(niqe, "NiqeEvaluator", side_effect=ValueError("broken") if broken else None) as evaluator:
                 for _ in range(3):
                     niqe.initialize_niqe()
-                evaluator.assert_called_once()
+                self.assertEqual(evaluator.call_count, expected_calls)
+            niqe.initialize_niqe.cache_clear()
+
+    def test_transient_failures_retry_and_are_not_cached_as_complete(self):
+        preview = Image.new("RGB", (512, 288), "gray")
+        try:
+            evaluator = mock.Mock()
+            evaluator.compute.return_value = 4.25
+            niqe.initialize_niqe.cache_clear()
+            with mock.patch.object(
+                niqe, "NiqeEvaluator", side_effect=[MemoryError("temporary"), evaluator]
+            ) as constructor:
+                result = niqe.evaluate_preview(preview)
+            self.assertEqual(result["niqe_score"], 4.25)
+            self.assertEqual(constructor.call_count, 2)
+            self.assertTrue(niqe.niqe_is_current(result))
+
+            evaluator.compute.reset_mock()
+            evaluator.compute.side_effect = RuntimeError("temporary compute failure")
+            result = niqe.evaluate_preview(preview)
+            self.assertIsNone(result["niqe_score"])
+            self.assertEqual(result["niqe_version"], "")
+            self.assertFalse(niqe.niqe_is_current(result))
+            self.assertEqual(evaluator.compute.call_count, 2)
+
+            evaluator.compute.reset_mock(side_effect=True)
+            evaluator.compute.return_value = 4.5
+            recovered = niqe.evaluate_preview(preview)
+            self.assertEqual(recovered["niqe_score"], 4.5)
+            self.assertTrue(niqe.niqe_is_current(recovered))
+        finally:
+            preview.close()
             niqe.initialize_niqe.cache_clear()
 
     def test_worker_initializes_before_first_request_and_only_once(self):
@@ -158,7 +190,7 @@ class NiqeTests(unittest.TestCase):
                 def compute(preview):
                     self.assertIs(preview, decoded)
                     self.assertEqual(preview.size, (512, 288))
-                    raise ValueError("insufficient texture")
+                    raise niqe.NiqeInputError("insufficient texture")
                 evaluator.compute.side_effect = compute
                 with mock.patch.object(media, "open_image", return_value=(decoded, "")) as decoder, mock.patch.object(niqe, "initialize_niqe", return_value=(evaluator, "")):
                     result = media.analyze_photo(source, root / "thumb.jpg")
@@ -368,6 +400,22 @@ class NiqeDatabaseTests(unittest.TestCase):
                 self.assertEqual(analyze.call_count, 4)
                 scan()
                 self.assertEqual(analyze.call_count, 4)
+                conn.execute(
+                    "UPDATE photos SET niqe_version=? WHERE relative_path='plain.png'",
+                    (niqe.NIQE_VERSION,),
+                )
+                conn.commit()
+                self.assertTrue(scanner.niqe_rescan_required(conn, profile))
+                scan()
+                self.assertEqual(analyze.call_count, 5)
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT niqe_version FROM photos WHERE relative_path='plain.png'"
+                    ).fetchone()[0],
+                    niqe.NIQE_INPUT_FAILURE_VERSION,
+                )
+                scan()
+                self.assertEqual(analyze.call_count, 5)
                 self.assertEqual([r[0] for r in conn.execute("SELECT decision FROM photos")], ["keep", "keep"])
                 self.assertFalse(scanner.niqe_rescan_required(conn, profile))
                 disabled = copy.deepcopy(profile)
