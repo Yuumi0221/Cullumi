@@ -488,6 +488,24 @@ test("首页模式设置隐藏项目预估控件，项目内保留", async ({ pa
   await expect(page.locator("#estimateBtn")).toBeVisible();
 });
 
+test("自定义模式预估和输入错误共用一个状态框", async ({ page }) => {
+  await openApp(page);
+  await openProject(page);
+  await page.locator("#settingsBtn").click();
+  await page.locator('[data-setting="profiles"]').click();
+
+  const status = page.locator("#estimate");
+  await expect(status).toHaveText("调整后可先预估影响。");
+  await expect(page.locator("#profileSaveStatus")).toHaveCount(0);
+
+  await page.locator('[data-p="quality.blur_review"]').fill("");
+  await page.locator("#saveProfile").click();
+
+  await expect(status).toHaveText("还有项目没有输入完整，请填写标红的项目。");
+  await expect(status).toHaveClass(/failed/);
+  await expect(page.locator("#profileSettings .estimate")).toHaveCount(1);
+});
+
 test("所有设置开关圆点在轨道内垂直居中", async ({ page }) => {
   await openApp(page);
   await page.locator("#settingsBtn").click();

@@ -37,10 +37,14 @@ function editorRead() {
   );
   return p;
 }
-function profileSaveStatus(message, failed = false) {
-  const el = $("#profileSaveStatus");
+function showProfileStatus(message, tone = "", stateName = "status") {
+  const el = $("#estimate");
   el.textContent = message;
-  el.className = `profile-save-status ${failed ? "failed" : "success"}`;
+  el.dataset.state = stateName;
+  el.className = `estimate${tone ? ` ${tone}` : ""}`;
+}
+function profileSaveStatus(message, failed = false) {
+  showProfileStatus(message, failed ? "failed" : "success", "save");
 }
 function clearProfileValidation() {
   [$("#profileName"), ...$$('.form-grid input[type="number"][data-p]')].forEach(
@@ -49,7 +53,11 @@ function clearProfileValidation() {
       el.closest("label")?.classList.remove("field-invalid");
     },
   );
-  $("#profileSaveStatus").className = "profile-save-status hidden";
+  const status = $("#estimate");
+  status.textContent = "调整后可先预估影响。";
+  status.dataset.state = "default";
+  status.className = "estimate";
+  syncProfileEstimateVisibility();
 }
 function validateProfileInputs(showBottom = true) {
   const fields = [
@@ -64,7 +72,7 @@ function validateProfileInputs(showBottom = true) {
   });
   if (missing.length) {
     if (showBottom)
-      profileSaveStatus("还有项目没有输入完整，请填写标红的项目。", true);
+      profileSaveStatus("保存失败：还有项目没有输入完整，请填写标红的项目。", true);
     missing[0].focus();
     return false;
   }
@@ -140,22 +148,26 @@ async function applyProfile(id) {
 }
 async function estimate() {
   if (!validateProfileInputs(false)) {
-    $("#estimate").textContent =
-      "预估失败：还有项目没有输入完整，请填写标红的项目。";
+    showProfileStatus(
+      "预估失败：还有项目没有输入完整，请填写标红的项目。",
+      "failed",
+      "estimate",
+    );
     return;
   }
   const button = $("#estimateBtn");
   button.disabled = true;
-  $("#estimate").textContent = "正在按当前参数完整预估…";
+  showProfileStatus("正在按当前参数完整预估…", "", "estimate");
+  const status = $("#estimate");
   try {
     const d = await json("/api/profile/estimate", {
       project_id: state.project.id,
       profile: editorRead(),
     });
-    $("#estimate").textContent =
+    status.textContent =
       `预计：建议移除 ${d.counts.remove || 0} 张，人工复看 ${d.counts.review || 0} 张，相似组 ${d.estimated_groups || 0} 组（${d.estimated_pairs || 0} 条关系）。`;
   } catch (e) {
-    $("#estimate").textContent = `预估失败：${e.message}`;
+    showProfileStatus(`预估失败：${e.message}`, "failed", "estimate");
     toast(`预估失败：${e.message}`);
   } finally {
     button.disabled = false;
@@ -589,7 +601,9 @@ function selectSettingsPage(button) {
 function syncProfileEstimateVisibility() {
   const projectOpen =
     !!state.project && document.body.classList.contains("project-open");
-  $("#estimate").classList.toggle("hidden", !projectOpen);
+  const status = $("#estimate");
+  const defaultMessage = status.dataset.state === "default";
+  status.classList.toggle("hidden", !projectOpen && defaultMessage);
   $("#estimateBtn").classList.toggle("hidden", !projectOpen);
 }
 

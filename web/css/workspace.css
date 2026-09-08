@@ -1205,17 +1205,13 @@ body.similar-side-open .similar-browser {
   opacity: 0.55;
 }
 
-.profile-save-status {
-  margin: 12px 0 4px;
-  padding: 9px 12px;
-  border-radius: 8px;
+.estimate.success {
   color: #27663e;
   background: #e5f4e9;
-  border: 1px solid #a9d6b5;
-  text-align: center;
+  border-color: #a9d6b5;
 }
 
-.profile-save-status.failed {
+.estimate.failed {
   color: #9e332b;
   background: #f9e6e3;
   border-color: #e2aaa4;

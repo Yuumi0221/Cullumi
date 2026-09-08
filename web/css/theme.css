@@ -290,13 +290,13 @@
   color: rgba(255, 255, 255, 0.48);
 }
 
-[data-theme="night"] .profile-save-status {
+[data-theme="night"] .estimate.success {
   color: #9ce5b4;
   background: #203b29;
   border-color: #3d7450;
 }
 
-[data-theme="night"] .profile-save-status.failed {
+[data-theme="night"] .estimate.failed {
   color: #ffaaa3;
   background: #432522;
   border-color: #7d3b36;
