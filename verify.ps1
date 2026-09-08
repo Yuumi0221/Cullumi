@@ -20,10 +20,15 @@ try {
 
     if ($Browser) {
         $Npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
-        if (-not $Npm) {
-            throw "未找到 Node.js/npm，无法运行可选的 Edge Playwright 测试。"
+        $Node = Get-Command node -ErrorAction SilentlyContinue
+        $Playwright = Join-Path $ProjectRoot "node_modules\playwright\cli.js"
+        if ($Npm) {
+            & $Npm.Source run test:dom
+        } elseif ($Node -and (Test-Path -LiteralPath $Playwright)) {
+            & $Node.Source $Playwright test --config tests/dom/playwright.config.mjs
+        } else {
+            throw "未找到 Node.js 或已安装的 Playwright，请先安装 Node.js 并运行 npm ci。"
         }
-        & $Npm.Source run test:dom
         if ($LASTEXITCODE -ne 0) { throw "Edge Playwright 测试失败。" }
     }
 

@@ -177,6 +177,7 @@ async function installApi(page, options = {}) {
         settings: {
           theme: "day",
           auto_advance: options.autoAdvance ?? false,
+          fast_analysis: options.fastAnalysis ?? false,
           auto_check_updates: false,
           sync_variant_decisions: syncVariantDecisions,
           motion_cover_writeback: writebackMode,
@@ -469,6 +470,43 @@ test("首页加载全部脚本并异步渲染最近项目", async ({ page }) => 
   await expect(page.locator("#recentList")).toContainText("没有匹配的项目");
   await page.locator("#recentSearch").fill("夏日");
   await expect(page.locator("#recentList .recent")).toHaveCount(1);
+});
+
+test("首页模式设置隐藏项目预估控件，项目内保留", async ({ page }) => {
+  await openApp(page);
+  await page.locator("#settingsBtn").click();
+  await page.locator('[data-setting="profiles"]').click();
+  await expect(page.locator("#profileSettings")).toBeVisible();
+  await expect(page.locator("#estimate")).toBeHidden();
+  await expect(page.locator("#estimateBtn")).toBeHidden();
+  await page.locator('#settings [data-close]').click();
+
+  await openProject(page);
+  await page.locator("#settingsBtn").click();
+  await page.locator('[data-setting="profiles"]').click();
+  await expect(page.locator("#estimate")).toBeVisible();
+  await expect(page.locator("#estimateBtn")).toBeVisible();
+});
+
+test("所有设置开关圆点在轨道内垂直居中", async ({ page }) => {
+  await openApp(page);
+  await page.locator("#settingsBtn").click();
+  const switchOffsets = (switches) => switches.evaluateAll((items) =>
+    items.map((item) => {
+      const track = item.querySelector("span:last-child");
+      const dot = getComputedStyle(track, "::after");
+      const translateY = Number(dot.transform.match(/matrix\([^,]+,[^,]+,[^,]+,[^,]+,[^,]+,\s*([^)]+)\)/)?.[1] || 0);
+      const box = item.getBoundingClientRect();
+      return box.top + Number.parseFloat(dot.top) + translateY + Number.parseFloat(dot.height) / 2 - (box.top + box.height / 2);
+    }),
+  );
+  const generalOffsets = await switchOffsets(page.locator("#generalSettings .setting-switch"));
+  expect(generalOffsets.length).toBeGreaterThan(0);
+  expect(generalOffsets.every((offset) => Math.abs(offset) <= 0.1)).toBe(true);
+  await page.locator('[data-setting="profiles"]').click();
+  const profileOffsets = await switchOffsets(page.locator("#profileSettings .setting-switch"));
+  expect(profileOffsets.length).toBeGreaterThan(0);
+  expect(profileOffsets.every((offset) => Math.abs(offset) <= 0.1)).toBe(true);
 });
 
 test("项目照片可以通过真实卡片交互标记为移除", async ({ page }) => {
@@ -1591,6 +1629,31 @@ test("使用中的自定义模式显示切换模式警告", async ({ page }) => 
   await expect(page.locator("#profileInUseWarningBody")).toContainText("正在被当前项目使用");
   await expect(page.locator("#profileInUseWarningBody")).toContainText("切换到其他分析模式");
   await expect(page.locator("#confirm")).not.toBeVisible();
+});
+
+test("通用设置保存快速分析开关并在失败时恢复", async ({ page }) => {
+  await openApp(page);
+  await page.locator("#settingsBtn").click();
+  const toggle = page.locator("#fastAnalysis");
+  await expect(toggle).not.toBeChecked();
+  await expect(page.locator("#settings")).toContainText("并行分析照片，开启后会增加性能占用。");
+  const request = page.waitForRequest((req) => new URL(req.url()).pathname === "/api/settings" && req.method() === "POST");
+  await toggle.locator("xpath=ancestor::label").click();
+  expect((await request).postDataJSON()).toEqual({ fast_analysis: true });
+  await expect(toggle).toBeEnabled();
+  await expect(toggle).toBeChecked();
+  await page.route("**/api/settings**", (route) => route.fulfill({
+    status: 500, contentType: "application/json", body: JSON.stringify({ error: "保存失败" }),
+  }));
+  await toggle.locator("xpath=ancestor::label").click();
+  await expect(toggle).toBeEnabled();
+  await expect(toggle).toBeChecked();
+});
+
+test("快速分析设置从已保存状态恢复", async ({ page }) => {
+  await openApp(page, { fastAnalysis: true });
+  await page.locator("#settingsBtn").click();
+  await expect(page.locator("#fastAnalysis")).toBeChecked();
 });
 
 test("日夜主题与关键工作区保持视觉回归", async ({ page }) => {

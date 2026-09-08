@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from cullumi import http_api
-from cullumi.analysis_worker import PhotoAnalysisRunner
+from cullumi.analysis_worker import PhotoAnalysisPool
 from cullumi.config import ConfigStore, app_data_dir
 from cullumi.face_analysis import FaceAnalyzer
 from cullumi.project_store import ProjectManager
@@ -28,8 +28,8 @@ def resource_path(relative: str) -> Path:
 CONFIG = ConfigStore()
 MANAGER = ProjectManager(CONFIG)
 SIMILARITY_GROUPS = SimilarityGroupCache()
-FACE_ANALYZER = FaceAnalyzer(resource_path("models"))
-ANALYSIS_RUNNER = PhotoAnalysisRunner()
+FACE_ANALYZER = FaceAnalyzer(resource_path("models/blink"))
+ANALYSIS_RUNNER = PhotoAnalysisPool()
 SCANNER = Scanner(
     CONFIG,
     MANAGER,

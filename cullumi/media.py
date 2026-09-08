@@ -4,6 +4,7 @@ import hashlib
 import io
 import math
 import os
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -77,7 +78,11 @@ def _dhash(gray: Image.Image) -> str:
     return f"{value:016x}"
 
 
-def _open_raw(path: Path) -> Image.Image:
+def analysis_version(path: Path) -> str:
+    return "raw-preview512-v2" if path.suffix.lower() in RAW_EXTENSIONS else "rgb512-v1"
+
+
+def _open_raw(path: Path, decode_size: tuple[int, int] | None = None) -> Image.Image:
     if rawpy is None:
         raise RuntimeError("RAW 解码组件未安装")
     with rawpy.imread(str(path)) as raw:
@@ -85,7 +90,12 @@ def _open_raw(path: Path) -> Image.Image:
             thumb = raw.extract_thumb()
             if thumb.format == rawpy.ThumbFormat.JPEG:
                 with Image.open(io.BytesIO(thumb.data)) as embedded:
-                    return embedded.convert("RGB")
+                    original_size = embedded.size
+                    if decode_size is not None:
+                        embedded.draft("RGB", decode_size)
+                    converted = embedded.convert("RGB")
+                    converted.info["cullumi_original_size"] = original_size
+                    return converted
             source = Image.fromarray(thumb.data)
             try:
                 return source.convert("RGB")
@@ -126,7 +136,7 @@ def open_image(
     decode_size: tuple[int, int] | None = None,
 ) -> tuple[Image.Image, str]:
     if path.suffix.lower() in RAW_EXTENSIONS:
-        return _open_raw(path), ""
+        return _open_raw(path, decode_size), ""
     if path.suffix.lower() in HEIF_EXTENSIONS:
         source = _open_heif(path)
         try:
@@ -171,7 +181,15 @@ def display_preview_path(source: Path, thumbnail: Path) -> Path:
     return thumbnail.with_name(f"{thumbnail.stem}.display-{fingerprint}.jpg")
 
 
+_DISPLAY_LOCKS = [threading.Lock() for _ in range(64)]
+
+
 def ensure_display_preview(source: Path, thumbnail: Path) -> Path:
+    with _DISPLAY_LOCKS[hash(str(thumbnail)) % len(_DISPLAY_LOCKS)]:
+        return _ensure_display_preview(source, thumbnail)
+
+
+def _ensure_display_preview(source: Path, thumbnail: Path) -> Path:
     """Build and atomically cache a browser-friendly, high-resolution preview."""
     target = display_preview_path(source, thumbnail)
     if target.is_file():
@@ -190,22 +208,29 @@ def ensure_display_preview(source: Path, thumbnail: Path) -> Path:
         if image is not None:
             image.close()
 
-    prefix = f"{thumbnail.stem}.display-"
-    for candidate in target.parent.iterdir():
-        if (
-            candidate != target
-            and candidate.name.startswith(prefix)
-            and candidate.name.endswith(".jpg")
-        ):
-            try:
-                candidate.unlink()
-            except OSError:
-                pass
+    index = thumbnail.with_suffix(".display-index")
+    try:
+        previous = index.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        previous = ""
+    index_tmp = index.with_name(f"{index.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        index_tmp.write_text(target.name, encoding="utf-8")
+        index_tmp.replace(index)
+    finally:
+        index_tmp.unlink(missing_ok=True)
+    if (previous and Path(previous).name == previous and previous != target.name
+            and previous.startswith(f"{thumbnail.stem}.display-") and previous.endswith(".jpg")):
+        try:
+            (target.parent / previous).unlink(missing_ok=True)
+        except OSError:
+            pass
     return target
 
 
 def _photo_analysis_base(path: Path, thumb_path: Path) -> dict[str, Any]:
     return {
+        "analysis_version": analysis_version(path),
         "extension": path.suffix.lower(), "size": 0, "mtime": 0,
         "width": 0, "height": 0, "megapixels": 0, "taken": "",
         "luminance": None, "contrast": None, "dark_clip": None, "bright_clip": None,
@@ -230,6 +255,7 @@ def analyze_photo(
     thumb_path: Path,
     stat: os.stat_result | None = None,
     niqe_enabled: bool = True,
+    niqe_only: bool = False,
 ) -> dict[str, Any]:
     base = _photo_analysis_base(path, thumb_path)
     image: Image.Image | None = None
@@ -248,6 +274,8 @@ def analyze_photo(
             base.update(evaluate_preview(preview))
         else:
             base.update({"niqe_score": None, "niqe_error": "", "niqe_version": ""})
+        if niqe_only:
+            return base
         gray = ImageOps.grayscale(preview)
         arr = np.asarray(gray, dtype=np.float32)
         center = arr[1:-1, 1:-1]

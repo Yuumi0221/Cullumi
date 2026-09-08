@@ -583,6 +583,14 @@ function selectSettingsPage(button) {
   );
   $("#settingsPageTitle").textContent =
     button.dataset.settingsTitle || button.textContent.trim();
+  syncProfileEstimateVisibility();
+}
+
+function syncProfileEstimateVisibility() {
+  const projectOpen =
+    !!state.project && document.body.classList.contains("project-open");
+  $("#estimate").classList.toggle("hidden", !projectOpen);
+  $("#estimateBtn").classList.toggle("hidden", !projectOpen);
 }
 
 async function chooseDefaultCache() {
@@ -708,6 +716,7 @@ function bindSettingsEvents() {
   $("#settingsBtn").onclick = () => {
     $("#settings").showModal();
     const projectOpen = document.body.classList.contains("project-open");
+    syncProfileEstimateVisibility();
     $("#projectCacheSettingsRow").classList.toggle("hidden", !projectOpen);
     if (projectOpen && state.project)
       $("#projectCache").value = state.project.cache_root;
@@ -721,6 +730,19 @@ function bindSettingsEvents() {
   $("#autoAdvance").onchange = async (event) => {
     state.settings.auto_advance = event.target.checked;
     await json("/api/settings", { auto_advance: event.target.checked });
+  };
+  $("#fastAnalysis").onchange = async (event) => {
+    const input = event.target, previous = !!state.settings.fast_analysis;
+    input.disabled = true;
+    try {
+      await json("/api/settings", { fast_analysis: input.checked });
+      state.settings.fast_analysis = input.checked;
+    } catch (error) {
+      input.checked = previous;
+      toast(`保存失败：${error.message}`);
+    } finally {
+      input.disabled = false;
+    }
   };
   $("#syncVariantDecisions").onchange = async (event) => {
     const previous = state.settings.sync_variant_decisions !== false;

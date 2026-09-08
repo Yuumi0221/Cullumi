@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import io
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
+import numpy as np
 from PIL import Image
 
+from cullumi import media, motion
 from cullumi.media import (
     DISPLAY_PREVIEW_EXTENSIONS,
     DISPLAY_PREVIEW_MAX_SIZE,
@@ -129,7 +132,11 @@ class MediaPreviewTests(unittest.TestCase):
                 b'GCamera:MicroVideoOffset="13" '
                 b'GCamera:MotionPhotoPresentationTimestampUs="240000"/>'
             )
-            path.write_bytes(b"jpeg" + xmp + video)
+            with Image.new("RGB", (80, 60), "navy") as image:
+                image.save(path, "JPEG")
+            base = path.read_bytes()
+            app1 = b"\xff\xe1" + (len(xmp) + 2).to_bytes(2, "big") + xmp
+            path.write_bytes(base[:2] + app1 + base[2:] + video)
 
             asset = embedded_motion_asset(path)
 
@@ -310,11 +317,44 @@ class MediaPreviewTests(unittest.TestCase):
 
             with Image.new("RGB", (2800, 140), "maroon") as image:
                 image.save(source, "TIFF")
-            second = ensure_display_preview(source, thumbnail)
+            with mock.patch.object(Path, "iterdir", side_effect=AssertionError("enumerated library")):
+                second = ensure_display_preview(source, thumbnail)
 
             self.assertNotEqual(second, first)
             self.assertTrue(second.is_file())
             self.assertFalse(first.exists())
+
+    def test_xmp_reader_stops_before_compressed_pixels(self):
+        xmp = b'<rdf:Description GCamera:MotionPhoto="1"/>'
+        stream = io.BytesIO(b'\xff\xd8\xff\xe1' + (len(xmp) + 2).to_bytes(2, "big") + xmp
+                            + b'\xff\xda' + b'x' * (3 * 1024 * 1024))
+        with mock.patch.object(Path, "open", return_value=stream):
+            value = motion._xmp_prefix(Path("sample.jpg"))
+            self.assertIn("MotionPhoto", value)
+        # The same marker in compressed pixels must not identify a motion photo.
+        with mock.patch.object(Path, "open", return_value=io.BytesIO(b'\xff\xd8\xff\xda' + xmp)):
+            self.assertEqual(motion._xmp_prefix(Path("sample.jpg")), "")
+
+
+    def test_raw_embedded_decode_preserves_size_and_full_preview(self):
+        with Image.new("RGB", (4096, 3072), "teal") as image, io.BytesIO() as buffer:
+            image.save(buffer, "JPEG")
+            data = buffer.getvalue()
+        raw = mock.MagicMock()
+        raw.__enter__.return_value = raw
+        raw.extract_thumb.return_value = mock.Mock(format=media.rawpy.ThumbFormat.JPEG, data=data)
+        with mock.patch.object(media.rawpy, "imread", return_value=raw):
+            with media.open_image(Path("photo.raf"), (512, 512))[0] as image:
+                self.assertLessEqual(image.width, 1024)
+                self.assertEqual(image.info["cullumi_original_size"], (4096, 3072))
+            with media.open_image(Path("photo.raf"))[0] as image:
+                self.assertEqual(image.size, (4096, 3072))
+            raw.extract_thumb.side_effect = RuntimeError("no embedded preview")
+            raw.postprocess.return_value = np.zeros((80, 100, 3), dtype=np.uint8)
+            with media.open_image(Path("photo.raf"), (512, 512))[0] as image:
+                self.assertEqual(image.size, (100, 80))
+            raw.postprocess.assert_called_once_with(half_size=True, use_camera_wb=True, no_auto_bright=False)
+
 
 
 if __name__ == "__main__":

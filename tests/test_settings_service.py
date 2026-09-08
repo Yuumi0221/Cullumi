@@ -174,3 +174,13 @@ class SettingsServiceTests(unittest.TestCase):
                         project.project_id,
                     )
             self.assertEqual(config.get_profile(saved["id"]), original)
+
+    def test_fast_analysis_validation_and_restart_persistence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config_path = Path(temporary) / "config.json"
+            config = ConfigStore(config_path)
+            self.assertFalse(config.snapshot()["fast_analysis"])
+            with self.assertRaises(ValueError):
+                save_settings(config, {"fast_analysis": "yes"})
+            save_settings(config, {"fast_analysis": True})
+            self.assertTrue(ConfigStore(config_path).snapshot()["fast_analysis"])

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .analysis_worker import PhotoAnalysisRunner
+from .analysis_worker import PhotoAnalysisPool, PhotoAnalysisRunner
 from .capture_variants import (
     format_category_counts,
     variant_metadata,
@@ -150,7 +150,7 @@ class ApplicationContext:
     web_root: Path
     face_analyzer: FaceAnalyzer | None = None
     photo_queries: PhotoQueryService | None = None
-    analysis_runner: PhotoAnalysisRunner | None = None
+    analysis_runner: PhotoAnalysisRunner | PhotoAnalysisPool | None = None
 
     def __post_init__(self) -> None:
         runner = self.analysis_runner or getattr(
@@ -180,7 +180,7 @@ def configure(
     token: str | None = None,
     web_root: Path | None = None,
     face_analyzer: FaceAnalyzer | None = None,
-    analysis_runner: PhotoAnalysisRunner | None = None,
+    analysis_runner: PhotoAnalysisRunner | PhotoAnalysisPool | None = None,
 ) -> ApplicationContext:
     """Install an explicit dependency context for the HTTP application.
 
@@ -279,6 +279,7 @@ def project_summary(
         niqe_rescan_required = application.scanner.niqe_rescan_required(
             conn, profile
         )
+        preprocessing_rescan_required = application.scanner.preprocessing_rescan_required(conn)
     return {
         "id": project_id,
         "root": str(project.root),
@@ -289,6 +290,7 @@ def project_summary(
         "similar_groups": similar_groups,
         "blink_rescan_required": blink_rescan_required,
         "niqe_rescan_required": niqe_rescan_required,
+        "preprocessing_rescan_required": preprocessing_rescan_required,
         "format_categories": formats,
     }
 
@@ -574,6 +576,7 @@ class Handler(BaseHTTPRequestHandler):
             "settings": {
                 "default_cache_root": config_data["default_cache_root"],
                 "auto_advance": config_data.get("auto_advance", True),
+                "fast_analysis": config_data.get("fast_analysis", False),
                 "auto_check_updates": config_data.get("auto_check_updates", True),
                 "motion_cover_writeback": config_data.get(
                     "motion_cover_writeback", "ask"

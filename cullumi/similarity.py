@@ -40,6 +40,17 @@ SIMILARITY_TOPOLOGY_COLUMNS = (
     "blink_closed_ratio",
 )
 
+# Keep the edge table as the outer loop.  Without CROSS JOIN, SQLite can
+# choose the status/error index on both photo aliases first, producing an
+# O(active_photos²) nested loop before probing similar_pairs.
+_SIMILARITY_EDGES_SQL = """SELECT sp.a_id,sp.b_id,sp.score,sp.kind,
+                                  sp.recommended_id,sp.face_safe
+                           FROM similar_pairs sp
+                           CROSS JOIN photos a ON a.id=sp.a_id
+                           CROSS JOIN photos b ON b.id=sp.b_id
+                           WHERE a.status='active' AND a.error=''
+                             AND b.status='active' AND b.error=''"""
+
 
 class SimilarityPair(NamedTuple):
     a_id: int
@@ -383,15 +394,7 @@ def _build_similarity_topology(
     profile: dict[str, Any],
     blink_detection_enabled: bool = True,
 ) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        """SELECT sp.a_id,sp.b_id,sp.score,sp.kind,
-                  sp.recommended_id,sp.face_safe
-           FROM similar_pairs sp
-           JOIN photos a ON a.id=sp.a_id
-           JOIN photos b ON b.id=sp.b_id
-           WHERE a.status='active' AND a.error=''
-             AND b.status='active' AND b.error=''"""
-    )
+    rows = conn.execute(_SIMILARITY_EDGES_SQL)
     edges = (
         SimilarityPair(
             int(row["a_id"]),

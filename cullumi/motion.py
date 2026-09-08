@@ -15,6 +15,7 @@ import numpy as np
 from PIL import Image, ImageOps
 
 HEIF_EXTENSIONS = {".heic", ".heics", ".heif", ".heifs", ".hif"}
+MOTION_DETECTION_VERSION = "jpeg-app1-v1"
 
 
 @dataclass(frozen=True)
@@ -42,8 +43,37 @@ class MotionAsset:
 
 
 def _xmp_prefix(path: Path, limit: int = 2 * 1024 * 1024) -> str:
+    """Read metadata only; never decode compressed JPEG pixels as text."""
+    packets = []
     with path.open("rb") as source:
-        return source.read(limit).decode("utf-8", "ignore")
+        if source.read(2) != b"\xff\xd8":
+            return ""
+        while source.tell() < limit:
+            if source.read(1) != b"\xff":
+                break
+            marker = source.read(1)
+            while marker == b"\xff" and source.tell() < limit:
+                marker = source.read(1)
+            if not marker or marker in (b"\xda", b"\xd9", b"\xff"):
+                break
+            if marker == b"\x01" or 0xD0 <= marker[0] <= 0xD7:
+                continue
+            length_bytes = source.read(2)
+            if len(length_bytes) != 2:
+                break
+            length = int.from_bytes(length_bytes, "big") - 2
+            if length < 0 or source.tell() + length > limit:
+                break
+            if marker == b"\xe1":
+                payload = source.read(length)
+                if len(payload) != length:
+                    break
+                if (payload.startswith(b"http://ns.adobe.com/")
+                        or b"<x:xmpmeta" in payload or b"<rdf:Description" in payload):
+                    packets.append(payload.decode("utf-8", "ignore"))
+            else:
+                source.seek(length, 1)
+    return "\n".join(packets)
 
 
 def embedded_motion_asset(path: Path) -> MotionAsset | None:

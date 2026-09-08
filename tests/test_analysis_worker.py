@@ -169,6 +169,13 @@ class PhotoAnalysisRunnerTests(unittest.TestCase):
             finally:
                 runner.close()
 
+    def test_parallel_capacity_obeys_cpu_and_total_memory_budget(self):
+        for ram, cpus, expected in [(4, 8, 1), (8, 8, 1), (32, 8, 2), (32, 1, 1)]:
+            with mock.patch.object(worker_module, "_physical_memory_bytes", return_value=ram * 1024**3), \
+                    mock.patch.object(worker_module.os, "cpu_count", return_value=cpus):
+                self.assertEqual(worker_module.parallel_worker_count(), expected)
+
+
 
 if __name__ == "__main__":
     unittest.main()

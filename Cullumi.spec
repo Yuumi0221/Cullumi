@@ -6,11 +6,23 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 msvcp140 = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "msvcp140.dll")
 fallback_internal = os.environ.get("CULLUMI_BUILD_INTERNAL", "")
 runtime_datas = []
-# Keep pristine NIQE statistics and their provenance/license together in the
-# models tree below. Fail packaging early if any distributable resource is absent.
-for niqe_resource in ("niqe_pris_params.npz", "SOURCE.json", "LICENSE.txt"):
-    if not os.path.isfile(os.path.join("models", "niqe", niqe_resource)):
-        raise FileNotFoundError(f"Missing NIQE resource: {niqe_resource}")
+# Keep each model and its provenance/license files together. Fail packaging
+# early if any distributable resource is absent.
+model_resources = {
+    "blink": (
+        "face_detection_yunet_2023mar.onnx",
+        "ocec_c.onnx",
+        "README.md",
+        "LICENSE-YUNET.txt",
+        "LICENSE-OCEC.txt",
+        "LICENSE-ONNXRUNTIME.txt",
+    ),
+    "niqe": ("niqe_pris_params.npz", "SOURCE.json", "LICENSE.txt", "ADAPTATION.md"),
+}
+for model_name, resources in model_resources.items():
+    for resource in resources:
+        if not os.path.isfile(os.path.join("models", model_name, resource)):
+            raise FileNotFoundError(f"Missing {model_name} resource: {resource}")
 runtime_datas.extend(collect_data_files("imageio_ffmpeg"))
 runtime_binaries = collect_dynamic_libs("onnxruntime")
 if fallback_internal:

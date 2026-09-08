@@ -2,20 +2,24 @@ from __future__ import annotations
 
 import hashlib
 import heapq
+import json
 import os
 import sqlite3
 import subprocess
 import threading
 import time
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from .analysis_worker import AnalysisCancelled, PhotoAnalysisRunner
+from .analysis_worker import AnalysisCancelled, PhotoAnalysisPool, PhotoAnalysisRunner
 from .capture_variants import (
     rebuild_capture_variants,
     representative_photo_ids,
@@ -38,10 +42,13 @@ from .face_analysis import (
 from .fs_utils import is_within
 from .media import (
     IMAGE_EXTENSIONS,
+    RAW_EXTENSIONS,
     VIDEO_EXTENSIONS,
+    analysis_version,
     analyze_photo,
 )
 from .motion import (
+    MOTION_DETECTION_VERSION,
     MotionAsset,
     ensure_motion_video,
     extract_motion_frame,
@@ -76,6 +83,9 @@ from .workflows import QUARANTINE_DIR, import_decisions
 DATABASE_BATCH_SIZE = 500
 DISCOVERY_PROGRESS_CHECK_INTERVAL = 64
 SCAN_EXISTING_COLUMNS = (
+    "analysis_version", "motion_detection_version", "motion_asset_id",
+    "motion_duration_ms", "motion_fps", "motion_frame_count", "motion_width", "motion_height",
+    "cover_frame_index", "analyzed_at",
     "niqe_score", "niqe_error", "niqe_version",
     "id",
     "relative_path",
@@ -390,7 +400,7 @@ class _SimilarityPlanner:
 
     def _compare_sequential_group(self, group: list[sqlite3.Row]) -> None:
         for index, left in enumerate(group):
-            for right in group[index + 1 :]:
+            for right in islice(group, index + 1, None):
                 _check_cancelled(self.cancel)
                 nearby, sequence_gap = self._photos_are_nearby(left, right)
                 if not nearby:
@@ -439,13 +449,14 @@ class Scanner:
         manager: ProjectManager,
         similarity_groups: SimilarityGroupCache | None = None,
         face_analyzer: FaceAnalyzer | None = None,
-        analysis_runner: PhotoAnalysisRunner | None = None,
+        analysis_runner: PhotoAnalysisRunner | PhotoAnalysisPool | None = None,
     ):
         self.config = config
         self.manager = manager
         self.similarity_groups = similarity_groups
         self.face_analyzer = face_analyzer
         self.analysis_runner = analysis_runner
+        self._analysis_context = threading.local()
         self.progress: dict[str, dict[str, Any]] = {}
         self.cancel_events: dict[str, threading.Event] = {}
         self.threads: dict[str, threading.Thread] = {}
@@ -473,8 +484,6 @@ class Scanner:
             operation_lock = self._operation_locks.setdefault(project_id, threading.Lock())
             if not operation_lock.acquire(blocking=False):
                 return False
-            if self.similarity_groups:
-                self.similarity_groups.invalidate(project_id)
             cancel = threading.Event()
             self.cancel_events[project_id] = cancel
             self.progress[project_id] = {
@@ -525,12 +534,16 @@ class Scanner:
         cancel: threading.Event | None = None,
         stat: os.stat_result | None = None,
         niqe_enabled: bool = True,
+        niqe_only: bool = False,
     ) -> dict[str, Any]:
+        options = {"niqe_only": True} if niqe_only else {}
+        if isinstance(self.analysis_runner, PhotoAnalysisPool):
+            options["parallel"] = getattr(self._analysis_context, "parallel", False)
         if self.analysis_runner is None:
-            return analyze_photo(path, thumbnail, stat, niqe_enabled=niqe_enabled)
+            return analyze_photo(path, thumbnail, stat, niqe_enabled=niqe_enabled, **options)
         try:
             return self.analysis_runner.analyze(
-                path, thumbnail, cancel, niqe_enabled=niqe_enabled
+                path, thumbnail, cancel, niqe_enabled=niqe_enabled, **options
             )
         except AnalysisCancelled as error:
             if cancel is not None:
@@ -688,11 +701,28 @@ class Scanner:
             for path in discovery.videos
             if path.suffix.lower() in {".mov", ".m4v", ".mp4"}
         }
-        motion_assets = {
-            path: asset
-            for path in files
-            if (asset := paired_motion_asset(path, sidecars)) is not None
-        }
+        with closing(connect_db(project.db_path)) as conn:
+            existing = self._existing_photos(conn)
+        motion_assets = {}
+        for path in files:
+            _check_cancelled(cancel)
+            old = existing.get(path.relative_to(project.root).as_posix())
+            try:
+                stat = path.stat()
+                current = bool(old and old["size"] == stat.st_size
+                               and abs(old["mtime"] - stat.st_mtime) < 0.001
+                               and old["motion_detection_version"] == MOTION_DETECTION_VERSION)
+                if current and old["motion_kind"] == "android_embedded":
+                    asset = motion_asset_from_row(project.root, old)
+                elif current:
+                    sidecar = sidecars.get((path.parent, path.stem.casefold()))
+                    asset = MotionAsset("apple_sidecar", sidecar) if sidecar else None
+                else:
+                    asset = paired_motion_asset(path, sidecars)
+                if asset is not None:
+                    motion_assets[path] = asset
+            except OSError:
+                continue
         matched_sidecars = {
             asset.path.resolve()
             for asset in motion_assets.values()
@@ -737,6 +767,8 @@ class Scanner:
         """Run post-database imports and publish the terminal scan state."""
         _check_cancelled(cancel)
         import_result = self._auto_import_csv(project)
+        if import_result and self.similarity_groups:
+            self.similarity_groups.invalidate(project_id)
         import_status = {}
         if import_result and import_result.get("requires_sync_disable"):
             import_status = {
@@ -861,6 +893,7 @@ class Scanner:
             and abs(old["mtime"] - stat.st_mtime) < 0.001
             and motion_same
             and not old["error"]
+            and old["analysis_version"] == analysis_version(Path(old["relative_path"]))
             and (not niqe_enabled or niqe_is_current(old))
             and not old["motion_error"]
             and thumbnail is not None
@@ -884,6 +917,14 @@ class Scanner:
         old: sqlite3.Row | None,
         motion_same: bool,
     ) -> dict[str, Any]:
+        if (old and motion_same and not old["motion_error"]
+                and (asset is None or int(old["motion_still_time_ms"] or 0) >= 0)):
+            return {**asset_values, **{
+                key: old[key] for key in (
+                    "motion_error", "motion_duration_ms", "motion_fps", "motion_frame_count",
+                    "motion_width", "motion_height", "motion_sha256", "motion_still_time_ms",
+                )
+            }}
         motion_values = {
             **asset_values,
             "motion_error": "",
@@ -983,6 +1024,21 @@ class Scanner:
         niqe_enabled = profile_niqe_enabled(profile)
         thumb_name = hashlib.sha1(rel.encode("utf-8")).hexdigest() + ".jpg"
         thumbnail = project.thumb_dir / thumb_name
+        # NIQE-only refresh uses the same decoding path but does not replace the
+        # thumbnail, file hashes, motion metadata or the blink input fingerprint.
+        if (niqe_enabled and old and not niqe_is_current(old)
+                and self._photo_is_current(project, old, stat, motion_same, False)):
+            source = path
+            if old["cover_source"] == "motion" and asset:
+                motion_dir = project.motion_dir or project.project_dir / "motion"
+                source = motion_dir / f"{motion_fingerprint(asset)}.motion-cover-{old['cover_time_ms']}.jpg"
+                if not source.is_file():
+                    video = ensure_motion_video(asset, motion_dir)
+                    extract_motion_frame(video, int(old["cover_time_ms"]), source)
+            result = self.analyze_photo(source, thumbnail, cancel, niqe_enabled=True, niqe_only=True)
+            if result["error"]:
+                result.update(niqe_score=None, niqe_error=result["error"], niqe_version=NIQE_VERSION)
+            return {"_niqe_only": True, **{k: result[k] for k in ("niqe_score", "niqe_error", "niqe_version")}}
         motion_values = self._probe_motion_values(
             path, asset, asset_values, old, motion_same
         )
@@ -1008,6 +1064,7 @@ class Scanner:
                 metrics["thumbnail"]
             )
         values = {
+            "motion_detection_version": MOTION_DETECTION_VERSION,
             "relative_path": rel,
             **metrics,
             **motion_values,
@@ -1022,6 +1079,7 @@ class Scanner:
             "analyzed_at": datetime.now().isoformat(timespec="microseconds"),
             **empty_blink_values(),
         }
+        values["analysis_version"] = analysis_version(path)
         values["quality_score"] = round(
             max(0.0, min(1.0, quality_score(values, profile))) * 100, 1
         )
@@ -1040,6 +1098,7 @@ class Scanner:
         index: int,
         unavailable_count: int,
         cancel: threading.Event,
+        prepared: Future | None = None,
     ) -> tuple[bool, int]:
         rel = path.relative_to(project.root).as_posix()
         unavailable_delta = 0
@@ -1062,13 +1121,16 @@ class Scanner:
         )
         niqe_enabled = profile_niqe_enabled(profile)
         if self._photo_is_current(project, old, stat, motion_same, niqe_enabled):
+            if old["motion_detection_version"] != MOTION_DETECTION_VERSION:
+                conn.execute("UPDATE photos SET motion_detection_version=? WHERE id=?",
+                             (MOTION_DETECTION_VERSION, old["id"]))
             if old is not None and old["status"] != "active":
                 conn.execute(
                     "UPDATE photos SET status='active' WHERE id=?", (old["id"],)
                 )
             self._set(project_id, current=index)
             return True, unavailable_delta
-        values = self._changed_photo_values(
+        values = prepared.result() if prepared is not None else self._changed_photo_values(
             project,
             path,
             rel,
@@ -1081,6 +1143,8 @@ class Scanner:
             profile,
             cancel,
         )
+        source_state = values.pop("_source_state", None)
+        _check_cancelled(cancel)
         if not path.is_file():
             unavailable_delta += 1
             self._set(
@@ -1090,12 +1154,19 @@ class Scanner:
                 unavailable_count=unavailable_count + unavailable_delta,
             )
             return False, unavailable_delta
-        conn.execute(
-            PHOTO_UPSERT_SQL,
-            [values[column] for column in PHOTO_ANALYSIS_COLUMNS],
-        )
-        if index % 20 == 0:
-            conn.commit()
+        if source_state is not None:
+            latest = path.stat()
+            if source_state != (latest.st_size, latest.st_mtime):
+                # Never commit a queued result against a newer source. Keeping
+                # the old fingerprint schedules a retry on the next scan.
+                return old is not None, unavailable_delta + 1
+        if values.pop("_niqe_only", False):
+            conn.execute("""UPDATE photos SET niqe_score=?,niqe_error=?,niqe_version=?,
+                         analyzed_at=?,motion_detection_version=?,status='active' WHERE id=?""",
+                         (values["niqe_score"], values["niqe_error"], values["niqe_version"],
+                          datetime.now().isoformat(timespec="microseconds"), MOTION_DETECTION_VERSION, old["id"]))
+        else:
+            conn.execute(PHOTO_UPSERT_SQL, [values[column] for column in PHOTO_ANALYSIS_COLUMNS])
         self._set(
             project_id,
             current=index,
@@ -1113,28 +1184,32 @@ class Scanner:
         files: list[Path],
         motion_assets: dict[Path, MotionAsset],
         cancel: threading.Event,
+        fast_analysis: bool | None = None,
     ) -> int:
         existing = self._existing_photos(conn)
         seen: set[str] = set()
         unavailable_count = 0
-        for index, path in enumerate(files, 1):
-            _check_cancelled(cancel)
-            rel = path.relative_to(project.root).as_posix()
-            was_seen, unavailable_delta = self._scan_photo(
-                project_id,
-                project,
-                conn,
-                profile,
-                path,
-                motion_assets.get(path),
-                existing.get(rel),
-                index,
-                unavailable_count,
-                cancel,
-            )
-            unavailable_count += unavailable_delta
-            if was_seen:
-                seen.add(rel)
+        if fast_analysis is None:
+            fast_analysis = self.config.snapshot().get("fast_analysis", False)
+        workers = getattr(self.analysis_runner, "parallel_capacity", 1) if fast_analysis else 1
+        self._set(project_id, analysis_workers=workers)
+        written_at_commit = conn.total_changes
+        with closing(self._analysis_tasks(
+            project, files, motion_assets, existing, profile, cancel, workers
+        )) as tasks:
+            for index, path, prepared in tasks:
+                _check_cancelled(cancel)
+                rel = path.relative_to(project.root).as_posix()
+                was_seen, unavailable_delta = self._scan_photo(
+                    project_id, project, conn, profile, path, motion_assets.get(path),
+                    existing.get(rel), index, unavailable_count, cancel, prepared,
+                )
+                unavailable_count += unavailable_delta
+                if was_seen:
+                    seen.add(rel)
+                if conn.total_changes - written_at_commit >= 20:
+                    conn.commit()
+                    written_at_commit = conn.total_changes
         missing = [
             (rel,)
             for rel, row in existing.items()
@@ -1146,8 +1221,73 @@ class Scanner:
         conn.commit()
         return unavailable_count
 
-    def _run(self, project_id: str, cancel: threading.Event) -> None:
+    def _analysis_tasks(self, project, files, assets, existing, profile, cancel, workers):
+        if workers == 1:
+            for index, path in enumerate(files, 1):
+                yield index, path, None
+            return
+        executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="photo-dispatch")
+        pending = deque()
+        inputs = iter(enumerate(files, 1))
+        completed = False
+        def compute(*args):
+            self._analysis_context.parallel = True
+            try:
+                values = self._changed_photo_values(*args)
+                source_stat = args[3]
+                values["_source_state"] = (source_stat.st_size, source_stat.st_mtime)
+                return values
+            finally:
+                self._analysis_context.parallel = False
         try:
+            while True:
+                while len(pending) < workers * 2:
+                    _check_cancelled(cancel)
+                    item = next(inputs, None)
+                    if item is None:
+                        break
+                    index, path = item
+                    rel = path.relative_to(project.root).as_posix()
+                    old, asset = existing.get(rel), assets.get(path)
+                    future = None
+                    try:
+                        stat = path.stat()
+                        asset_values = self._motion_storage_values(project, asset)
+                        identity_same, same = self._motion_state_matches(old, asset_values)
+                        if not self._photo_is_current(project, old, stat, same, profile_niqe_enabled(profile)):
+                            future = executor.submit(compute, project, path, rel,
+                                                     stat, old, asset, asset_values, identity_same,
+                                                     same, profile, cancel)
+                    except OSError:
+                        pass
+                    pending.append((index, path, future))
+                if not pending:
+                    completed = True
+                    return
+                yield pending.popleft()
+        finally:
+            if not completed:
+                cancel.set()
+            executor.shutdown(wait=True, cancel_futures=True)
+
+    @staticmethod
+    def _stage_fingerprint(conn: sqlite3.Connection, profile: dict[str, Any]) -> str:
+        # Include persisted inputs so changes made by other workflows invalidate
+        # a completed scan as well. Output scores/decisions are not inputs.
+        digest = hashlib.sha256(json.dumps(
+            {"profile": profile, "blink_model": MODEL_VERSION, "pipeline": 1},
+            sort_keys=True, separators=(",", ":"),
+        ).encode())
+        excluded = {"suggestion", "reason", "quality_score", "analyzed_at"}
+        columns = [c for c in PHOTO_ANALYSIS_COLUMNS if c not in excluded]
+        for row in conn.execute(f"SELECT {','.join(columns)} FROM photos ORDER BY id"):
+            digest.update(json.dumps(tuple(row), separators=(",", ":")).encode())
+        return digest.hexdigest()
+
+    def _run(self, project_id: str, cancel: threading.Event) -> None:
+        cache_changed = False
+        try:
+            fast_analysis = self.config.snapshot().get("fast_analysis", False)
             project, profile, files, motion_assets = self._prepare_scan(
                 project_id, cancel
             )
@@ -1160,28 +1300,42 @@ class Scanner:
                     files,
                     motion_assets,
                     cancel,
+                    fast_analysis=fast_analysis,
                 )
-                unavailable_count = self._confirm_exact_duplicates(
-                    project_id,
-                    project,
-                    conn,
-                    unavailable_count,
-                    cancel,
-                )
-                rebuild_capture_variants(conn, prune_similar=True)
-                conn.commit()
-                self._rebuild_relationships(
-                    project_id, project, conn, profile, cancel
-                )
+                cache_changed = bool(conn.total_changes)
+                fingerprint = self._stage_fingerprint(conn, profile)
+                previous = conn.execute("SELECT fingerprint FROM scan_stage_state WHERE stage='relationships'").fetchone()
+                if previous is None or previous[0] != fingerprint:
+                    cache_changed = True
+                    unavailable_count = self._confirm_exact_duplicates(
+                        project_id, project, conn, unavailable_count, cancel,
+                    )
+                    rebuild_capture_variants(conn, prune_similar=True)
+                    conn.commit()
+                    self._rebuild_relationships(project_id, project, conn, profile, cancel)
+                    _check_cancelled(cancel)
+                    conn.execute("INSERT OR REPLACE INTO scan_stage_state VALUES('relationships',?)",
+                                 (self._stage_fingerprint(conn, profile),))
+                    conn.commit()
+                elif self.blink_rescan_required(project, conn, profile):
+                    if self.analyze_blinks(project, conn, profile, cancel):
+                        cache_changed = True
+                        self.reclassify(project, conn, profile, cancel)
+                        _check_cancelled(cancel)
+                        conn.execute("INSERT OR REPLACE INTO scan_stage_state VALUES('relationships',?)",
+                                     (self._stage_fingerprint(conn, profile),))
+                        conn.commit()
             self._finish_scan(
                 project_id, project, files, unavailable_count, cancel
             )
         except ScanCancelled:
+            cache_changed = True
             self._set(project_id, stage="cancelled", done=True)
         except Exception as error:
+            cache_changed = True
             self._set(project_id, stage="error", done=True, error=str(error))
         finally:
-            if self.similarity_groups:
+            if cache_changed and self.similarity_groups:
                 self.similarity_groups.invalidate(project_id)
 
     def _exact_hashes(
@@ -1296,23 +1450,20 @@ class Scanner:
                 chunk = ordered_ids[offset : offset + DATABASE_BATCH_SIZE]
                 placeholders = ",".join("?" for _ in chunk)
                 queries.append((f"status='active' AND id IN ({placeholders})", chunk))
-        updates: list[tuple[str, str, float, int]] = []
-        columns = ",".join(CLASSIFICATION_COLUMNS)
+        columns = ",".join((*CLASSIFICATION_COLUMNS, "suggestion", "reason", "quality_score"))
         for where, params in queries:
             cursor = conn.execute(f"SELECT {columns} FROM photos WHERE {where}", params)
             for batch in _fetch_batches(cursor):
+                updates = []
                 for row in batch:
                     _check_cancelled(cancel)
                     suggestion, reason = classify(row, profile, percentiles)
                     score = round(
                         max(0.0, min(1.0, quality_score(row, profile))) * 100, 1
                     )
-                    updates.append((suggestion, reason, score, int(row["id"])))
-        _batched_update(
-            conn,
-            "UPDATE photos SET suggestion=?,reason=?,quality_score=? WHERE id=?",
-            updates,
-        )
+                    if (suggestion, reason, score) != (row["suggestion"], row["reason"], row["quality_score"]):
+                        updates.append((suggestion, reason, score, int(row["id"])))
+                _batched_update(conn, "UPDATE photos SET suggestion=?,reason=?,quality_score=? WHERE id=?", updates)
         if commit:
             conn.commit()
 
@@ -1352,6 +1503,17 @@ class Scanner:
             """SELECT 1 FROM photos WHERE status='active' AND COALESCE(error,'')=''
                AND (niqe_version<>? OR (niqe_score IS NULL AND niqe_error='')) LIMIT 1""",
             (NIQE_VERSION,),
+        ).fetchone() is not None
+
+    @staticmethod
+    def preprocessing_rescan_required(conn: sqlite3.Connection) -> bool:
+        extensions = sorted(RAW_EXTENSIONS)
+        placeholders = ",".join("?" for _ in extensions)
+        return conn.execute(
+            f"""SELECT 1 FROM photos WHERE status='active' AND COALESCE(error,'')=''
+                AND analysis_version <> CASE WHEN LOWER(COALESCE(extension,'')) IN ({placeholders})
+                THEN ? ELSE ? END LIMIT 1""",
+            [*extensions, analysis_version(Path("sample.raf")), analysis_version(Path("sample.jpg"))],
         ).fetchone() is not None
 
     def blink_rescan_required(

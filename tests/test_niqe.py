@@ -318,7 +318,7 @@ class NiqeDatabaseTests(unittest.TestCase):
                         migrated, BUILTIN_PROFILES["conservative"]
                     )
                 )
-                self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 6)
+                self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 7)
             migrated.close()
             backups = list(path.parent.glob("project.pre-v6-*.db"))
             self.assertEqual(len(backups), 1)

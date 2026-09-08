@@ -145,11 +145,20 @@ class WebResourceContractTests(unittest.TestCase):
             self.assertIn(f"function {function}(", scripts)
 
     def test_binary_assets_and_model_licenses_are_present(self):
+        model_root = self.root / "models"
+        self.assertEqual(
+            [path.name for path in model_root.iterdir() if path.is_file()], []
+        )
         for relative in (
             "web/assets/images/brand-icon.png",
             "web/assets/icons/brand-icon.ico",
-            "models/LICENSE-YUNET.txt",
-            "models/LICENSE-OCEC.txt",
+            "models/blink/LICENSE-YUNET.txt",
+            "models/blink/LICENSE-OCEC.txt",
+            "models/blink/LICENSE-ONNXRUNTIME.txt",
+            "models/blink/README.md",
+            "models/niqe/LICENSE.txt",
+            "models/niqe/SOURCE.json",
+            "models/niqe/ADAPTATION.md",
         ):
             self.assertTrue((self.root / relative).is_file(), relative)
 

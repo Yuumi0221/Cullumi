@@ -90,6 +90,7 @@ async function boot() {
   $("#appVersion").textContent = `v${b.version}`;
   renderProfiles();
   $("#autoAdvance").checked = !!b.settings.auto_advance;
+  $("#fastAnalysis").checked = !!b.settings.fast_analysis;
   $("#syncVariantDecisions").checked =
     b.settings.sync_variant_decisions !== false;
   $("#autoCheckUpdates").checked = !!b.settings.auto_check_updates;
@@ -221,8 +222,9 @@ async function startRequiredAnalysis() {
   if (!state.project) return;
   const niqe = state.project.niqe_rescan_required;
   const blink = state.project.blink_rescan_required;
-  if (!niqe && !blink) return;
-  const label = niqe && blink ? "NIQE 与眨眼" : niqe ? "NIQE" : "眨眼";
+  const preprocessing = state.project.preprocessing_rescan_required;
+  if (!niqe && !blink && !preprocessing) return;
+  const label = preprocessing ? "照片质量" : niqe && blink ? "NIQE 与眨眼" : niqe ? "NIQE" : "眨眼";
   toast(`正在补充${label}分析，已有人工决定将保留`);
   await startScan();
 }

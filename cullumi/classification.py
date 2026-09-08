@@ -11,6 +11,7 @@ from .niqe import valid_niqe
 PHOTO_DECISION_FILTERS = frozenset({"undecided", "keep", "remove"})
 PHOTO_AI_FILTERS = frozenset({"remove", "review", "no_suggestion"})
 PHOTO_ANALYSIS_COLUMNS = (
+    "analysis_version", "motion_detection_version",
     "niqe_score", "niqe_error", "niqe_version",
     "relative_path", "extension", "size", "mtime", "width", "height",
     "megapixels", "taken", "luminance", "contrast", "dark_clip",

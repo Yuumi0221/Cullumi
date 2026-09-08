@@ -16,7 +16,11 @@ from PIL import Image
 from cullumi.config import BUILTIN_PROFILES, ConfigStore
 from cullumi.project_store import ProjectManager, connect_db
 from cullumi.scanner import Scanner
-from cullumi.similarity import hamming, hamming_candidate_pairs
+from cullumi.similarity import (
+    _SIMILARITY_EDGES_SQL,
+    hamming,
+    hamming_candidate_pairs,
+)
 
 
 class SimilarityIndexTests(unittest.TestCase):
@@ -61,6 +65,29 @@ class SimilarityIndexTests(unittest.TestCase):
         self.assertTrue(candidates)
         self.assertLessEqual(max(counts.values()), 12)
         self.assertLessEqual(len(candidates), len(hashes) * 12)
+
+    def test_similarity_edges_query_starts_from_pair_table(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "project.db"
+            with closing(connect_db(database)) as conn:
+                conn.executemany(
+                    "INSERT INTO photos(relative_path,status,error) VALUES(?, 'active', '')",
+                    ((f"IMG_{index:04d}.jpg",) for index in range(1000)),
+                )
+                conn.executemany(
+                    "INSERT INTO similar_pairs(a_id,b_id,score,kind) VALUES(?,?,0.9,'similar')",
+                    ((index * 2 + 1, index * 2 + 2) for index in range(100)),
+                )
+                plan = [
+                    str(row["detail"])
+                    for row in conn.execute(
+                        "EXPLAIN QUERY PLAN " + _SIMILARITY_EDGES_SQL
+                    )
+                ]
+
+        self.assertTrue(plan[0].startswith("SCAN sp"), plan)
+        self.assertIn("INTEGER PRIMARY KEY", plan[1], plan)
+        self.assertIn("INTEGER PRIMARY KEY", plan[2], plan)
 
     def test_indexed_similarity_rebuild_matches_full_pair_scan(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

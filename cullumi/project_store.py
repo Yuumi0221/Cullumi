@@ -15,7 +15,7 @@ from typing import Any
 
 from .fs_utils import is_within
 
-DATABASE_SCHEMA_VERSION = 6
+DATABASE_SCHEMA_VERSION = 7
 _WAL_CONFIGURED_DATABASES: dict[Path, tuple[int, int]] = {}
 _INITIALIZED_DATABASES: dict[Path, tuple[int, int, int, int]] = {}
 _DATABASE_CONFIGURATION_LOCK = threading.RLock()
@@ -81,6 +81,8 @@ CREATE TABLE IF NOT EXISTS photos (
   sharpness REAL, entropy REAL, phash TEXT, dhash TEXT, sha256 TEXT,
   niqe_score REAL, niqe_error TEXT NOT NULL DEFAULT '',
   niqe_version TEXT NOT NULL DEFAULT '',
+  analysis_version TEXT NOT NULL DEFAULT 'rgb512-v1',
+  motion_detection_version TEXT NOT NULL DEFAULT '',
   thumbnail TEXT, error TEXT DEFAULT '', suggestion TEXT DEFAULT 'keep',
   reason TEXT DEFAULT '', decision TEXT DEFAULT '', status TEXT DEFAULT 'active',
   analyzed_at TEXT,
@@ -125,6 +127,9 @@ CREATE TABLE IF NOT EXISTS capture_variant_members (
 );
 CREATE INDEX IF NOT EXISTS idx_capture_variant_representative
   ON capture_variant_members(representative_id);
+CREATE TABLE IF NOT EXISTS scan_stage_state (
+  stage TEXT PRIMARY KEY, fingerprint TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS quarantine_batches (
   id TEXT PRIMARY KEY, created_at TEXT, manifest_path TEXT, count INTEGER,
   total_size INTEGER, restored_at TEXT DEFAULT ''
@@ -139,6 +144,8 @@ QUERY_INDEXES = (
 )
 
 PHOTO_SCHEMA_COLUMNS = {
+    "analysis_version": "TEXT NOT NULL DEFAULT 'rgb512-v1'",
+    "motion_detection_version": "TEXT NOT NULL DEFAULT ''",
     "niqe_score": "REAL",
     "niqe_error": "TEXT NOT NULL DEFAULT ''",
     "niqe_version": "TEXT NOT NULL DEFAULT ''",

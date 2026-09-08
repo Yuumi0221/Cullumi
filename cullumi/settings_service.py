@@ -25,6 +25,7 @@ def save_settings(config: ConfigStore, body: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("主题必须为 day 或 night")
         updates["theme"] = theme
     for key in (
+        "fast_analysis",
         "auto_advance",
         "auto_check_updates",
         "sync_variant_decisions",

@@ -215,7 +215,7 @@ def main() -> int:
     parser.add_argument("--annotations", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--profile", default="balanced")
-    parser.add_argument("--model-root", type=Path, default=Path("models"))
+    parser.add_argument("--model-root", type=Path, default=Path("models/blink"))
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=20)
     args = parser.parse_args()

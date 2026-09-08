@@ -1,46 +1,60 @@
-# 眨眼发布评估
+# 评估工具
 
-最终盲测集至少需要 300 张、60 组已授权连拍。`dataset_manifest.csv` 必须包含
-`photo_id,group_id,path,quality_score,authorized,license_id`；`annotations.csv`
-必须包含 `photo_id,face_id,x,y,width,height,status,primary`。人脸框使用 YuNet
-640×640 分析画布坐标，状态为 `open/closed/uncertain/not_analyzable`。照片编号
-必须唯一，每组至少 2 张，清单中的每张照片都必须有至少一行人工标注；没有人脸时
-仍需添加一行 `not_analyzable` 标注。
+`evaluation` 提供眨眼检测、NIQE 和扫描性能评估。脚本只读取本地样本，结果写入指定目录，不修改原始照片。
 
-两名标注者应独立标注并经第三人裁决后再生成最终 `annotations.csv`。阈值冻结后执行：
+## 眨眼检测评估
+
+准备授权盲测集后运行。清单需要包含照片、分组和授权信息，标注文件需要包含人脸框及睁闭眼状态。
+盲测集建议至少包含 300 张照片和 60 组连拍。
 
 ```powershell
-.\.venv\Scripts\python.exe evaluation\evaluate_blink.py `
+.\.venv\Scripts\python.exe -m evaluation.evaluate_blink `
   --manifest evaluation\dataset_manifest.csv `
   --annotations evaluation\annotations.csv `
   --output evaluation\results `
   --profile balanced --runs 3 --warmup 20
 ```
 
-工具验证授权字段，输出逐人脸预测、逐张耗时、JSON 与 Markdown 报告，并按精确率
-95%、召回率 80%、推荐成功率 90% 和 P50 50 ms 四项门槛返回退出码。
+工具会输出逐张预测、耗时和汇总报告，并检查授权字段。
 
-## 大图库性能基线
+## NIQE 评估
 
-大图库基准独立于普通单元测试。默认生成 10 万个发现条目、5 万张照片元数据、
-1 万条相似边、1 千组 RAW/JPG 拍摄变体和 5 千张按 100 种大小分组的完全重复照片，
-记录耗时、Python 峰值内存、进程常驻内存增量、接口响应体积、SQL 语句数、取消响应
-时间和确定性的结果摘要。基准还覆盖图库深分页和相似组首屏分页：
+`benchmark_niqe.py` 使用最长边 512 像素的预览，统计 NIQE 的初始化时间、P50、P95 和每千张照片的预计耗时。
+默认取 120 张样本，可用 `--limit` 调整。需要和质量实验室版本对照时，同时传入 `--lab-python` 与 `--lab-root`。
 
 ```powershell
-.\.venv\Scripts\python.exe evaluation\benchmark_large_library.py `
-  --output evaluation\performance-results\baseline.json
+.\.venv\Scripts\python.exe -m evaluation.benchmark_niqe `
+  ..\cullumi-quality-lab\test-photos `
+  --limit 120 `
+  --output evaluation\performance-results\niqe.json
 ```
 
-修改后使用同一规模复跑并生成对比字段：
+NIQE 参数哈希、许可证、实验室数值一致性和退化图片由 `tests/test_niqe.py` 覆盖。
+
+## 性能基准
+
+- `benchmark_scan.py` 检查首次扫描、未变化复扫、单张失效和单进程与双进程吞吐。
+- `benchmark_raw_preview.py` 比较 RAW 完整解码和缩小解码的速度、指标及阈值变化。
+- `benchmark_large_library.py` 测量大图库发现、相似分组、查询和完全重复确认，可用 `--quick` 做快速检查，或用 `--compare` 对照两次结果。
+
+示例
 
 ```powershell
-.\.venv\Scripts\python.exe evaluation\benchmark_large_library.py `
-  --compare evaluation\performance-results\baseline.json `
-  --output evaluation\performance-results\optimized.json
+.\.venv\Scripts\python.exe -m evaluation.benchmark_scan `
+  ..\cullumi-quality-lab\test-photos `
+  --repeats 2 `
+  --output evaluation\performance-results\scan.json
+
+.\.venv\Scripts\python.exe -m evaluation.benchmark_raw_preview `
+  ..\cullumi-quality-lab\test-photos `
+  --output evaluation\performance-results\raw.json
+
+.\.venv\Scripts\python.exe -m evaluation.benchmark_large_library `
+  --quick `
+  --output evaluation\performance-results\library.json
 ```
 
-开发时可添加 `--quick` 只做流程冒烟。性能结果依赖机器和当前负载，因此不会由普通
-测试套件作耗时或内存断言；结果摘要一致性和查询数量约束由单元测试继续保护。
-定位单项回退时可使用 `--only similarity_groups`、`--only similarity_api` 或
-`--only photo_queries` 等参数只运行一个场景。
+`niqe_frozen_probe.py` 用于便携版冒烟检查，确认 NIQE 参数、许可证和并行分析进程都能正常启动。
+
+日常回归运行 `verify.ps1`，需要浏览器检查时运行 `verify.ps1 -Browser`。基准输出和打包产物位于已忽略的
+`evaluation/performance-results` 目录，不应提交到版本库。

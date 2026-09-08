@@ -205,6 +205,7 @@ def _normalize_simple_settings(
         issues.append("默认缓存位置无效")
 
     for key in (
+        "fast_analysis",
         "auto_advance",
         "auto_check_updates",
         "blink_detection_enabled",
@@ -369,6 +370,7 @@ class ConfigStore:
             "version": 1,
             "default_cache_root": str(default_cache),
             "auto_advance": True,
+            "fast_analysis": False,
             "auto_check_updates": True,
             "blink_detection_enabled": True,
             "niqe_analysis_enabled": True,

@@ -96,6 +96,10 @@ def _apply_windows_memory_limit(memory_limit: int) -> None:
 
     kernel32 = ctypes.windll.kernel32
     kernel32.CreateJobObjectW.restype = ctypes.c_void_p
+    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    kernel32.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    kernel32.SetInformationJobObject.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
     job = kernel32.CreateJobObjectW(None, None)
     if not job:
         return
@@ -128,14 +132,13 @@ def _worker_main(
         request = requests.get()
         if request is None:
             return
-        task_id, source, thumbnail, niqe_enabled = request
+        task_id, source, thumbnail, niqe_enabled, *options = request
         if niqe_enabled and not niqe_initialized:
             initialize_niqe()
             niqe_initialized = True
         try:
-            result = analyze_photo(
-                Path(source), Path(thumbnail), niqe_enabled=niqe_enabled
-            )
+            kwargs = {"niqe_only": True} if options and options[0] else {}
+            result = analyze_photo(Path(source), Path(thumbnail), niqe_enabled=niqe_enabled, **kwargs)
         except BaseException as error:
             result = failed_photo_analysis(
                 Path(source), Path(thumbnail), str(error) or error.__class__.__name__
@@ -225,6 +228,7 @@ class PhotoAnalysisRunner:
         thumbnail: Path,
         cancel: threading.Event | None = None,
         niqe_enabled: bool = True,
+        niqe_only: bool = False,
     ) -> dict[str, Any]:
         self._acquire(cancel)
         try:
@@ -237,7 +241,7 @@ class PhotoAnalysisRunner:
             self._task_id += 1
             task_id = self._task_id
             self._requests.put(
-                (task_id, str(source), str(thumbnail), niqe_enabled)
+                (task_id, str(source), str(thumbnail), niqe_enabled, niqe_only)
             )
             deadline = time.monotonic() + self.timeout_seconds
             while True:
@@ -278,8 +282,53 @@ class PhotoAnalysisRunner:
             self._stop()
 
 
+def parallel_worker_count() -> int:
+    budget = min(int(_physical_memory_bytes() * 0.20), 3 * 1024**3)
+    return max(1, min(2, (os.cpu_count() or 1) - 1, budget // default_worker_memory_limit()))
+
+
+class PhotoAnalysisPool:
+    """One shared, bounded pool across projects; processes start lazily."""
+
+    def __init__(self) -> None:
+        self.parallel_capacity = parallel_worker_count()
+        self._runners = [PhotoAnalysisRunner() for _ in range(self.parallel_capacity)]
+        self._available: queue.Queue = queue.Queue()
+        self._closed = threading.Event()
+        for runner in self._runners:
+            self._available.put(runner)
+
+    def analyze(self, source, thumbnail, cancel=None, niqe_enabled=True, niqe_only=False, parallel=False):
+        if self._closed.is_set():
+            raise AnalysisCancelled
+        if not parallel:
+            return self._runners[0].analyze(source, thumbnail, cancel, niqe_enabled, niqe_only)
+        while True:
+            if self._closed.is_set() or (cancel is not None and cancel.is_set()):
+                raise AnalysisCancelled
+            try:
+                runner = self._available.get(timeout=0.1)
+                break
+            except queue.Empty:
+                continue
+        try:
+            return runner.analyze(source, thumbnail, cancel, niqe_enabled, niqe_only)
+        finally:
+            self._available.put(runner)
+
+    def close(self) -> None:
+        self._closed.set()
+        # Set every stop flag before waiting for any individual process.
+        for runner in self._runners:
+            runner._closed.set()
+        for runner in self._runners:
+            runner.close()
+
+
 __all__ = [
     "AnalysisCancelled",
+    "PhotoAnalysisPool",
     "PhotoAnalysisRunner",
     "default_worker_memory_limit",
+    "parallel_worker_count",
 ]

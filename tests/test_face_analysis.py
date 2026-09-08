@@ -75,7 +75,7 @@ class FakeFaceAnalyzer:
 
 class FaceAnalysisTests(unittest.TestCase):
     def test_shipped_models_match_the_pinned_checksums(self):
-        model_root = Path(__file__).resolve().parent.parent / "models"
+        model_root = Path(__file__).resolve().parent.parent / "models" / "blink"
         for filename, expected in MODEL_SHA256.items():
             with (model_root / filename).open("rb") as source:
                 actual = hashlib.file_digest(source, "sha256").hexdigest()

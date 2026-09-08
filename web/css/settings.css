@@ -438,13 +438,14 @@
 .setting-switch > span:last-child::after {
   content:"";
   position:absolute;
-  top:3px;
+  top:50%;
   left:3px;
   width:16px;
   height:16px;
   border-radius:50%;
   background:#fff;
   box-shadow:0 1px 3px rgba(0,0,0,.2);
+  transform:translateY(-50%);
   transition:transform .18s ease;
 }
 
@@ -453,7 +454,7 @@
 }
 
 .setting-switch > input:checked + span::after {
-  transform:translateX(16px);
+  transform:translate(16px,-50%);
 }
 
 .setting-switch > input:focus-visible + span {
