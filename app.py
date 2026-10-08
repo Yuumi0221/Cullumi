@@ -7,7 +7,6 @@ import threading
 import traceback
 import webbrowser
 from datetime import datetime
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -70,7 +69,7 @@ def apply_native_window_icon(window: Any) -> None:
 
 
 def run() -> None:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), http_api.Handler)
+    server = http_api.LocalHTTPServer(("127.0.0.1", 0), http_api.Handler)
     server.application = APPLICATION
     port = server.server_address[1]
     url = f"http://127.0.0.1:{port}/?token={TOKEN}"

@@ -4,7 +4,6 @@ import os
 import sys
 import tempfile
 import urllib.parse
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -49,7 +48,7 @@ def run() -> None:
                 self._send_json({"stopped": True})
                 self.server.shutdown()
 
-        server = ThreadingHTTPServer(("127.0.0.1", port), DomTestHandler)
+        server = http_api.LocalHTTPServer(("127.0.0.1", port), DomTestHandler)
         server.daemon_threads = True
         server.application = application
         print(f"DOM test server ready on {port}", flush=True)

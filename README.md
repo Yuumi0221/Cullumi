@@ -2,7 +2,7 @@
 
 Cullumi 是一款仅在本机运行的 Windows 照片筛选应用。它会递归扫描照片目录，生成不裁切的缩略图，检查画质，寻找完全重复照片和相似连拍，最后由用户决定保留或隔离哪些照片。
 
-当前版本：v1.0.5
+当前版本：v1.0.6
 
 ## 使用
 
@@ -122,4 +122,4 @@ npm ci
 .\build.ps1
 ```
 
-构建结果位于 `dist\Cullumi-v1.0.5\`，同时生成 `dist\Cullumi-v1.0.5-Windows-Portable.zip`。
+构建结果位于 `dist\Cullumi-v1.0.6\`，同时生成 `dist\Cullumi-v1.0.6-Windows-Portable.zip`。

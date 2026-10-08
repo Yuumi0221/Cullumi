@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -38,6 +39,19 @@ def application_context(
 
 
 class AppSafetyTests(unittest.TestCase):
+    def test_local_server_queues_the_initial_asset_burst(self):
+        server = app.LocalHTTPServer(("127.0.0.1", 0), app.Handler)
+        connections = []
+        try:
+            for _ in range(16):
+                connections.append(
+                    socket.create_connection(server.server_address, timeout=0.5)
+                )
+        finally:
+            for connection in connections:
+                connection.close()
+            server.server_close()
+
     def test_handler_prefers_the_server_application_context(self):
         config = mock.Mock(spec=ConfigStore)
         manager = mock.Mock(spec=ProjectManager)

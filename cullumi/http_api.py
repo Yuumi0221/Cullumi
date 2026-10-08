@@ -12,7 +12,7 @@ import webbrowser
 import xml.etree.ElementTree as ET
 from contextlib import closing
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -128,6 +128,11 @@ POST_ROUTES = {
     "/api/quarantine/apply": "api_quarantine_apply",
     "/api/quarantine/restore": "api_restore",
 }
+
+
+class LocalHTTPServer(ThreadingHTTPServer):
+    # Absorb the cold-start asset burst instead of refusing queued connections.
+    request_queue_size = 128
 
 
 def static_asset_revision(web_root: Path) -> str:
