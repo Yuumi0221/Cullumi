@@ -23,27 +23,10 @@ function renderSimilarFolders() {
     selected && state.similar.mode === "expanded",
   );
 }
-function similarFormatValues() {
-  return state.similar.formatCategories.map((item) => item.id);
-}
 function similarPhotoFormat(photo) {
   return FORMAT_VALUES.includes(photo.format_category)
     ? photo.format_category
     : "other";
-}
-function similarFormatCategories(members) {
-  const counts = new Map();
-  members.forEach((photo) => {
-    const category = similarPhotoFormat(photo);
-    counts.set(category, (counts.get(category) || 0) + 1);
-  });
-  return FORMAT_VALUES.filter((category) => counts.has(category)).map(
-    (category) => ({
-      id: category,
-      label: FORMAT_LABELS[category],
-      count: counts.get(category),
-    }),
-  );
 }
 function similarDecisionValue(photo) {
   return photo.decision || "undecided";
@@ -232,20 +215,7 @@ async function loadSimilarGroupMembers() {
       _blinkLabel: blinkLabel,
     };
   });
-  const previousValues = similarFormatValues(),
-    selectedAll =
-      !!previousValues.length && setEquals(state.similar.formats, previousValues);
   state.similar.detail = { ...detail, members: decorated };
-  state.similar.formatCategories = similarFormatCategories(decorated);
-  const availableValues = similarFormatValues();
-  state.similar.formats =
-    !previousValues.length || selectedAll
-      ? new Set(availableValues)
-      : new Set(
-          [...state.similar.formats].filter((value) =>
-            availableValues.includes(value),
-          ),
-        );
   renderSimilarGroupMembers();
   renderSimilarFolders();
   applySimilarMode();
@@ -268,10 +238,7 @@ function renderSimilarGroupMembers() {
       DECISION_VALUES,
     ),
     allAiSelected = setEquals(state.similar.ai, AI_VALUES),
-    allFormatsSelected = setEquals(
-      state.similar.formats,
-      similarFormatValues(),
-    ),
+    allFormatsSelected = setEquals(state.similar.formats, projectFormatValues()),
     filtered =
       !allDecisionsSelected || !allAiSelected || !allFormatsSelected;
   state.items = decorated;
@@ -306,10 +273,6 @@ async function openSimilarGroup(groupId) {
   state.similar.selectedId = groupId;
   state.similar.memberSearch = "";
   state.similar.detail = null;
-  state.similar.formatCategories = [];
-  state.similar.decisions = new Set(DECISION_VALUES);
-  state.similar.ai = new Set(AI_VALUES);
-  state.similar.formats = new Set();
   state.similar.mode = window.innerWidth <= 850 ? "expanded" : "side";
   $("#searchInput").value = "";
   $("#searchInput").placeholder = "搜索当前组照片";
@@ -327,10 +290,6 @@ function closeSimilarDetail(restoreSearch = true) {
   state.similar.mode = "closed";
   state.similar.memberSearch = "";
   state.similar.detail = null;
-  state.similar.formatCategories = [];
-  state.similar.decisions = new Set(DECISION_VALUES);
-  state.similar.ai = new Set(AI_VALUES);
-  state.similar.formats = new Set();
   state.items = [];
   if (restoreSearch) {
     $("#searchInput").value = state.similar.listSearch;

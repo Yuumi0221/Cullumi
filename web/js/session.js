@@ -155,10 +155,9 @@ async function showProject(p) {
     listSearch: "",
     memberSearch: "",
     detail: null,
-    formatCategories: [],
     decisions: new Set(DECISION_VALUES),
     ai: new Set(AI_VALUES),
-    formats: new Set(),
+    formats: new Set((p.format_categories || []).map((item) => item.id)),
     sort: "suggestion",
     sortDirection: "desc",
     offset: 0,
@@ -204,7 +203,8 @@ function applyProjectCounts(counts) {
 async function refreshProject() {
   if (!state.project) return;
   const previousFormats = projectFormatValues(),
-    selectedAll = setEquals(state.filters.formats, previousFormats);
+    selectedAll = setEquals(state.filters.formats, previousFormats),
+    similarSelectedAll = setEquals(state.similar.formats, previousFormats);
   state.project = await json(`/api/project?project_id=${state.project.id}`);
   const availableFormats = projectFormatValues();
   state.filters.formats = selectedAll
@@ -214,8 +214,16 @@ async function refreshProject() {
           availableFormats.includes(value),
         ),
       );
+  state.similar.formats = similarSelectedAll
+    ? new Set(availableFormats)
+    : new Set(
+        [...state.similar.formats].filter((value) =>
+          availableFormats.includes(value),
+        ),
+      );
   renderFormatFilterOptions();
   syncFilterControls();
+  syncSimilarControls();
   updateCounts(state.project);
 }
 async function startRequiredAnalysis() {

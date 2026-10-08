@@ -45,7 +45,6 @@ const state = {
     listSearch: "",
     memberSearch: "",
     detail: null,
-    formatCategories: [],
     decisions: new Set(DECISION_VALUES),
     ai: new Set(AI_VALUES),
     formats: new Set(),

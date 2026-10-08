@@ -130,7 +130,7 @@ function initializeGalleryTools() {
     },
     available: (group) =>
       group === "formats"
-        ? state.similar.formatCategories
+        ? state.project?.format_categories || []
         : defaultGalleryChoices(group),
     values: (group) => state.similar[group],
     setValues: (group, values) => (state.similar[group] = values),

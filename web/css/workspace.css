@@ -234,6 +234,7 @@ body.similar-view-open:not(.similar-detail-open) .batch-accept-button {
 
 .gallery-view-option {
   width: 100%;
+  min-height: 40px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto 14px;
   align-items: center;
@@ -243,6 +244,12 @@ body.similar-view-open:not(.similar-detail-open) .batch-accept-button {
   color: var(--ink);
   background: transparent;
   text-align: left;
+}
+
+.gallery-view-option span,
+.gallery-view-option b {
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
 }
 
 .gallery-view-option span {

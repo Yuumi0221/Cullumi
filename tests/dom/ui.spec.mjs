@@ -200,11 +200,19 @@ async function installApi(page, options = {}) {
     if (url.pathname === "/api/recent-project") return fulfill(recentPayload(true));
     if (url.pathname === "/api/project") {
       const project = projectPayload(decision, options.photoCount || 2, decisions);
-      if (options.variantPair) {
+      if (options.variantPair || options.similarVariantPairs) {
         project.format_categories = [
           { id: "raw", label: "RAW", count: 1 },
           { id: "jpeg", label: "JPEG", count: 1 },
         ];
+      } else if (options.similarFormats) {
+        project.format_categories = [...new Set(options.similarFormats)].map(
+          id => ({
+            id,
+            label: { raw: "RAW", jpeg: "JPEG", heif: "HEIF", png: "PNG", other: "其他" }[id],
+            count: options.similarFormats.filter(value => value === id).length,
+          }),
+        );
       }
       return fulfill(project);
     }
@@ -1211,6 +1219,59 @@ test("相似组使用照片库同款查看排序组件并组合筛选 RAW", asyn
   await expect(page.locator("#similarExpandBtn")).toBeVisible();
   await expect(page.locator('[data-similar-group="similar-2"]')).toHaveClass(/active/);
   await expect(page.locator("#similarFolderPane")).toBeVisible();
+});
+
+test("相似组共用查看筛选且不会丢失当前组没有的格式", async ({ page }) => {
+  await openApp(page, {
+    similarGroupCount: 2,
+    similarMemberCount: 1,
+    similarFormats: ["jpeg", "raw"],
+  });
+  await openProject(page);
+  await page.locator('[data-nav="similar"]').click();
+  await page.locator('[data-similar-group="similar-1"]').click();
+
+  const viewTool = page.locator("#similarViewTool");
+  await expect(page.locator('#similarDetailGallery [data-photo-id="1"]')).toBeVisible();
+  await page.locator('[data-similar-group="similar-2"]').click();
+  await expect(page.locator('#similarDetailGallery [data-photo-id="2"]')).toBeVisible();
+  await expect(page.locator("#similarFormatFilterSummary")).toHaveText("全部");
+  await page.locator('[data-similar-group="similar-1"]').click();
+  await viewTool.locator(".gallery-tool-trigger").click();
+  await viewTool.locator("#similarDecisionViewItem .gallery-view-option").hover();
+  await viewTool.locator('#similarDecisionViewItem input[value="keep"]').uncheck();
+  await viewTool.locator('#similarDecisionViewItem input[value="remove"]').uncheck();
+  await viewTool.locator("#similarAiViewItem .gallery-view-option").hover();
+  await viewTool.locator('#similarAiViewItem input[value="remove"]').uncheck();
+  await viewTool.locator('#similarAiViewItem input[value="no_suggestion"]').uncheck();
+  await viewTool.locator("#similarFormatViewItem .gallery-view-option").hover();
+  await viewTool.locator('#similarFormatViewItem input[value="raw"]').uncheck();
+  await expect(page.locator("#similarDecisionFilterSummary")).toHaveText("未决定");
+  await expect(page.locator("#similarAiFilterSummary")).toHaveText("人工复查");
+  await expect(page.locator("#similarFormatFilterSummary")).toHaveText("JPEG");
+
+  await page.locator('[data-similar-group="similar-2"]').click();
+  await expect(page.locator("#similarDetailGallery [data-photo-id]")).toHaveCount(0);
+  await expect(page.locator("#similarFormatFilterSummary")).toHaveText("JPEG");
+
+  await page.locator('[data-similar-group="similar-1"]').click();
+  await expect(page.locator('#similarDetailGallery [data-photo-id="1"]')).toBeVisible();
+  await page.locator("#similarCollapseBtn").click();
+  await page.locator('[data-similar-group="similar-1"]').click();
+  await expect(viewTool.locator('#similarDecisionViewItem input[value="undecided"]')).toBeChecked();
+  await expect(viewTool.locator('#similarDecisionViewItem input[value="keep"]')).not.toBeChecked();
+  await expect(viewTool.locator('#similarAiViewItem input[value="review"]')).toBeChecked();
+  await expect(viewTool.locator('#similarFormatViewItem input[value="jpeg"]')).toBeChecked();
+  await expect(viewTool.locator('#similarFormatViewItem input[value="raw"]')).not.toBeChecked();
+
+  await viewTool.locator(".gallery-tool-trigger").click();
+  await viewTool.locator("#similarFormatViewItem .gallery-view-option").hover();
+  await viewTool.locator('#similarFormatViewItem input[value="jpeg"]').uncheck();
+  await expect(page.locator("#similarFormatFilterSummary")).toHaveText("未选择");
+  await page.locator('[data-similar-group="similar-2"]').click();
+  await page.locator('[data-similar-group="similar-1"]').click();
+  await expect(page.locator("#similarDetailGallery [data-photo-id]")).toHaveCount(0);
+  await expect(page.locator("#similarFormatFilterSummary")).toHaveText("未选择");
 });
 
 test("相似组建议排序按分值递减并让推荐照片置顶", async ({ page }) => {
