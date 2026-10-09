@@ -948,6 +948,14 @@ body.similar-side-open .similar-browser {
   padding: 2px 2px 24px;
 }
 
+.similar-detail-gallery:empty {
+  display: none;
+}
+
+.similar-detail > .empty {
+  padding: clamp(64px, 20vh, 220px) 20px 40px;
+}
+
 .similar-browser.detail-expanded .similar-detail-gallery {
   padding:2px 40px 24px;
 }

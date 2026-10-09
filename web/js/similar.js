@@ -86,6 +86,8 @@ function applySimilarMode() {
   const selected = !!state.similar.selectedId,
     expanded = state.similar.mode === "expanded",
     visible = state.view === "similar" && selected;
+  if (visible) $("#similarDetail").append($("#empty"));
+  else $("#similarBrowser").after($("#empty"));
   $("#similarBrowser").classList.toggle("detail-open", selected);
   $("#similarBrowser").classList.toggle(
     "detail-expanded",

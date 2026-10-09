@@ -1254,8 +1254,40 @@ test("相似组共用查看筛选且不会丢失当前组没有的格式", async
   await expect(page.locator("#similarDetailGallery [data-photo-id]")).toHaveCount(0);
   await expect(page.locator("#similarFormatFilterSummary")).toHaveText("JPEG");
 
+  const expectDetailEmptyLayout = async () => {
+    const layout = await page.locator("#emptyTitle").evaluate(title => {
+      const detail = document.querySelector("#similarDetail");
+      const content = document.querySelector(".content");
+      const empty = document.querySelector("#empty");
+      const detailBox = detail.getBoundingClientRect();
+      const titleBox = title.getBoundingClientRect();
+      const visibleBottom = Math.min(window.innerHeight, content.getBoundingClientRect().bottom);
+      return {
+        insideDetail: detail.contains(empty),
+        centerOffset: Math.abs(
+          (titleBox.left + titleBox.right - detailBox.left - detailBox.right) / 2,
+        ),
+        verticalRatio:
+          ((titleBox.top + titleBox.bottom) / 2 - detailBox.top) /
+          (visibleBottom - detailBox.top),
+      };
+    });
+    expect(layout.insideDetail).toBe(true);
+    expect(layout.centerOffset).toBeLessThan(12);
+    expect(layout.verticalRatio).toBeGreaterThan(0.2);
+    expect(layout.verticalRatio).toBeLessThan(0.5);
+  };
+  await expect(page.locator("#emptyTitle")).toHaveText("当前筛选没有结果");
+  await expectDetailEmptyLayout();
+
   await page.locator('[data-similar-group="similar-1"]').click();
   await expect(page.locator('#similarDetailGallery [data-photo-id="1"]')).toBeVisible();
+  await page.locator('[data-similar-group="similar-2"]').click();
+  await page.locator("#similarExpandBtn").click();
+  await expect(page.locator("#similarFolderPane")).toBeHidden();
+  await expectDetailEmptyLayout();
+  await page.locator("#similarCloseBtn").click();
+  await page.locator('[data-similar-group="similar-1"]').click();
   await page.locator("#similarCollapseBtn").click();
   await page.locator('[data-similar-group="similar-1"]').click();
   await expect(viewTool.locator('#similarDecisionViewItem input[value="undecided"]')).toBeChecked();
@@ -1272,6 +1304,15 @@ test("相似组共用查看筛选且不会丢失当前组没有的格式", async
   await page.locator('[data-similar-group="similar-1"]').click();
   await expect(page.locator("#similarDetailGallery [data-photo-id]")).toHaveCount(0);
   await expect(page.locator("#similarFormatFilterSummary")).toHaveText("未选择");
+
+  await page.locator('[data-nav="library"]').click();
+  const libraryView = page.locator('[data-filter-menu="view"]');
+  await libraryView.locator(".gallery-tool-trigger").click();
+  const libraryDecision = libraryView.locator(".gallery-view-item").first();
+  await libraryDecision.locator(".gallery-view-option").hover();
+  await libraryDecision.locator('[data-select-all="decisions"]').click();
+  await expect(page.locator("#emptyTitle")).toHaveText("当前筛选没有结果");
+  await expect(page.locator(".content > #empty")).toBeVisible();
 });
 
 test("相似组建议排序按分值递减并让推荐照片置顶", async ({ page }) => {
